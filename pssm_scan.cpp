@@ -8,6 +8,7 @@
 #include <iomanip>   // For formatted output
 #include <chrono>    // For progress timing
 #include <getopt.h>  // For GNU Getopt
+#include <math.h>
 
 // Function to trim whitespace from strings
 std::string trim(const std::string& str) {
@@ -57,11 +58,11 @@ std::unordered_map<char, std::vector<double>> parsePSSMFile(const std::string& p
             std::stringstream ss(line);
             ss >> currentBase;  // The nucleotide character (A, C, G, T)
 
-            std::cerr << "I: currentBase: '" << currentBase << "'" << std::endl;
+            std::cerr << "I: " << currentBase << " : ";
 
             std::string countsStr;
             std::getline(ss,countsStr);  // Read the bracketed counts (e.g., [ 4 19 0 0 ])
-            std::cerr << "I: countsStr: \"" << countsStr << "\"" << std::endl;
+            std::cerr << countsStr << std::endl;
 
             // Remove brackets and split counts
             countsStr.erase(std::remove(countsStr.begin(), countsStr.end(), '['), countsStr.end());
@@ -145,17 +146,22 @@ std::string reverseComplement(const std::string& sequence) {
 }
 
 // Function to slide the PSSM across the DNA sequence and calculate scores
-void scanSequence(const std::string& chromosome, const std::string& sequence, const std::string& strand, const std::unordered_map<char, std::vector<double>>& pssm, std::ofstream& outFile, const bool skipN, const float& threshold) {
+void scanSequence(const std::string& chromosome, const std::string& sequence, const std::string& strand, const std::unordered_map<char, std::vector<double>>& pssm, std::ofstream& outFile, const bool skipN, const float& threshold, const long& from, const long& to, const bool showHeader) {
     size_t motifLength = pssm.begin()->second.size();
     size_t sequenceLength = sequence.size();
     size_t reportInterval = sequenceLength / 100;  // Update progress every 1%
 
-    outFile << "Chromosome\tFrom\tTo\tScore\tStrand\n";
+    if (showHeader) outFile << "Chromosome\tFrom\tTo\tScore\tStrand\n";
 
     auto start = std::chrono::high_resolution_clock::now();
 
+    size_t posStart=0L;
+    if (from>0L) posStart = (size_t) from;
+    size_t posEnd=sequenceLength;
+    if (to>0L) posEnd = (size_t) to;
+
     // Slide the window over the sequence
-    for (size_t i = 0; i <= sequenceLength - motifLength; ++i) {
+    for (size_t i = from; i <= posEnd - motifLength; ++i) {
         std::string window = sequence.substr(i, motifLength);
         double score = calculateScore(window, pssm, skipN);
         // Skip output if the window contained 'N' or invalid nucleotides
@@ -218,12 +224,15 @@ std::unordered_map<std::string, std::string> readFastaFile(const std::string& fa
     return genome;
 }
 
-void printHelp(const std::string& programName, const std::string& genomeFile, const std::string& pssmFile, const std::string& targetMotifID, const float& threshold) {
+void printHelp(const std::string& programName, const std::string& genomeFile, const std::string& pssmFile, const std::string& targetMotifID, const float& threshold, const std::string& chromosome, const size_t& from, const size_t& to) {
     std::cout << "Usage: " << programName << " [-g genome_file] [-p pssm_file] [-m motif_id] [--skip-N | --neutral-N]" << std::endl;
     std::cout << "  -g, --genome     Path to genome FASTA file (set to " << genomeFile  << ")" << std::endl;
     std::cout << "  -p, --pssm       Path to JASPAR PSSM file (set to " << pssmFile << ")" << std::endl;
     std::cout << "  -m, --motif      Target motif ID from JASPAR file (set to " << targetMotifID << ")" << std::endl;
-    std::cout << "  -t, --threshold  Minimal score to achieve to print (set to " << threshold << ")" << std::endl;
+    std::cout << "  -l, --threshold  Minimal score to achieve to print (set to " << threshold << ")" << std::endl;
+    std::cout << "  -c, --chr        Single chromosome to consider (set to " << chromosome << ")" << std::endl;
+    std::cout << "  -f, --from       Minimal position on chromosome to consider (set to " << from << ")" << std::endl;
+    std::cout << "  -t, --to         Maximal position on chromosome to consider (set to " << to << ")" << std::endl;
     std::cout << "  --skip-N         Skip windows containing 'N'" << std::endl;
     std::cout << "  --neutral-N      Treat 'N' as neutral (contribute 0 to the score)" << std::endl;
     std::cout << "  -h, --help       Display this help message" << std::endl;
@@ -237,6 +246,8 @@ int main(int argc, char* argv[]) {
     float threshold = 0.0f;
     bool skipN = true;  // Default to skipping N
     bool showHelp = false; // Do not show help after all variables have been assigned
+    long targetFrom= -1L, targetTo= -1L ; 
+    std::string targetChromosome ;
 
     // Option flags and variables for getopt
     int option;
@@ -244,7 +255,10 @@ int main(int argc, char* argv[]) {
         {"genome", required_argument, 0, 'g'},
         {"pssm", required_argument, 0, 'p'},
         {"motif", required_argument, 0, 'm'},
-        {"threshold", required_argument, 0, 't'},
+        {"threshold", required_argument, 0, 'l'},
+        {"chr", required_argument, 0, 'c'},
+        {"from", required_argument, 0, 'f'},
+        {"to", required_argument, 0, 't'},
         {"skip-N", no_argument, 0, 0},
         {"neutral-N", no_argument, 0, 0},
         {"help", no_argument, 0, 'h'},
@@ -263,9 +277,22 @@ int main(int argc, char* argv[]) {
             case 'm':
                 targetMotifID = optarg;
                 break;
+            case 'c':
+                targetChromosome = optarg;
+                std::cerr << "I: Only showing matches on chromosome " << targetChromosome << "." << std::endl;
+                break;
+            case 'f':
+                targetFrom = atol(optarg);
+                std::cerr << "I: Only showing matches with position downstream of " << targetFrom << "." << std::endl;
+                break;
             case 't':
-                threshold = static_cast<float>(*optarg);
+                targetTo = atol(optarg);
+                std::cerr << "I: Only showing matches with position up to " << targetTo << "." << std::endl;
+                break;
+            case 'l':
+                threshold = atof(optarg);
                 std::cerr << "I: Only showing matches with score > " << threshold << "." << std::endl;
+                break;
             case 0:
                 if (std::string(long_options[optind].name) == "skip-N") {
                     skipN = true;
@@ -279,7 +306,7 @@ int main(int argc, char* argv[]) {
         }
 
         if (showHelp) {
-            printHelp(argv[0],genomeFile,pssmFile,targetMotifID,threshold);
+            printHelp(argv[0],genomeFile,pssmFile,targetMotifID,threshold,targetChromosome,targetFrom,targetTo);
             return 1;
         }
     }
@@ -287,7 +314,7 @@ int main(int argc, char* argv[]) {
     // Ensure the motif ID is provided
     if (targetMotifID.empty()) {
         std::cerr << "Error: You must specify a motif ID with the -m option." << std::endl;
-        printHelp(argv[0],genomeFile,pssmFile,targetMotifID,threshold);
+        printHelp(argv[0],genomeFile,pssmFile,targetMotifID,threshold,targetChromosome,targetFrom,targetTo);
         return 1;
     }
 
@@ -306,8 +333,22 @@ int main(int argc, char* argv[]) {
     }
 
     // Output filenames based on motif ID and name
-    std::string outputFileNamePositive = motifName + "_" + motifID + "_positive.txt";
-    std::string outputFileNameNegative = motifName + "_" + motifID + "_negative.txt";
+    std::string outputFileNamePositive = motifName + "_" + motifID + "_positive";
+    std::string outputFileNameNegative = motifName + "_" + motifID + "_negative";
+    if (!targetChromosome.empty()) {
+	outputFileNamePositive += "_"+targetChromosome;
+	outputFileNameNegative += "_"+targetChromosome;
+    }
+    if (targetFrom > 0L) {
+	outputFileNamePositive += "_"+std::to_string(targetFrom);
+	outputFileNameNegative += "_"+std::to_string(targetFrom);
+    }
+    if (targetTo > 0L) {
+	outputFileNamePositive += "-"+std::to_string(targetTo);
+	outputFileNameNegative += "-"+std::to_string(targetTo);
+    }
+    outputFileNamePositive += ".txt";
+    outputFileNameNegative += ".txt";
 
     std::ofstream outFilePositive(outputFileNamePositive);
     std::ofstream outFileNegative(outputFileNameNegative);
@@ -326,20 +367,38 @@ int main(int argc, char* argv[]) {
 
     // Perform PSSM scanning on each chromosome in the genome
     if (pssm.empty() || genome.empty()) {
-        std::cerr << "Failed to parse PSSM or genome." << std::endl;
+        std::cerr << "E: Failed to parse PSSM or genome." << std::endl;
         return 1;
     }
+    std::cerr << "I: Found motif length to be " << pssm.begin()->second.size() << std::endl;
 
+    bool chromosomeFound = false;
+    bool showHeader=true;
     for (const auto& [chromosome, sequence] : genome) {
-        std::cout << "Scanning chromosome " << chromosome << " (+ strand)" << std::endl;
+        if ( !chromosome.empty() ) {
+            if ( 0 != chromosome.compare(targetChromosome) ) {
+                std::cerr << "I: Skipping chromosome " << chromosome << " (+ strand)" << std::endl;
+                continue;
+            } else {
+                chromosomeFound = true;
+            }
+        }
+            
+        std::cerr << "I: Scanning chromosome " << chromosome << " (+ strand)" << std::endl;
 
         // Scan positive strand
-        scanSequence(chromosome, sequence, "+", pssm, outFilePositive, skipN, threshold);
+        scanSequence(chromosome, sequence, "+", pssm, outFilePositive, skipN, threshold, targetFrom, targetTo, showHeader);
 
         // Scan negative strand (reverse complement)
-        std::cout << "Scanning chromosome " << chromosome << " (- strand)" << std::endl;
+        std::cout << "I: Scanning chromosome " << chromosome << " (- strand)" << std::endl;
         std::string revCompSequence = reverseComplement(sequence);
-        scanSequence(chromosome, revCompSequence, "-", pssm, outFileNegative, skipN, threshold);
+        scanSequence(chromosome, revCompSequence, "-", pssm, outFileNegative, skipN, threshold, targetFrom, targetTo, showHeader);
+
+        if (chromosomeFound) {
+	    // Found single chromosome of interest, completed its search - loop shall end here.
+            break;
+        }
+	showHeader=false;
     }
 
     outFilePositive.close();

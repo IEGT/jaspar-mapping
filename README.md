@@ -4,11 +4,11 @@ Data provided by this script shall then be used augment data shown in IGV, so no
 
 To execute this program
  1. Compile pssm_scan.cpp (on UNIX a mere `make pssm_scan` should suffice)
- 2. Download the exact same genome that your cut'n'run experiments were run against, like `wget https://ftp.ensembl.org/pub/release-112/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz`
+ 2. Download the exact same genome that your cut'n'run experiments were run against, like `wget https://ftp.ensembl.org/pub/release-112/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz` and unpack like `gunzip -c Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz > Homo_sapiens.GRCh38.dna.primary_assembly.fasta`
  3. Download JASPAR, like https://jaspar2022.genereg.net/download/data/2022/CORE/JASPAR2022_CORE_non-redundant_pfms_jaspar.txt
- 4. Execute `./pssm_scan`, expect separate outputs for every motif and the respective positive and negative strands.
+ 4. Execute `./pssm_scan`, expect separate outputs for every motif and the respective positive and negative strands. The option "--help" provides extra details.
 
-For the full genome, expect an output of ~22 GB per motif.
+Unconstrained, for the full genome, expect an output of ~30 GB per motif. Options are provided to retrieve matches above a given threshold or for particular chromosomal regions.
 
 --
   Steffen Möller, IEGT, 9/2024
