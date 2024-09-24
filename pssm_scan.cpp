@@ -4,7 +4,8 @@
 #include <string>
 #include <sstream>
 #include <unordered_map>
-#include <algorithm> // For removing brackets
+#include <filesystem> // test and creating for directories
+#include <algorithm> // For removing brackets, replace
 #include <iomanip>   // For formatted output / setting precision
 #include <chrono>    // For progress timing
 #include <getopt.h>  // For GNU Getopt
@@ -296,7 +297,7 @@ std::string reverseComplement(const std::string& sequence) {
             case 't': base = 'A'; break;
             case 'c': base = 'G'; break;
             case 'g': base = 'C'; break;
-            default: // no change required, also N = reverse(N)
+            default: break; // no change required, also N = reverse(N)
         }
     }
     return revComp;
@@ -369,7 +370,7 @@ int scanSequence(const std::string& chromosome, const std::string& sequence, con
 /** \brief Function to display the progress bar
  */
 void displayProgressBar(float progress) {
-    int barWidth = 70;  // Width of the progress bar
+    int barWidth = 75;  // Width of the progress bar
     std::cout << "[";
     int pos = barWidth * progress;
     for (int i = 0; i < barWidth; ++i) {
@@ -377,7 +378,7 @@ void displayProgressBar(float progress) {
         else if (i == pos) std::cout << ">";
         else std::cout << " ";
     }
-    std::cout << "] " << int(progress * 100.0) << " %\r";
+    std::cout << "] " << std::fixed << std::setprecision(3) << progress * 100.0 << " %\r";
     std::cout.flush();
 }
 
@@ -458,17 +459,18 @@ int readFastaFile(const std::string& fastaFile, genome_type& genome) {
     return 0;
 }
 
-void printHelp(const std::string& programName, const std::string& genomeFile, const std::string& pssmFile, const std::string& targetMotifID, const float& threshold, const std::string& chromosome, const size_t& from, const size_t& to, const std::string& regions) {
+void printHelp(const std::string& programName, const std::string& genomeFile, const std::string& pssmFile, const std::string& targetMotifID, const float& threshold, const std::string& chromosome, const size_t& from, const size_t& to, const std::string& regions, const std::string& outdir) {
     std::cout << "Usage: " << programName << " [-v] [-c chromosome] [-t toBp] [-f fromBp] [-g genome_file] [-p pssm_file] [-m motif_id] [--skip-N | --neutral-N] [--skip-normalization]" << std::endl;
     std::cout << " -v, --verbose        Allow verbose output (set to " << beVerbose << ")" << std::endl;
-    std::cout << " -g, --genome         Path to genome FASTA file (set to " << genomeFile  << ")" << std::endl;
-    std::cout << " -p, --pssm           Path to JASPAR PSSM file (set to " << pssmFile << ")" << std::endl;
-    std::cout << " -m, --motif          Target motif ID from JASPAR file (set to " << targetMotifID << ")" << std::endl;
+    std::cout << " -g, --genome         Path to genome FASTA file (set to '" << genomeFile  << "')" << std::endl;
+    std::cout << " -p, --pssm           Path to JASPAR PSSM file (set to '" << pssmFile << "')" << std::endl;
+    std::cout << " -m, --motif          Target motif ID from JASPAR file (set to '" << targetMotifID << "')" << std::endl;
     std::cout << " -l, --threshold      Minimal score to achieve to print (set to " << threshold << ")" << std::endl;
-    std::cout << " -c, --chr            Single chromosome to consider (set to " << chromosome << ")" << std::endl;
+    std::cout << " -c, --chr            Single chromosome to consider (set to '" << chromosome << "')" << std::endl;
     std::cout << " -f, --from           Minimal position on chromosome to consider (set to " << from << ")" << std::endl;
     std::cout << " -t, --to             Maximal position on chromosome to consider (set to " << to << ")" << std::endl;
-    std::cout << " -r, --regions        Regions constraint file (set to " << regions << ")" << std::endl;
+    std::cout << " -r, --regions        Regions constraint file (set to '" << regions << "')" << std::endl;
+    std::cout << " -o, --outdir         Directory to create output files in (set to '" << outdir << "')" << std::endl;
     std::cout << " --skip-N             Skip windows containing 'N'" << std::endl;
     std::cout << " --neutral-N          Treat 'N' as neutral (contribute 0 to the score)" << std::endl;
     std::cout << " --skip-normalization Skip log-normalisation, will affect scoring." << std::endl;
@@ -485,9 +487,10 @@ int main(int argc, char* argv[]) {
     bool skipN = true;  // Default to skipping N
     bool skipNormalization = false;  // Default to not skip normalization
     bool showHelp = false; // Do not show help after all variables have been assigned
-    long targetFrom= -1L, targetTo= -1L ;
+    long targetFrom = -1L, targetTo = -1L ;
     std::string targetChromosome ;
     std::vector<Region> regions;
+    std::string outdir = ".";
 
     // Option flags and variables for getopt
     int option;
@@ -500,6 +503,7 @@ int main(int argc, char* argv[]) {
         {"from", required_argument, 0, 'f'},
         {"to", required_argument, 0, 't'},
         {"regions", required_argument, 0, 'r'},  // regions file
+        {"outdir", required_argument, 0, 'o'},  // output directory
         {"skip-N", no_argument, 0, 0},
         {"neutral-N", no_argument, 0, 0},
         {"skip-normalization", no_argument, 0, 's'},
@@ -510,7 +514,7 @@ int main(int argc, char* argv[]) {
 
     // Parse command line arguments using getopt
     int option_index = 0;
-    while ((option = getopt_long(argc, argv, "g:p:m:l:c:f:t:V:h", long_options, &option_index)) != -1) {
+    while ((option = getopt_long(argc, argv, "g:p:m:l:c:f:t:o:V:h", long_options, &option_index)) != -1) {
         switch (option) {
             case 'g':
                 genomeFile = optarg;
@@ -541,6 +545,16 @@ int main(int argc, char* argv[]) {
                 threshold = atof(optarg);
                 std::cerr << "I: Only showing matches with score > " << threshold << "." << std::endl;
                 break;
+            case 'o':
+                outdir = optarg;
+                if (!std::filesystem::is_directory(outdir)) {
+                    if (std::filesystem::create_directory(outdir)) {
+			std::cerr << "I: Created output directory '" << outdir << "'." << std::endl;
+		    } else {
+			std::cerr << "E: Output directory '" << outdir << "' not existing and could not be created." << std::endl;
+		    }
+                }
+                break;
             case 0:
                 if (std::string(long_options[option_index].name) == "skip-N") {
                     skipN = true;
@@ -560,17 +574,19 @@ int main(int argc, char* argv[]) {
         }
 
         if (showHelp) {
-            printHelp(argv[0],genomeFile,pssmFile,targetMotifID,threshold,targetChromosome,targetFrom,targetTo,regionsFile);
+            printHelp(argv[0],genomeFile,pssmFile,targetMotifID,threshold,targetChromosome,targetFrom,targetTo,regionsFile,outdir);
             return 1;
         }
     }
 
+/*
     // Ensure the motif ID is provided
     if (targetMotifID.empty()) {
         std::cerr << "E: You must specify a motif ID with the -m option." << std::endl;
-        printHelp(argv[0],genomeFile,pssmFile,targetMotifID,threshold,targetChromosome,targetFrom,targetTo,regionsFile);
+        printHelp(argv[0],genomeFile,pssmFile,targetMotifID,threshold,targetChromosome,targetFrom,targetTo,regionsFile,outdir);
         return 1;
     }
+*/
 
     // Load the PSSM matrix from a JASPAR-like file
     pssm_list_type pssm_list;
@@ -600,7 +616,7 @@ int main(int argc, char* argv[]) {
 
         // ensure we can modify the object, e.g. for normalization
         pssm_class pssm_object_copy = pssm_object;
-  
+
         // Perform PSSM scanning on each chromosome in the genome
         if (pssm_object_copy.pssm.empty() ) {
             std::cerr << "E: Failed to parse PSSM." << std::endl;
@@ -638,8 +654,12 @@ int main(int argc, char* argv[]) {
         }
 
         // Output filenames based on motif ID and name
-        std::string outputFileNamePositive = motifName + "_" + motifID + "_positive";
-        std::string outputFileNameNegative = motifName + "_" + motifID + "_negative";
+	//
+	std::string motifNameForFile = motifName;
+        std::replace(motifNameForFile.begin(), motifNameForFile.end(), ':', '_'); // Replace colon with underscore
+        std::replace(motifNameForFile.begin(), motifNameForFile.end(), '/', '_'); // Replace colon with underscore
+        std::string outputFileNamePositive = outdir + std::filesystem::path::preferred_separator + motifNameForFile + "_" + motifID + "_positive";
+        std::string outputFileNameNegative = outdir + std::filesystem::path::preferred_separator + motifNameForFile + "_" + motifID + "_negative";
         if (!targetChromosome.empty()) {
             outputFileNamePositive += "_"+targetChromosome;
             outputFileNameNegative += "_"+targetChromosome;
@@ -652,18 +672,22 @@ int main(int argc, char* argv[]) {
             outputFileNamePositive += "-"+std::to_string(targetTo);
             outputFileNameNegative += "-"+std::to_string(targetTo);
         }
-        outputFileNamePositive += ".txt";
-        outputFileNameNegative += ".txt";
+        outputFileNamePositive += ".bed";
+        outputFileNameNegative += ".bed";
 
         std::ofstream outFilePositive(outputFileNamePositive);
         std::ofstream outFileNegative(outputFileNameNegative);
 
-        if (!outFilePositive.is_open() || !outFileNegative.is_open()) {
-            std::cerr << "E: Error opening output files." << std::endl;
+        if (!outFilePositive.is_open()) {
+            std::cerr << "E: Error opening output file '" << outputFileNamePositive << "'." << std::endl;
             return 1;
         }
 
-        bool chromosomeFound = false;
+        if (!outFileNegative.is_open()) {
+            std::cerr << "E: Error opening output file '" << outputFileNameNegative << "'." << std::endl;
+            return 1;
+        }
+
         bool showHeader=true;
 
         if (!regions.empty()) {
@@ -701,7 +725,14 @@ int main(int argc, char* argv[]) {
         } else {
             // Original scanning logic for full genome or chromosome ranges
             for (const auto& [chromosome, sequence] : genome) {
-                if ( !chromosome.empty() ) {
+		bool chromosomeFound = false;
+		if ( chromosome.empty() ) {
+		    std::cerr << "E: Stored data on empty chromosome - weird, please check." << std::endl;
+                    outFilePositive.close();
+                    outFileNegative.close();
+		    return 1;
+		}
+                if ( !targetChromosome.empty() ) {
                     if ( 0 != chromosome.compare(targetChromosome) ) {
                         std::cerr << "I: Skipping chromosome " << chromosome << " (+ strand)" << std::endl;
                         continue;
