@@ -354,7 +354,7 @@ int scanSequence(const std::string& chromosome, const std::string& sequence, con
         if (score < threshold) {
             continue;
         }
-        outFile << chromosome << "\t" << i+1 << "\t" << (i+1 + motifLength) << "\t" << pssm.motifName << "\t" << std::fixed << std::setprecision(3) << score << "\t" << strand << "\n";
+        outFile << chromosome << "\t" << (i+1) << "\t" << (i+1 + motifLength) << "\t" << pssm.motifName << "\t" << std::fixed << std::setprecision(3) << score << "\t" << strand << "\n";
 
         // Progress indicator
         if (i % reportInterval == 0) {
@@ -507,14 +507,14 @@ int main(int argc, char* argv[]) {
         {"skip-N", no_argument, 0, 0},
         {"neutral-N", no_argument, 0, 0},
         {"skip-normalization", no_argument, 0, 's'},
-        {"verbose", no_argument, 0, 'V'},
+        {"verbose", no_argument, 0, 'v'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
     };
 
     // Parse command line arguments using getopt
     int option_index = 0;
-    while ((option = getopt_long(argc, argv, "g:p:m:l:c:f:t:o:V:h", long_options, &option_index)) != -1) {
+    while ((option = getopt_long(argc, argv, "g:p:m:l:c:f:t:o:vh", long_options, &option_index)) != -1) {
         switch (option) {
             case 'g':
                 genomeFile = optarg;
@@ -565,7 +565,7 @@ int main(int argc, char* argv[]) {
             case 's':
                 skipNormalization=true;
                 break;
-            case 'V':
+            case 'v':
                 beVerbose = 1;
                 break;
             default:
