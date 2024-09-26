@@ -354,7 +354,7 @@ int scanSequence(const std::string& chromosome, const std::string& sequence, con
         if (score < threshold) {
             continue;
         }
-        outFile << chromosome << "\t" << i << "\t" << (i + motifLength) << "\t" << pssm.motifName << "\t" << std::fixed << std::setprecision(3) << score << "\t" << strand << "\n";
+        outFile << chromosome << "\t" << i+1 << "\t" << (i+1 + motifLength) << "\t" << pssm.motifName << "\t" << std::fixed << std::setprecision(3) << score << "\t" << strand << "\n";
 
         // Progress indicator
         if (i % reportInterval == 0) {
