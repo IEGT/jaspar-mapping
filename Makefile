@@ -6,7 +6,7 @@ LDFLAGS=-lm
 
 SRCS=$(wildcard *.cpp)
 
-.SUFFIXES: .cpp .o
+.SUFFIXES: .cpp .o .fasta .fa.gz
 
 all: depend pssm_scan gtf_file_region_retrieval
 
@@ -23,10 +23,13 @@ gtf_file_region_retrieval: gtf_file_region_retrieval.cpp progress.o
 clean:
 	$(RM) gtf_file_region_retrieval pssm_scan
 
-eomo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta: Homo_sapiens.GRCh38.dna.primary_assembly.fasta
-	head -n 500000 Homo_sapiens.GRCh38.dna.primary_assembly.fasta > Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta
+Homo_sapiens.GRCh38.dna.primary_assembly.fasta: Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz
+	gunzip -c $< > $@
+
+Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta: Homo_sapiens.GRCh38.dna.primary_assembly.fasta
+	head -n 500000 $< > Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta
 Homo_sapiens.GRCh38.dna.primary_assembly_bottom500000.fasta: Homo_sapiens.GRCh38.dna.primary_assembly.fasta
-	( echo ">44 nonsense" ; tail -n 500000 Homo_sapiens.GRCh38.dna.primary_assembly.fasta ) > Homo_sapiens.GRCh38.dna.primary_assembly_bottom500000.fasta
+	( echo ">44 nonsense" ; tail -n 500000 $< ) > Homo_sapiens.GRCh38.dna.primary_assembly_bottom500000.fasta
 
 testGTF: gtf_file_region_retrieval
 	echo "TP73" |  ./gtf_file_region_retrieval
@@ -49,4 +52,3 @@ depend: .depend
 	$(CC) $(CFLAGS) -MM $^ -MF "$@"
 
 include .depend
-
