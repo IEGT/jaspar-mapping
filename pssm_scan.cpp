@@ -811,7 +811,9 @@ int main(int argc, char* argv[]) {
                 }
                 if ( !targetChromosome.empty() ) {
                     if ( 0 != chromosome.compare(targetChromosome) ) {
-                        std::cerr << "I: Skipping chromosome " << chromosome << " (+ strand)" << std::endl;
+                        if (showDebug) {
+                            std::cerr << "I: Skipping chromosome " << chromosome << " (+ strand)" << std::endl;
+                        }
                         continue;
                     } else {
                         chromosomeFound = true;
