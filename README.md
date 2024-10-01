@@ -10,5 +10,10 @@ To execute this program
 
 Unconstrained, for the full genome, expect an output of ~30 GB per motif. Options are provided to retrieve matches above a given threshold or for particular chromosomal regions.
 
+A helper routine was created to filter GTF annotations of genome. This can be used to retrieve genomic coordinates for a set of genes of interest, much like a "quick local BioMart". To execute that program
+ 1. Compile gtf_file_region_retrieval, again by invocating make.
+ 2. Download the GTF file accompanying the FASTA file, i.e. https://ftp.ensembl.org/pub/release-112/gtf/homo_sapiens/Homo_sapiens.GRCh38.112.gtf.gz
+ 3. Execute it ./gtf_file_region_retrieval
+
 --
   Steffen Möller, IEGT, 9/2024
