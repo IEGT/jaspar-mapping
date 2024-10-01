@@ -10,6 +10,7 @@
 #include <chrono>    // For progress timing
 #include <getopt.h>  // For GNU Getopt
 #include <math.h>
+#include "progress.h" // progress indicator
 
 typedef std::unordered_map<std::string, std::string>   genome_type;  //< Map of chromosome ID to sequence
 typedef std::unordered_map<char, std::vector<double> > pssm_type;    //< Map of nucleotide to counts
@@ -444,21 +445,6 @@ int scanSequence(const std::string& chromosome, const std::string& sequence, con
         }
     }
     return 0;
-}
-
-/** \brief Function to display the progress bar
- */
-void displayProgressBar(float progress) {
-    int barWidth = 75;  // Width of the progress bar
-    std::cout << "[";
-    int pos = barWidth * progress;
-    for (int i = 0; i < barWidth; ++i) {
-        if (i < pos) std::cout << "=";
-        else if (i == pos) std::cout << ">";
-        else std::cout << " ";
-    }
-    std::cout << "] " << std::fixed << std::setprecision(3) << progress * 100.0 << " %\r";
-    std::cout.flush();
 }
 
 /** \brief Function to read a genome sequence from a FASTA file (extract only chromosome name)
