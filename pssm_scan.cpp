@@ -14,13 +14,22 @@
 typedef std::unordered_map<std::string, std::string>   genome_type;  //< Map of chromosome ID to sequence
 typedef std::unordered_map<char, std::vector<double> > pssm_type;    //< Map of nucleotide to counts
 
+int beVerbose = 0;
+int showDebug = 1;
+
 // Function to calculate log-odds score for a given nucleotide at a position
 double logOddsScore(const double& frequency, const double& background) {
     if (frequency == 0) {
-        return -1e9;  // Prevent log(0) by returning a large negative score for unobserved nucleotides
+        //return -1e9;  // Prevent log(0) by returning a large negative score for unobserved nucleotides
+        return -2;  // Symmetry
     }
-    return log2(frequency / background);  // Log-odds ratio
+    return std::max(log2(frequency / background),-2.0);  // Log-odds ratio
 }
+
+class pssm_class;
+
+typedef std::unordered_map<std::string, pssm_class> pssm_list_type;
+pssm_list_type pssm_list;
 
 /**
  * A class representing a PSSM (Position-Specific Scoring Matrix).
@@ -29,6 +38,7 @@ double logOddsScore(const double& frequency, const double& background) {
 class pssm_class {
     public:
         pssm_type pssm;
+        std::vector<double> colsums;
         std::string motifID;
         std::string motifName;
         int motifLength;
@@ -40,6 +50,16 @@ class pssm_class {
             motifID.clear();
             motifName.clear();
             motifLength = 0;
+            colsums.clear();
+        }
+
+        pssm_class(const pssm_class& c) {
+            std::cerr << "D: invoked copy constructor" << std::endl;
+            this->motifID = c.motifID;
+            this->motifName = c.motifName;
+            this->motifLength = c.motifLength;
+            this->colsums = c.colsums;
+            this->pssm = c.pssm;
         }
         /** \brief Constructor that initializes the PSSM and motif information.
          *
@@ -53,24 +73,66 @@ class pssm_class {
             this->motifID = motifID;
             this->motifName = motifName;
             this->motifLength = motifLength;
+            this->colsums.clear();
+            for (int i = 0; i< motifLength; i++) {
+                this->colsums.push_back(0.0);
+            }
+            for (auto& [nucleotide, counts] : this->pssm) {
+                for (int i = 0; i< motifLength; i++) {
+                    this->colsums[i] += counts[i];
+                }
+            }
+            std::cerr << "ColSums: " << std::endl;
+            for (int i = 0; i< motifLength; i++) {
+                std::cerr << "\t" << this->colsums[i];
+            }
+            std::cerr << std::endl;
+        }
+ 
+        ~pssm_class() {
+            std::cerr << "pssm_class - deleting colsums[]" << std::endl;
         }
 
+        static int parsePSSMFile(const std::string& pssmFile, pssm_list_type& pssm_list, const std::string& targetMotifID);
+
         // Normalize the PSSM by converting counts to log-odds scores
-        void normalizePSSM(const std::unordered_map<char, double>& backgroundFrequencies) {
+        void normalizePSSM(const std::unordered_map<char, const double>& backgroundFrequencies) {
+
+            std::cerr << "I: NormalizePSSM " << std::endl;
+            std::cerr << *this;
+
             for (auto& [nucleotide, counts] : this->pssm) {
-                double background = backgroundFrequencies.at(nucleotide);
-                for (double& count : counts) {
-                    count = logOddsScore(count, background);
+                const auto background = backgroundFrequencies.at(nucleotide);
+
+                //int i = 0;
+                std::cerr << "Counts.size= " << counts.size() << std::endl;
+                //for (unsigned int i=0; auto& count : counts) {
+                for (unsigned int i=0; i < counts.size(); i++) {
+                    std::cerr << "D: i=" << i << std::endl;
+                    if (0 == this->colsums[i]) {
+                        //count = 0;
+                        counts[i] = 0;
+                        std::cerr << "W: Unexpected - column " << i << " has no scores assigned." << std::endl;
+                        continue;
+                    }
+                    if (0.0 == counts[i]) { // an unobserved nucleotide
+                        counts[i] = -2;
+                        //count = -1e9;
+                        continue;
+                    }
+                    std::cerr << "I: Normalization of " << counts[i] << " counts at position " << i << " with column sum " << this->colsums[i] << " to ";
+                    counts[i] = logOddsScore(counts[i]/this->colsums[i], background);
+                    std::cerr << counts[i] << std::endl;
                 }
             }
         }
 
         // Overload the << operator for pssm_class
         friend std::ostream& operator<<(std::ostream& os, const pssm_class& pssmObj) {
-            os << "Motif ID: " << pssmObj.motifID << "\n";
-            os << "Motif Name: " << pssmObj.motifName << "\n";
-            os << "Motif Length: " << pssmObj.motifLength << "\n";
-            os << "PSSM:\n";
+            os << "Motif ID: " << pssmObj.motifID << std::endl;
+            os << "Motif Name: " << pssmObj.motifName << std::endl;
+            os << "Motif Length: " << pssmObj.motifLength << std::endl;
+            os << "PSSM:" << std::endl;
 
             // Iterate over the PSSM and print each base and its associated counts
             for (const auto& [base, counts] : pssmObj.pssm) {
@@ -78,18 +140,21 @@ class pssm_class {
                 for (double count : counts) {
                     os << count << " ";
                 }
-                os << "\n";
+                os << std::endl;
             }
+
+            os << "ColSums:\t" ;
+            for (int i = 0; i< pssmObj.motifLength; i++) {
+                os << "\t" << pssmObj.colsums[i];
+            }
+            std::cerr << std::endl;
 
             return os;
         }
 };
-typedef std::unordered_map<std::string, pssm_class> pssm_list_type;
+
 
 // global variable to control verbosity
-int beVerbose = 0;
-int showDebug = 1;
-pssm_list_type pssm_list;
 
 // Function to trim whitespace from strings
 std::string trim(const std::string& str) {
@@ -110,7 +175,7 @@ std::string trim(const std::string& str) {
  * @param targetMotifID - the motif ID to search for in the PSSM file
  * @returns 0 upon success, else -1.
  */
-int parsePSSMFile(const std::string& pssmFile, pssm_list_type& pssm_list, const std::string& targetMotifID) {
+int pssm_class::parsePSSMFile(const std::string& pssmFile, pssm_list_type& pssm_list, const std::string& targetMotifID) {
 
     std::ifstream inFile(pssmFile);
     if (!inFile.is_open()) {
@@ -197,7 +262,7 @@ int parsePSSMFile(const std::string& pssmFile, pssm_list_type& pssm_list, const 
     return 0;
 }
 
-std::unordered_map<char, double> backgroundFrequencies = {
+std::unordered_map<char, const double> backgroundFrequencies = {
     {'A', 0.25},  // Assuming equal background probabilities; adjust as needed
     {'C', 0.25},
     {'G', 0.25},
@@ -211,14 +276,17 @@ std::unordered_map<char, double> backgroundFrequencies = {
 };
 
 // Region constraining the scan for motifs
-struct Region {
-    std::string chromosome;
-    long from;
-    long to;
-    std::string name;
+class Region {
+    public:
+        std::string chromosome;
+        long from;
+        long to;
+        std::string name;
+        
+        static std::vector<Region> parseRegionsFile(const std::string& regionsFile);
 };
 
-std::vector<Region> parseRegionsFile(const std::string& regionsFile) {
+std::vector<Region> Region::parseRegionsFile(const std::string& regionsFile) {
     std::ifstream inFile(regionsFile);
     std::vector<Region> regions;
 
@@ -354,6 +422,7 @@ int scanSequence(const std::string& chromosome, const std::string& sequence, con
         const std::string window = sequence.substr(i, motifLength);
         const double score = calculateScore(window, pssm.pssm, skipN);
         // Skip output if the window contained 'N' or invalid nucleotides
+        std::cerr << "D: Score: " << score << std::endl;
         if (score == -1e9) {
             continue;
         }
@@ -607,7 +676,7 @@ int main(int argc, char* argv[]) {
     // Load the PSSM matrix from a JASPAR-like file
     pssm_list_type pssm_list;
 
-    if ( parsePSSMFile(pssmFile, pssm_list , targetMotifID ) ) {
+    if ( pssm_class::parsePSSMFile(pssmFile, pssm_list , targetMotifID ) ) {
         std::cerr << "E: Error parsing PSSM file '" << pssmFile << "'" << std::endl;
         return 1;
     } else if (pssm_list.empty()) {
@@ -654,10 +723,10 @@ int main(int argc, char* argv[]) {
             pssm_object_copy.normalizePSSM(backgroundFrequencies);
         }
 
-        std::cerr << "PSSM afternormalization:" << std::endl << pssm_object_copy;
+        std::cerr << "PSSM after normalization:" << std::endl << pssm_object_copy;
 
         if (!regionsFile.empty()) {
-            regions = parseRegionsFile(regionsFile);
+            regions = Region::parseRegionsFile(regionsFile);
             if (regions.empty()) {
                 std::cerr << "E: No valid regions found in regions file." << std::endl;
                 return 1;
@@ -687,6 +756,12 @@ int main(int argc, char* argv[]) {
         if (targetTo > 0L) {
             outputFileNamePositive += "-"+std::to_string(targetTo);
             outputFileNameNegative += "-"+std::to_string(targetTo);
+        }
+        if (threshold) {
+            outputFileNamePositive += "_thresh_";
+            outputFileNamePositive += std::to_string(threshold);
+            outputFileNameNegative += "_thresh_";
+            outputFileNameNegative += std::to_string(threshold);
         }
         outputFileNamePositive += ".bed";
         outputFileNameNegative += ".bed";
