@@ -1,0 +1,46 @@
+name: Build Windows Binary
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Set up MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: >-
+            mingw-w64-x86_64-toolchain
+            base-devel
+          update: true
+
+      - name: Install Make (if you want to keep using your Makefile)
+        run: |
+          pacman -S --noconfirm make
+
+      - name: Build the program
+        run: |
+          make
+        shell: msys2 {0}
+
+      - name: Archive first binary
+        uses: actions/upload-artifact@v3
+        with:
+          name: pssm_scan
+          path: ./pssm_scan.exe
+      
+      - name: Archive second binary
+        uses: actions/upload-artifact@v3
+          name: gtf_file_region_retrieval
+          path: ./gtf_file_region_retrieval.exe
