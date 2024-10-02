@@ -29,9 +29,6 @@ double logOddsScore(const double& frequency, const double& background) {
 
 class pssm_class;
 
-typedef std::unordered_map<std::string, pssm_class> pssm_list_type;
-pssm_list_type pssm_list;
-
 /**
  * A class representing a PSSM (Position-Specific Scoring Matrix).
  * Stores nucleotide counts and associated motif information.
@@ -94,7 +91,7 @@ class pssm_class {
             std::cerr << "pssm_class - deleting colsums[]" << std::endl;
         }
 
-        static int parsePSSMFile(const std::string& pssmFile, pssm_list_type& pssm_list, const std::string& targetMotifID);
+        static int parsePSSMFile(const std::string& pssmFile, std::unordered_map<std::string, pssm_class>& pssm_list, const std::string& targetMotifID);
 
         // Normalize the PSSM by converting counts to log-odds scores
         void normalizePSSM(const std::unordered_map<char, const double>& backgroundFrequencies) {
@@ -154,6 +151,7 @@ class pssm_class {
         }
 };
 
+typedef std::unordered_map<std::string, pssm_class> pssm_list_type;
 
 // global variable to control verbosity
 
