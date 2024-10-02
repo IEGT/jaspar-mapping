@@ -11,11 +11,11 @@ on:
 jobs:
   build-windows:
     runs-on: windows-latest
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
-      
+
       - name: Set up MSYS2
         uses: msys2/setup-msys2@v2
         with:
@@ -39,8 +39,9 @@ jobs:
         with:
           name: pssm_scan
           path: ./pssm_scan.exe
-      
+
       - name: Archive second binary
         uses: actions/upload-artifact@v3
+        with:
           name: gtf_file_region_retrieval
           path: ./gtf_file_region_retrieval.exe
