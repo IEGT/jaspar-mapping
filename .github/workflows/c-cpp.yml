@@ -2,9 +2,9 @@ name: C/C++ CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
   build:
@@ -12,8 +12,22 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
-    #- name: configure
-    #  run: ./configure
-    - name: make
-      run: make
+      - uses: actions/checkout@v4
+
+      # - name: configure
+      #   run: ./configure
+
+      - name: make
+        run: make
+
+      - name: Archive first binary
+        uses: actions/upload-artifact@v3
+        with:
+          name: pssm_scan-linux
+          path: ./pssm_scan.exe
+
+      - name: Archive second binary
+        uses: actions/upload-artifact@v3
+        with:
+          name: gtf_file_region_retrieval-linux
+          path: ./gtf_file_region_retrieval
