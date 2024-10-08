@@ -30,7 +30,9 @@ void storeGeneReference(std::unordered_map<std::string, GeneRegion>& geneRegions
                return;
            }
            // Ignore the shorter version
-           if (abs(existing.end - existing.start) > abs(end-start)) {
+           const size_t diffExisting = existing.end > existing.start ? existing.end - existing.start : existing.start - existing.end;
+           const size_t diff         =          end >          start ?          end -          start :          start -          end;
+           if ( diffExisting > diff ) {
                //std::cerr << "I: Ignoring alternative shorter annotation for gene " << geneIdentifier << std::endl;
                return;
            }

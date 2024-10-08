@@ -4,16 +4,57 @@ permissions:
   contents: write
 
 on:
-  push:
-    tags:
-      - 'v*.*.*'
+#  push:
+#    tags:
+#      - 'v*.*.*'
+   release:
+     types: [created]
 
 jobs:
-  build-and-release:
+#  create_release:
+#    name: Create release
+#    runs-on: ubuntu-latest
+#    outputs:
+#      upload_url: ${{ steps.create_release.outputs.upload_url }}
+#    steps:
+##      - name: Create Release
+#        id: create_release
+#        uses: actions/create-release@v1
+#        env:
+#          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#        with:
+#          tag_name: ${{ github.ref }}
+#          release_name: Release ${{ github.ref }}
+#          draft: true
+#          prerelease: true
+
+  build_release:
+    name: Build release
+#    needs: create_release
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
+        # macos-latest to be added
+        include:
+          - os: ubuntu-latest
+            zip_name: pssm_scan-linux
+            binary_tag: linux
+            binary1: pssm_scan-linux
+            binary2: gtf_file_region_retrieval-linux
+            generator: UNIX Makefile
+          - os: macos-latest
+            zip_name: pssm_scan-mac
+            binary_tag: mac
+            binary1: pssm_scan-mac
+            binary2: gtf_file_region_retrieval-mac
+            generator: Xcode
+          - os: windows-latest
+            zip_name: pssm_scan-win
+            binary-tag: exe
+            binary1: pssm_scan.exe
+            binary2: gtf_file_region_retrieval.exe
+            generator: Visual Studio 16 2019
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -29,13 +70,19 @@ jobs:
           update: true
 
       - name: Install Make (Windows)
-        if: runner.os == 'Windows'
+        if: matrix.os == 'windows-latest'
         run: pacman -S --noconfirm make
         shell: msys2 {0}
 
+      - name: Install Make (macOS)
+        if: matrix.os == 'macos-latest'
+        run: brew install make
+
       - name: Install dependencies (Linux)
-        if: runner.os == 'Linux'
+        if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get install -y build-essential
+
+      # Build the program
 
       - name: Build the program (Windows)
         if: runner.os == 'Windows'
@@ -43,71 +90,59 @@ jobs:
         shell: msys2 {0}
 
       - name: Build the program (Linux)
-        if: runner.os == 'Linux'
+        if: matrix.os == 'ubuntu-latest'
         run: make
 
+      - name: Build the program (MacOS)
+        if: matrix.os == 'macos-latest'
+        run: make CXXFLAGS="-std=gnu++2b"
+
+      # Preparation of artifacts
+
       - name: Prepare artifacts (Windows)
-        if: runner.os == 'Windows'
+        if: matrix.os == 'windows-latest'
         run: |
           mkdir artifacts
           Copy-Item .\pssm_scan.exe -Destination artifacts\pssm_scan.exe
           Copy-Item .\gtf_file_region_retrieval.exe -Destination artifacts\gtf_file_region_retrieval.exe
         shell: pwsh
 
-      - name: Prepare artifacts (Windows)
-        if: runner.os == 'Linux'
+      - name: Prepare artifacts (Linux)
+        if: matrix.os == 'ubuntu-latest'
         run: |
           mkdir -p artifacts
           cp ./pssm_scan artifacts/pssm_scan-linux
           cp ./gtf_file_region_retrieval artifacts/gtf_file_region_retrieval-linux
         shell: bash
 
-      - name: Create Release
-        if: github.event_name == 'push' && github.ref_type == 'tag' && matrix.os == 'ubuntu-latest'
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
-          draft: true
-          prerelease: true
-
-      - name: Set upload URL (Linux)
-        if: runner.os == 'Linux'
+      - name: Prepare artifacts (MacOS)
+        if: matrix.os == 'macos-latest'
         run: |
-          if [ -n "${{ steps.create-release.outputs.upload_url }}" ]; then
-            echo "UPLOAD_URL=${{ steps.create-release.outputs.upload_url }}" >> $GITHUB_ENV
-          else
-            echo "UPLOAD_URL=${{ github.event.repository.html_url }}/releases/latest" >> $GITHUB_ENV
-          fi
+          mkdir -p artifacts
+          cp ./pssm_scan artifacts/pssm_scan-mac
+          cp ./gtf_file_region_retrieval artifacts/gtf_file_region_retrieval-mac
+        shell: bash
 
-      - name: Set upload URL (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          if ($Env:steps.create-release.outputs.upload_url) {
-            echo "UPLOAD_URL=${{ steps.create-release.outputs.upload_url }}" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf8 -Append
-          } else {
-            echo "UPLOAD_URL=${{ github.event.repository.html_url }}/releases/latest" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf8 -Append
-          }
+      # Uploads
 
-      - name: Upload Release Assets first binary
+      - name: Upload 1
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          upload_url: ${{ env.UPLOAD_URL }}
-          asset_path: ${{ runner.os == 'Windows' && 'artifacts/pssm_scan.exe' || 'artifacts/pssm_scan-linux' }}
-          asset_name: ${{ runner.os == 'Windows' && 'pssm_scan.exe' || 'pssm_scan-linux' }}
+          #upload_url: ${{ needs.create_release.outputs.upload_url }}
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: artifacts/${{ matrix.binary1 }}
+          asset_name: ${{ matrix.binary1 }}
           asset_content_type: application/octet-stream
 
-      - name: Upload Release Assets second binary
+      - name: Upload 2
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          upload_url: ${{ env.UPLOAD_URL }}
-          asset_path: ${{ runner.os == 'Windows' && 'artifacts/gtf_file_region_retrieval.exe' || 'artifacts/gtf_file_region_retrieval-linux' }}
-          asset_name: ${{ runner.os == 'Windows' && 'gtf_file_region_retrieval.exe' || 'gtf_file_region_retrieval-linux' }}
+          #upload_url: ${{ needs.create_release.outputs.upload_url }}
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: artifacts/${{ matrix.binary2 }}
+          asset_name: ${{ matrix.binary2 }}
           asset_content_type: application/octet-stream
