@@ -4,7 +4,7 @@
 #include <string>
 #include <sstream>
 #include <unordered_map>
-#include <filesystem> // test and creating for directories
+#include <filesystem> // test and creating for directories, defines filesystem::path
 #include <algorithm> // For removing brackets, replace
 #include <iomanip>   // For formatted output / setting precision
 #include <getopt.h> // For argument handling, defines getopt_long and optarg
@@ -485,8 +485,15 @@ int main(int argc, char* argv[]) {
         std::string motifNameForFile = motifName;
         std::replace(motifNameForFile.begin(), motifNameForFile.end(), ':', '_'); // Replace colon with underscore
         std::replace(motifNameForFile.begin(), motifNameForFile.end(), '/', '_'); // Replace colon with underscore
-        std::string outputFileNamePositive = outdir + std::filesystem::path::preferred_separator + motifNameForFile + "_" + motifID + "_positive";
-        std::string outputFileNameNegative = outdir + std::filesystem::path::preferred_separator + motifNameForFile + "_" + motifID + "_negative";
+        
+        std::filesystem::path outputFilePathPositive = outdir;
+        outputFilePathPositive /= motifNameForFile + "_" + motifID + "_positive";
+        std::string outputFileNamePositive = outputFilePathPositive.string();
+        
+        std::filesystem::path outputFilePathNegative = outdir;
+        outputFilePathNegative /= motifNameForFile + "_" + motifID + "_negative";
+        std::string outputFileNameNegative = outputFilePathNegative.string();
+        
         if (!targetChromosome.empty()) {
             outputFileNamePositive += "_"+targetChromosome;
             outputFileNameNegative += "_"+targetChromosome;
