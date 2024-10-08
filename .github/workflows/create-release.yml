@@ -46,16 +46,21 @@ jobs:
         if: runner.os == 'Linux'
         run: make
 
-      - name: Prepare artifacts
+      - name: Prepare artifacts (Windows)
+        if: runner.os == 'Windows'
         run: |
           mkdir artifacts
-          if [ "${{ runner.os }}" == "Windows" ]; then
-            cp ./pssm_scan.exe artifacts/pssm_scan.exe
-            cp ./gtf_file_region_retrieval.exe artifacts/gtf_file_region_retrieval.exe
-          else
-            cp ./pssm_scan artifacts/pssm_scan-linux
-            cp ./gtf_file_region_retrieval artifacts/gtf_file_region_retrieval-linux
-          fi
+          Copy-Item .\pssm_scan.exe -Destination artifacts\pssm_scan.exe
+          Copy-Item .\gtf_file_region_retrieval.exe -Destination artifacts\gtf_file_region_retrieval.exe
+        shell: pwsh
+
+      - name: Prepare artifacts (Windows)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p artifacts
+          cp ./pssm_scan artifacts/pssm_scan-linux
+          cp ./gtf_file_region_retrieval artifacts/gtf_file_region_retrieval-linux
+        shell: bash
 
       - name: Create Release
         if: github.event_name == 'push' && github.ref_type == 'tag' && matrix.os == 'ubuntu-latest'
@@ -69,7 +74,20 @@ jobs:
           draft: true
           prerelease: true
 
-      - name: Set upload URL
+      - name: Set upload URL (Windows)
+        if: runner.os == 'Windows'
+        id: set_upload_url
+        run: |
+          if ($env:UPLOAD_URL -ne "") {
+            echo "UPLOAD_URL=${{ steps.create_release.outputs.upload_url }}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          } else {
+            $uploadUrl = "${{ github.event.repository.html_url }}/releases/latest"
+            echo "UPLOAD_URL=$uploadUrl" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+        shell: pwsh
+
+      - name: Set upload URL (Linux)
+        if: runner.os == 'Linux'
         id: set_upload_url
         run: |
           if [ -n "${{ steps.create_release.outputs.upload_url }}" ]; then
