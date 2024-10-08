@@ -51,7 +51,7 @@ jobs:
           mkdir artifacts
           if [ "${{ runner.os }}" == "Windows" ]; then
             cp ./pssm_scan.exe artifacts/pssm_scan.exe
-            cp ./gtf_file_region_retrieval.exe artifacts/binary-two-windows.exe
+            cp ./gtf_file_region_retrieval.exe artifacts/gtf_file_region_retrieval.exe
           else
             cp ./pssm_scan artifacts/pssm_scan-linux
             cp ./gtf_file_region_retrieval artifacts/gtf_file_region_retrieval-linux
@@ -84,7 +84,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ env.UPLOAD_URL }}
-          asset_path: artifacts/*
+          asset_path: ${{ runner.os == 'Windows' && 'artifacts/pssm_scan.exe' || 'artifacts/pssm_scan-linux' }}
           asset_name: ${{ runner.os == 'Windows' && 'pssm_scan.exe' || 'pssm_scan-linux' }}
           asset_content_type: application/octet-stream
 
@@ -94,6 +94,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ env.UPLOAD_URL }}
-          asset_path: artifacts/*
+          asset_path: ${{ runner.os == 'Windows' && 'artifacts/gtf_file_region_retrieval.exe' || 'artifacts/gtf_file_region_retrieval-linux' }}
           asset_name: ${{ runner.os == 'Windows' && 'gtf_file_region_retrieval.exe' || 'gtf_file_region_retrieval-linux' }}
           asset_content_type: application/octet-stream
