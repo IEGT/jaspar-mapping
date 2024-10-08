@@ -74,27 +74,23 @@ jobs:
           draft: true
           prerelease: true
 
-      - name: Set upload URL (Windows)
-        if: runner.os == 'Windows'
-        id: set_upload_url
-        run: |
-          if ($env:UPLOAD_URL -ne "") {
-            echo "UPLOAD_URL=${{ steps.create_release.outputs.upload_url }}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          } else {
-            $uploadUrl = "${{ github.event.repository.html_url }}/releases/latest"
-            echo "UPLOAD_URL=$uploadUrl" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          }
-        shell: pwsh
-
       - name: Set upload URL (Linux)
         if: runner.os == 'Linux'
-        id: set_upload_url
         run: |
-          if [ -n "${{ steps.create_release.outputs.upload_url }}" ]; then
-            echo "UPLOAD_URL=${{ steps.create_release.outputs.upload_url }}" >> $GITHUB_ENV
+          if [ -n "${{ steps.create-release.outputs.upload_url }}" ]; then
+            echo "UPLOAD_URL=${{ steps.create-release.outputs.upload_url }}" >> $GITHUB_ENV
           else
             echo "UPLOAD_URL=${{ github.event.repository.html_url }}/releases/latest" >> $GITHUB_ENV
           fi
+
+      - name: Set upload URL (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          if ($Env:steps.create-release.outputs.upload_url) {
+            echo "UPLOAD_URL=${{ steps.create-release.outputs.upload_url }}" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf8 -Append
+          } else {
+            echo "UPLOAD_URL=${{ github.event.repository.html_url }}/releases/latest" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf8 -Append
+          }
 
       - name: Upload Release Assets first binary
         uses: actions/upload-release-asset@v1
