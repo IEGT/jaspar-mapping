@@ -1,0 +1,87 @@
+name: Build and Release Binaries
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build-and-release:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up MSYS2 (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: >-
+            mingw-w64-x86_64-toolchain
+            base-devel
+          update: true
+
+      - name: Install Make (Windows)
+        if: runner.os == 'Windows'
+        run: pacman -S --noconfirm make
+        shell: msys2 {0}
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y build-essential
+
+      - name: Build the program (Windows)
+        if: runner.os == 'Windows'
+        run: make
+        shell: msys2 {0}
+
+      - name: Build the program (Linux)
+        if: runner.os == 'Linux'
+        run: make
+
+      - name: Prepare artifacts
+        run: |
+          mkdir artifacts
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            cp ./pssm_scan.exe artifacts/pssm_scan.exe
+            cp ./gtf_file_region_retrieval.exe artifacts/binary-two-windows.exe
+          else
+            cp ./pssm_scan artifacts/pssm_scan-linux
+            cp ./gtf_file_region_retrieval artifacts/gtf_file_region_retrieval-linux
+          fi
+
+      - name: Create Release
+        if: github.event_name == 'push' && github.ref_type == 'tag' && matrix.os == 'ubuntu-latest'
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
+          draft: true
+          prerelease: true
+
+      - name: Upload Release Assets first binary
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url || github.repository_url + '/releases/latest' }}
+          asset_path: artifacts/*
+          asset_name: ${{ runner.os == 'Windows' && 'pssm_scan.exe' || 'pssm_scan-linux' }}
+          asset_content_type: application/octet-stream
+
+      - name: Upload Release Assets second binary
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url || github.repository_url + '/releases/latest' }}
+          asset_path: artifacts/*
+          asset_name: ${{ runner.os == 'Windows' && 'gtf_file_region_retrieval.exe' || 'gtf_file_region_retrieval-linux' }}
+          asset_content_type: application/octet-stream
