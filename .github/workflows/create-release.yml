@@ -66,12 +66,21 @@ jobs:
           draft: true
           prerelease: true
 
+      - name: Set upload URL
+        id: set_upload_url
+        run: |
+          if [ -n "${{ steps.create_release.outputs.upload_url }}" ]; then
+            echo "UPLOAD_URL=${{ steps.create_release.outputs.upload_url }}" >> $GITHUB_ENV
+          else
+            echo "UPLOAD_URL=${{ github.event.repository.html_url }}/releases/latest" >> $GITHUB_ENV
+          fi
+
       - name: Upload Release Assets first binary
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          upload_url: ${{ steps.create_release.outputs.upload_url || github.repository_url + '/releases/latest' }}
+          upload_url: ${{ env.UPLOAD_URL }}
           asset_path: artifacts/*
           asset_name: ${{ runner.os == 'Windows' && 'pssm_scan.exe' || 'pssm_scan-linux' }}
           asset_content_type: application/octet-stream
@@ -81,7 +90,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          upload_url: ${{ steps.create_release.outputs.upload_url || github.repository_url + '/releases/latest' }}
+          upload_url: ${{ env.UPLOAD_URL }}
           asset_path: artifacts/*
           asset_name: ${{ runner.os == 'Windows' && 'gtf_file_region_retrieval.exe' || 'gtf_file_region_retrieval-linux' }}
           asset_content_type: application/octet-stream
