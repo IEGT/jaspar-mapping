@@ -13,9 +13,8 @@ all: depend pssm_scan gtf_file_region_retrieval
 .cpp.o:
 	$(CXX) $(CXXFLAGS) -c $<
 
-
-pssm_scan: pssm_scan.cpp progress.o
-	$(CXX) $(CXXFLAGS) -o $@ $< progress.o $(LDFLAGS)
+pssm_scan: pssm_scan.cpp progress.o pssm.o
+	$(CXX) $(CXXFLAGS) -o $@ $< progress.o pssm.o $(LDFLAGS)
 
 gtf_file_region_retrieval: gtf_file_region_retrieval.cpp progress.o
 	$(CXX) $(CXXFLAGS) -o $@ $< progress.o $(LDFLAGS)

@@ -7,259 +7,17 @@
 #include <filesystem> // test and creating for directories
 #include <algorithm> // For removing brackets, replace
 #include <iomanip>   // For formatted output / setting precision
-#include <chrono>    // For progress timing
-#include <getopt.h>  // For GNU Getopt
-#include <math.h>
-#include "progress.h" // progress indicator
+#include <getopt.h> // For argument handling, defines getopt_long and optarg
+
+#include "progress.h"
+#include "pssm.h"
 
 typedef std::unordered_map<std::string, std::string>   genome_type;  //< Map of chromosome ID to sequence
-typedef std::unordered_map<char, std::vector<double> > pssm_type;    //< Map of nucleotide to counts
 
 int beVerbose = 0;
 int showDebug = 1;
 
-// Function to calculate log-odds score for a given nucleotide at a position
-double logOddsScore(const double& frequency, const double& background) {
-    if (frequency == 0) {
-        //return -1e9;  // Prevent log(0) by returning a large negative score for unobserved nucleotides
-        return -2;  // Symmetry
-    }
-    return std::max(log2(frequency / background),-2.0);  // Log-odds ratio
-}
-
-class pssm_class;
-
-/**
- * A class representing a PSSM (Position-Specific Scoring Matrix).
- * Stores nucleotide counts and associated motif information.
- */
-class pssm_class {
-    public:
-        pssm_type pssm;
-        std::vector<double> colsums;
-        std::string motifID;
-        std::string motifName;
-        int motifLength;
-        /**
-         * Default constructor that initializes empty PSSM and motif information.
-         */
-        pssm_class() {
-            pssm.clear();
-            motifID.clear();
-            motifName.clear();
-            motifLength = 0;
-            colsums.clear();
-        }
-
-        pssm_class(const pssm_class& c) {
-            std::cerr << "D: invoked copy constructor" << std::endl;
-            this->motifID = c.motifID;
-            this->motifName = c.motifName;
-            this->motifLength = c.motifLength;
-            this->colsums = c.colsums;
-            this->pssm = c.pssm;
-        }
-        /** \brief Constructor that initializes the PSSM and motif information.
-         *
-         * @param pssm The PSSM matrix
-         * @param motifID The motif's ID
-         * @param motifName The motif's name
-         * @param motifLength The motif's length
-         */
-        pssm_class(const pssm_type& pssm, const std::string& motifID, const std::string& motifName, const int& motifLength) {
-            this->pssm = pssm;
-            this->motifID = motifID;
-            this->motifName = motifName;
-            this->motifLength = motifLength;
-            this->colsums.clear();
-            for (int i = 0; i< motifLength; i++) {
-                this->colsums.push_back(0.0);
-            }
-            for (auto& [nucleotide, counts] : this->pssm) {
-                for (int i = 0; i< motifLength; i++) {
-                    this->colsums[i] += counts[i];
-                }
-            }
-            std::cerr << "ColSums: " << std::endl;
-            for (int i = 0; i< motifLength; i++) {
-                std::cerr << "\t" << this->colsums[i];
-            }
-            std::cerr << std::endl;
-        }
- 
-        ~pssm_class() {
-            std::cerr << "pssm_class - deleting colsums[]" << std::endl;
-        }
-
-        static int parsePSSMFile(const std::string& pssmFile, std::unordered_map<std::string, pssm_class>& pssm_list, const std::string& targetMotifID);
-
-        // Normalize the PSSM by converting counts to log-odds scores
-        void normalizePSSM(const std::unordered_map<char, const double>& backgroundFrequencies) {
-
-            std::cerr << "I: NormalizePSSM " << std::endl;
-            std::cerr << *this;
-
-            for (auto& [nucleotide, counts] : this->pssm) {
-                const auto background = backgroundFrequencies.at(nucleotide);
-
-                //int i = 0;
-                std::cerr << "Counts.size= " << counts.size() << std::endl;
-                //for (unsigned int i=0; auto& count : counts) {
-                for (unsigned int i=0; i < counts.size(); i++) {
-                    std::cerr << "D: i=" << i << std::endl;
-                    if (0 == this->colsums[i]) {
-                        //count = 0;
-                        counts[i] = 0;
-                        std::cerr << "W: Unexpected - column " << i << " has no scores assigned." << std::endl;
-                        continue;
-                    }
-                    if (0.0 == counts[i]) { // an unobserved nucleotide
-                        counts[i] = -2;
-                        //count = -1e9;
-                        continue;
-                    }
-                    std::cerr << "I: Normalization of " << counts[i] << " counts at position " << i << " with column sum " << this->colsums[i] << " to ";
-                    counts[i] = logOddsScore(counts[i]/this->colsums[i], background);
-                    std::cerr << counts[i] << std::endl;
-                }
-            }
-        }
-
-        // Overload the << operator for pssm_class
-        friend std::ostream& operator<<(std::ostream& os, const pssm_class& pssmObj) {
-            os << "Motif ID: " << pssmObj.motifID << std::endl;
-            os << "Motif Name: " << pssmObj.motifName << std::endl;
-            os << "Motif Length: " << pssmObj.motifLength << std::endl;
-            os << "PSSM:" << std::endl;
-
-            // Iterate over the PSSM and print each base and its associated counts
-            for (const auto& [base, counts] : pssmObj.pssm) {
-                os << base << ": ";
-                for (double count : counts) {
-                    os << count << " ";
-                }
-                os << std::endl;
-            }
-
-            os << "ColSums:\t" ;
-            for (int i = 0; i< pssmObj.motifLength; i++) {
-                os << "\t" << pssmObj.colsums[i];
-            }
-            std::cerr << std::endl;
-
-            return os;
-        }
-};
-
-typedef std::unordered_map<std::string, pssm_class> pssm_list_type;
-
 // global variable to control verbosity
-
-// Function to trim whitespace from strings
-std::string trim(const std::string& str) {
-    const std::string whitespace = " \t\n\r";
-    const auto strBegin = str.find_first_not_of(whitespace);
-    if (strBegin == std::string::npos) return "";  // No content
-
-    const auto strEnd = str.find_last_not_of(whitespace);
-    const auto strRange = strEnd - strBegin + 1;
-
-    return str.substr(strBegin, strRange);
-}
-
-/** \brief Function to parse a JASPAR PSSM file format
- * The function reads all PSSMs from the file and stores them in a map, that is unless targetMotifID is provided.
- * @param pssmFile - path to JASPAR PSSM file to parse
- * @param pssm - the PSSM structure to read that PSSM file into
- * @param targetMotifID - the motif ID to search for in the PSSM file
- * @returns 0 upon success, else -1.
- */
-int pssm_class::parsePSSMFile(const std::string& pssmFile, pssm_list_type& pssm_list, const std::string& targetMotifID) {
-
-    std::ifstream inFile(pssmFile);
-    if (!inFile.is_open()) {
-        std::cerr << "E: Error opening file: '" << pssmFile << "'" << std::endl;
-        return -1;
-    }
-
-    std::string line;
-    pssm_type pssm;
-    bool readingPSSM = false;
-    char currentBase = '\0';
-    std::string motifID, motifName;
-
-    int length=0;
-    while (getline(inFile, line)) {
-        line = trim(line);
-        // Check for the FASTA-like header, indicating a new motif
-        if (!line.empty() && line[0] == '>') {
-            // Save the previous PSSM if there is one
-            if (   !motifID.empty() // this is not the very first line read,
-                                    // so a complete PSSM has already been seen
-                && ( targetMotifID.empty() || motifID == targetMotifID )
-                                    // no motif was specified or the desired motif was found
-                ) {
-
-                pssm_class pssm_object(pssm, motifID, motifName, length);
-                pssm_list[motifID] = pssm_object;
-                if (showDebug) std::cerr << "I: Got the following PSSM: " << std::endl << pssm_object;
-                if (beVerbose) {
-                    std::cerr << "I: PSSM for motif " << motifID << " (" << motifName << ") saved with length " << length << "." << std::endl;
-                }
-                length=0; // redundant, just for clarity
-            }
-
-            // We iterate over all provides PSSMs, so clear the current one
-            pssm.clear();
-
-            if (!targetMotifID.empty() && motifID == targetMotifID) {
-                // Found the target motif, no need to read further
-                if (beVerbose) {
-                    std::cerr << "I: Target motif " << motifID << " (" << motifName << ") found." << std::endl;
-                    std::cerr << "   Parsing PSSM for motif: " << motifID << " (" << motifName << ")" << std::endl;
-                }
-                break;
-            }
-            // Parse new motif ID and name from the line read from the file
-            std::stringstream ss(line.substr(1));  // Skip the '>'
-            ss >> motifID >> motifName;
-        } else if (line[0] == 'A' || line[0] == 'C' || line[0] == 'G' || line[0] == 'T'
-                // unlikely to see in a PSSM file, but just in case
-                || line[0] == 'a' || line[0] == 'c' || line[0] == 'g' || line[0] == 't') {
-            // Read nucleotide counts from the JASPAR format
-            std::stringstream ss(line);
-            ss >> currentBase;  // The nucleotide character (A, C, G, T)
-
-            //if (showDebug) std::cerr << "I: " << currentBase << " : ";
-            std::string countsStr;
-            std::getline(ss,countsStr);  // Read the bracketed counts (e.g., [ 4 19 0 0 ])
-            //if (showDebug) std::cerr << countsStr << std::endl;
-
-            // Remove brackets and split counts
-            countsStr.erase(std::remove(countsStr.begin(), countsStr.end(), '['), countsStr.end());
-            countsStr.erase(std::remove(countsStr.begin(), countsStr.end(), ']'), countsStr.end());
-
-            std::stringstream countStream(countsStr);
-            double countValue;
-            length=0;
-            while (countStream >> countValue) {
-                length++;
-                pssm[currentBase].push_back(countValue);
-                //if (showDebug) std::cerr << " " << countValue;
-                //if (showDebug) std::cerr << " l:" << length;
-            }
-            //if (showDebug) std::cerr << std::endl;
-        } else {
-            // Skip other lines
-            if (beVerbose) {
-                std::cerr << "I: Skipping line: " << line << std::endl;
-            }
-        }
-    }
-
-    inFile.close();
-    return 0;
-}
 
 std::unordered_map<char, const double> backgroundFrequencies = {
     {'A', 0.25},  // Assuming equal background probabilities; adjust as needed
@@ -297,7 +55,7 @@ std::vector<Region> Region::parseRegionsFile(const std::string& regionsFile) {
     std::string line;
     bool headerSkipped = false;
     while (getline(inFile, line)) {
-        line = trim(line);
+        line = PSSM::trim(line);
         if (line.empty()) continue;
 
         // Optionally skip a header
@@ -384,7 +142,7 @@ std::string reverseComplement(const std::string& sequence) {
  * @param showHeader - whether to show the header in the output file
  * @return 0 if successful, else -1
  */
-int scanSequence(const std::string& chromosome, const std::string& sequence, const std::string& strand, const pssm_class& pssm,
+int scanSequence(const std::string& chromosome, const std::string& sequence, const std::string& strand, const PSSM& pssm,
                  std::ofstream& outFile, const bool skipN, const float& threshold, const long& from, const long& to, const bool& showHeader, const bool& showSequence) {
     //size_t motifLength = pssm.begin()->second.size();
     size_t motifLength = pssm.motifLength;
@@ -478,7 +236,7 @@ int readFastaFile(const std::string& fastaFile, genome_type& genome) {
     std::streamsize bytesRead = 0;
     size_t lineNo=0;
     while (getline(inFile, line)) {
-        line = trim(line);
+        line = PSSM::trim(line);
 
         if (line.empty()) continue;
 
@@ -660,7 +418,7 @@ int main(int argc, char* argv[]) {
     // Load the PSSM matrix from a JASPAR-like file
     pssm_list_type pssm_list;
 
-    if ( pssm_class::parsePSSMFile(pssmFile, pssm_list , targetMotifID ) ) {
+    if ( PSSM::parsePSSMFile(pssmFile, pssm_list , targetMotifID ) ) {
         std::cerr << "E: Error parsing PSSM file '" << pssmFile << "'" << std::endl;
         return 1;
     } else if (pssm_list.empty()) {
@@ -684,7 +442,7 @@ int main(int argc, char* argv[]) {
     for(auto const& [motifID, pssm_object] : pssm_list) {
 
         // ensure we can modify the object, e.g. for normalization
-        pssm_class pssm_object_copy = pssm_object;
+        PSSM pssm_object_copy = pssm_object;
 
         // Perform PSSM scanning on each chromosome in the genome
         if (pssm_object_copy.pssm.empty() ) {
