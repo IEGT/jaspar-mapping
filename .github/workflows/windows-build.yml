@@ -26,13 +26,14 @@ jobs:
           update: true
 
       - name: Install Make (if you want to keep using your Makefile)
+        shell: msys2 {0}
         run: |
           pacman -S --noconfirm make
 
       - name: Build the program
+        shell: msys2 {0}
         run: |
           make
-        shell: msys2 {0}
 
       - name: Archive first binary
         uses: actions/upload-artifact@v3
