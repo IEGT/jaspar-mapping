@@ -1,0 +1,11 @@
+.depend
+*.fasta
+*.fa
+*.gtf
+*.fa.gz
+*.o
+*.bed
+*.gch
+*.txt
+gtf_file_region_retrieval 
+pssm_scan
