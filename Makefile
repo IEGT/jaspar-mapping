@@ -16,8 +16,8 @@ all: depend pssm_scan gtf_file_region_retrieval
 pssm_scan: pssm_scan.cpp progress.o pssm.o
 	$(CXX) $(CXXFLAGS) -o $@ $< progress.o pssm.o $(LDFLAGS)
 
-gtf_file_region_retrieval: gtf_file_region_retrieval.cpp progress.o
-	$(CXX) $(CXXFLAGS) -o $@ $< progress.o $(LDFLAGS)
+gtf_file_region_retrieval: gtf_file_region_retrieval.cpp progress.o gtf_file_region.o
+	$(CXX) $(CXXFLAGS) -o $@ $< progress.o gtf_file_region.o $(LDFLAGS)
 
 clean:
 	$(RM) gtf_file_region_retrieval pssm_scan
