@@ -18,7 +18,6 @@ int beVerbose = 0;
 int showDebug = 1;
 
 // global variable to control verbosity
-
 std::unordered_map<char, const double> backgroundFrequencies = {
     {'A', 0.25},  // Assuming equal background probabilities; adjust as needed
     {'C', 0.25},
@@ -179,7 +178,7 @@ int scanSequence(const std::string& chromosome, const std::string& sequence, con
         const std::string window = sequence.substr(i, motifLength);
         const double score = calculateScore(window, pssm.pssm, skipN);
         // Skip output if the window contained 'N' or invalid nucleotides
-        std::cerr << "D: Score: " << score << std::endl;
+        // std::cerr << "D: Score: " << score << std::endl;
         if (score == -1e9) {
             continue;
         }

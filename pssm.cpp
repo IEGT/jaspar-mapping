@@ -20,9 +20,9 @@
 double PSSM::logOddsScore(const double& frequency, const double& background) {
     if (frequency == 0) {
         //return -1e9;  // Prevent log(0) by returning a large negative score for unobserved nucleotides
-        return -2;  // Symmetry
+        return -log2(1024*16);  // assume one of the next upcoming tests would have found that residue to avoid -inf
     }
-    return std::max(log2(frequency / background),-2.0);  // Log-odds ratio
+    return log2(frequency / background);  // Log-odds ratio
 }
 
 /** \brief Function to trim whitespace from strings
@@ -40,9 +40,9 @@ std::string PSSM::trim(const std::string& str) {
 
 /** \brief Function to parse a JASPAR PSSM file format
  * The function reads all PSSMs from the file and stores them in a map, that is unless targetMotifID is provided.
- * @param pssmFile - path to JASPAR PSSM file to parse
- * @param pssm - the PSSM structure to read that PSSM file into
- * @param targetMotifID - the motif ID to search for in the PSSM file
+ * @param constpssmFile - path to JASPAR PSSM file to parse
+ * @param pssm_list - the string->pssm mapping structure to read that PSSM file into
+ * @param targetMotifID - the motif ID to search for in the PSSM file, may be empty
  * @returns 0 upon success, else -1.
  */
 int PSSM::parsePSSMFile(const std::string& pssmFile, pssm_list_type& pssm_list, const std::string& targetMotifID, const int& beVerbose) {
