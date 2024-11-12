@@ -48,16 +48,6 @@ BED_FILES := $(shell grep "^>" JASPAR2022_CORE_non-redundant_pfms_jaspar.txt | s
 echo:
 	echo $(BED_FILES)
 
-#output_Chr1:
-#	grep "^>" JASPAR2022_CORE_non-redundant_pfms_jaspar.txt | while read line; \
-#		do \
-#			accession=$$(echo $$line | awk '{print $$1}' |sed -e 's/^>//'); \
-#			description=$$(echo $$line|sed -e 's/^.* //'); \
-#			echo "$$accession : $$description"; \
-#			echo $(MAKE) ACC=$$accession NAME=$$description output_chr1/$${accession}_$${description}.positive_1.bed ; \
-#		done
-#			#echo ./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly.fasta -threshold 0 -m $$accession --chr 1 ; \
-
 Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta: Homo_sapiens.GRCh38.dna.primary_assembly.fasta
 	head -n 500000 $< > Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta
 Homo_sapiens.GRCh38.dna.primary_assembly_bottom500000.fasta: Homo_sapiens.GRCh38.dna.primary_assembly.fasta
