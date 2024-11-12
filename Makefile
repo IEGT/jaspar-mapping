@@ -28,6 +28,36 @@ clean:
 Homo_sapiens.GRCh38.dna.primary_assembly.fasta: Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz
 	gunzip -c $< > $@
 
+
+# Define the pattern rule for generating .bed files
+output_Chr1/%_negative_1.bed output_Chr1/%_positive_1.bed: ACC=$(word 1,$(subst _, ,$*))
+output_Chr1/%_negative_1.bed output_Chr1/%_positive_1.bed: NAME=$(word 2,$(subst _, ,$*))
+output_Chr1/%_negative_1.bed output_Chr1/%_positive_1.bed:
+	@echo "NAME=$(NAME) ACC=$(ACC)"
+	@if [ ! -f output_Chr1/$(NAME)_$(ACC)_positive_1.bed ] ; then \
+	 	echo "Missing: output_Chr1/$(NAME)_$(ACC)_positive_1.bed" ; \
+		./pssm_scan --outdir output_Chr1 --genome Homo_sapiens.GRCh38.dna.primary_assembly.fasta -l 0 -m $(ACC) --chr 1 ; \
+	elif [ ! -f output_Chr1/$(NAME)_$(ACC)_negative_1.bed ]; then \
+	 	echo "Missing: output_Chr1/$(NAME)_$(ACC)_negative_1.bed" ; \
+		./pssm_scan --outdir output_Chr1 --genome Homo_sapiens.GRCh38.dna.primary_assembly.fasta -l 0 -m $(ACC) --chr 1 ; \
+	fi
+
+# Generate the list of targets
+SHELL=bash
+BED_FILES := $(shell grep "^>" JASPAR2022_CORE_non-redundant_pfms_jaspar.txt | sed -e 's%[/:()]%-%g' | awk '{print $$1 "_" $$NF "_positive_1.bed"}' | sed -e 's/^>//')
+echo:
+	echo $(BED_FILES)
+
+#output_Chr1:
+#	grep "^>" JASPAR2022_CORE_non-redundant_pfms_jaspar.txt | while read line; \
+#		do \
+#			accession=$$(echo $$line | awk '{print $$1}' |sed -e 's/^>//'); \
+#			description=$$(echo $$line|sed -e 's/^.* //'); \
+#			echo "$$accession : $$description"; \
+#			echo $(MAKE) ACC=$$accession NAME=$$description output_chr1/$${accession}_$${description}.positive_1.bed ; \
+#		done
+#			#echo ./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly.fasta -threshold 0 -m $$accession --chr 1 ; \
+
 Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta: Homo_sapiens.GRCh38.dna.primary_assembly.fasta
 	head -n 500000 $< > Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta
 Homo_sapiens.GRCh38.dna.primary_assembly_bottom500000.fasta: Homo_sapiens.GRCh38.dna.primary_assembly.fasta
@@ -45,7 +75,9 @@ test: pssm_scan Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta Homo_sa
 	#./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_bottom500000.fasta -l -500 --verbose -o output_bottom --chr 44 --from 100000 --to 103000
 	#./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_bottom500000.fasta -l -500 --verbose -o output_bottom --from 100000 --to 103000
 
-.PHONY: test all depend
+.PHONY: test all depend output_Chr1
+
+output_Chr1: $(addprefix output_Chr1/,$(BED_FILES))
 
 depend: .depend
 

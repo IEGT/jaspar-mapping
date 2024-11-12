@@ -193,10 +193,11 @@ int scanSequence(const std::string& chromosome, const std::string& sequence, con
 
         // Progress indicator
         if (i % reportInterval == 0) {
-            double progress = (double)i / sequenceLength * 100;
-            auto now = std::chrono::high_resolution_clock::now();
-            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start).count();
-            std::cout << "Progress: " << std::fixed << std::setprecision(2) << progress << "% - Elapsed time: " << elapsed << " seconds\n";
+            double progress = ((double) i) / sequenceLength;
+            //auto now = std::chrono::high_resolution_clock::now();
+            //auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start).count();
+            //std::cout << "Progress: " << std::fixed << std::setprecision(2) << progress * 100 << "% - Elapsed time: " << elapsed << " seconds\n";
+            displayProgressBar(progress);
         }
     }
     return 0;
@@ -482,8 +483,10 @@ int main(int argc, char* argv[]) {
         // Output filenames based on motif ID and name
         //
         std::string motifNameForFile = motifName;
-        std::replace(motifNameForFile.begin(), motifNameForFile.end(), ':', '_'); // Replace colon with underscore
-        std::replace(motifNameForFile.begin(), motifNameForFile.end(), '/', '_'); // Replace colon with underscore
+        std::replace(motifNameForFile.begin(), motifNameForFile.end(), ':', '-'); // Replace colon with dash
+        std::replace(motifNameForFile.begin(), motifNameForFile.end(), '/', '-'); // Replace slash with dash
+        std::replace(motifNameForFile.begin(), motifNameForFile.end(), '(', '-'); // Replace open parenthesis with dash
+        std::replace(motifNameForFile.begin(), motifNameForFile.end(), ')', '-'); // Replace close parenthesis with dash
         
         std::filesystem::path outputFilePathPositive = outdir;
         outputFilePathPositive /= motifNameForFile + "_" + motifID + "_positive";
