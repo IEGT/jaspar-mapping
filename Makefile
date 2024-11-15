@@ -16,6 +16,9 @@ all: depend pssm_scan gtf_file_region_retrieval context
 context: context.o
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS)
 
+context: compressed_file_reader.o
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS)
+
 pssm_scan: pssm_scan.cpp progress.o pssm.o
 	$(CXX) $(CXXFLAGS) -o $@ $< progress.o pssm.o $(LDFLAGS)
 
