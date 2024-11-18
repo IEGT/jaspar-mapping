@@ -6,6 +6,10 @@ LDFLAGS=-lm
 
 SRCS=$(wildcard *.cpp)
 
+JASPAR=JASPAR2022_CORE_non-redundant_pfms_jaspar.txt
+GENOME=Homo_sapiens.GRCh38.dna.primary_assembly.fasta
+GENOMEGZ=Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz
+
 .SUFFIXES: .cpp .o .fasta .fa.gz
 
 all: depend pssm_scan gtf_file_region_retrieval context
@@ -13,23 +17,30 @@ all: depend pssm_scan gtf_file_region_retrieval context
 .cpp.o:
 	$(CXX) $(CXXFLAGS) -c $<
 
-context: context.o
-	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS)
-
-context: compressed_file_reader.o
-	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS)
+context: context.o compressed_file_reader.o
+	$(CXX) $(CXXFLAGS) -o $@ $?  $(LDFLAGS)
 
 pssm_scan: pssm_scan.cpp progress.o pssm.o
-	$(CXX) $(CXXFLAGS) -o $@ $< progress.o pssm.o $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) -o $@ $? $(LDFLAGS)
 
 gtf_file_region_retrieval: gtf_file_region_retrieval.cpp progress.o gtf_file_region.o
-	$(CXX) $(CXXFLAGS) -o $@ $< progress.o gtf_file_region.o $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) -o $@ $? $(LDFLAGS)
 
 clean:
 	$(RM) gtf_file_region_retrieval pssm_scan
 
-Homo_sapiens.GRCh38.dna.primary_assembly.fasta: Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz
+$(JASPAR):
+	wget https://jaspar2022.genereg.net/download/data/2022/CORE/JASPAR2022_CORE_non-redundant_pfms_jaspar.txt
+jaspar: $(JASPAR)
+
+Homo_sapiens.GRCh38.dna.primary_assembly.fasta.gz:
+	wget https://ftp.ensembl.org/pub/release-113/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz
+
+$(GENOME): $(GENOMEGZ)
 	gunzip -c $< > $@
+
+genome: $(GENOME)
+genomegz: $(GENOMEGZ)
 
 
 # Define the pattern rule for generating .bed files
@@ -39,10 +50,10 @@ output_Chr1/%_negative_1.bed output_Chr1/%_positive_1.bed:
 	@echo "NAME=$(NAME) ACC=$(ACC)"
 	@if [ ! -f output_Chr1/$(NAME)_$(ACC)_positive_1.bed ] ; then \
 	 	echo "Missing: output_Chr1/$(NAME)_$(ACC)_positive_1.bed" ; \
-		./pssm_scan --outdir output_Chr1 --genome Homo_sapiens.GRCh38.dna.primary_assembly.fasta -l 0 -m $(ACC) --chr 1 ; \
+		./pssm_scan --outdir output_Chr1 --genome $(GENOME) -l 0 -m $(ACC) --chr 1 ; \
 	elif [ ! -f output_Chr1/$(NAME)_$(ACC)_negative_1.bed ]; then \
 	 	echo "Missing: output_Chr1/$(NAME)_$(ACC)_negative_1.bed" ; \
-		./pssm_scan --outdir output_Chr1 --genome Homo_sapiens.GRCh38.dna.primary_assembly.fasta -l 0 -m $(ACC) --chr 1 ; \
+		./pssm_scan --outdir output_Chr1 --genome $(GENOME) -l 0 -m $(ACC) --chr 1 ; \
 	fi
 
 # Generate the list of targets
@@ -51,10 +62,12 @@ BED_FILES := $(shell grep "^>" JASPAR2022_CORE_non-redundant_pfms_jaspar.txt | s
 echo:
 	echo $(BED_FILES)
 
-Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta: Homo_sapiens.GRCh38.dna.primary_assembly.fasta
+$(shell basename $(GENOME) .fasta )_top500000.fasta: $(GENOME)
 	head -n 500000 $< > Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta
-Homo_sapiens.GRCh38.dna.primary_assembly_bottom500000.fasta: Homo_sapiens.GRCh38.dna.primary_assembly.fasta
+$(shell basename $(GENOME) .fasta )_bottom500000.fasta: $(GENOME)
 	( echo ">44 nonsense" ; tail -n 500000 $< ) > Homo_sapiens.GRCh38.dna.primary_assembly_bottom500000.fasta
+
+genome_testdata: $(shell basename $(GENOME) .fasta )_bottom500000.fasta $(shell basename $(GENOME) .fasta )_top500000.fasta
 
 testGTF: gtf_file_region_retrieval
 	echo "TP73" |  ./gtf_file_region_retrieval
@@ -68,7 +81,7 @@ test: pssm_scan Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta Homo_sa
 	#./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_bottom500000.fasta -l -500 --verbose -o output_bottom --chr 44 --from 100000 --to 103000
 	#./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_bottom500000.fasta -l -500 --verbose -o output_bottom --from 100000 --to 103000
 
-.PHONY: test all depend output_Chr1
+.PHONY: test all depend output_Chr1 jaspar genome genomegz genome_testdata
 
 output_Chr1: $(addprefix output_Chr1/,$(BED_FILES))
 
