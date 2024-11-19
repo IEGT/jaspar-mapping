@@ -19,8 +19,8 @@
  */
 double PSSM::logOddsScore(const double& frequency, const double& background) {
     if (frequency == 0) {
-        //return -1e9;  // Prevent log(0) by returning a large negative score for unobserved nucleotides
-        return -log2(1024*16);  // assume one of the next upcoming tests would have found that residue to avoid -inf
+        return -1e9;  // Prevent log(0) by returning a large negative score for unobserved nucleotides
+        //return -log2(1024*16);  // assume one of the next upcoming tests would have found that residue to avoid -inf
     }
     return log2(frequency / background);  // Log-odds ratio
 }

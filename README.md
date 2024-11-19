@@ -3,7 +3,11 @@ The motivation behind this repository was to get some simple means to compare th
 Data provided by this script shall then be used augment data shown in IGV, so novel binding sites determined from the cut'n'run experiment can be distinguished from the expected established ones.
 
 To execute this program
- 1. Compile pssm_scan.cpp (on UNIX a mere `make pssm_scan` should suffice)
+ 1. Compile pssm_scan.cpp
+    - Install dependencies:
+      UNIX: sudo apt install libbz2-dev make
+    - Compile:
+      UNiX: make
  2. Download the exact same genome that your cut'n'run experiments were run against, like +
     `wget https://ftp.ensembl.org/pub/release-112/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz`
     and

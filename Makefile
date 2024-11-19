@@ -2,7 +2,7 @@
 CXX=g++
 CXXFLAGS=-std=c++23
 CXXFLAGS += -g
-LDFLAGS=-lm
+LDFLAGS=-lz -lbz2 -lm 
 
 SRCS=$(wildcard *.cpp)
 
@@ -12,7 +12,7 @@ GENOMEGZ=Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz
 
 .SUFFIXES: .cpp .o .fasta .fa.gz
 
-all: depend pssm_scan gtf_file_region_retrieval context
+all: pssm_scan gtf_file_region_retrieval context
 
 .cpp.o:
 	$(CXX) $(CXXFLAGS) -c $<
@@ -20,7 +20,7 @@ all: depend pssm_scan gtf_file_region_retrieval context
 context: context.o compressed_file_reader.o
 	$(CXX) $(CXXFLAGS) -o $@ $?  $(LDFLAGS)
 
-pssm_scan: pssm_scan.cpp progress.o pssm.o
+pssm_scan: pssm_scan.cpp progress.o pssm.o compressed_file_reader.o
 	$(CXX) $(CXXFLAGS) -o $@ $? $(LDFLAGS)
 
 gtf_file_region_retrieval: gtf_file_region_retrieval.cpp progress.o gtf_file_region.o
@@ -44,21 +44,25 @@ genomegz: $(GENOMEGZ)
 
 
 # Define the pattern rule for generating .bed files
-output_Chr1/%_negative_1.bed output_Chr1/%_positive_1.bed: ACC=$(word 1,$(subst _, ,$*))
-output_Chr1/%_negative_1.bed output_Chr1/%_positive_1.bed: NAME=$(word 2,$(subst _, ,$*))
-output_Chr1/%_negative_1.bed output_Chr1/%_positive_1.bed:
+output_Chr1/%_negative_1.bed.gz output_Chr1/%_positive_1.bed.gz: ACC=$(word 1,$(subst _, ,$*))
+output_Chr1/%_negative_1.bed.gz output_Chr1/%_positive_1.bed.gz: NAME=$(word 2,$(subst _, ,$*))
+output_Chr1/%_negative_1.bed.gz output_Chr1/%_positive_1.bed.gz:
 	@echo "NAME=$(NAME) ACC=$(ACC)"
-	@if [ ! -f output_Chr1/$(NAME)_$(ACC)_positive_1.bed ] ; then \
+	@if [ ! -f output_Chr1/$(NAME)_$(ACC)_positive_1.bed.gz ] ; then \
 	 	echo "Missing: output_Chr1/$(NAME)_$(ACC)_positive_1.bed" ; \
 		./pssm_scan --outdir output_Chr1 --genome $(GENOME) -l 0 -m $(ACC) --chr 1 ; \
-	elif [ ! -f output_Chr1/$(NAME)_$(ACC)_negative_1.bed ]; then \
-	 	echo "Missing: output_Chr1/$(NAME)_$(ACC)_negative_1.bed" ; \
+	fi
+	@if [ ! -f output_Chr1/$(NAME)_$(ACC)_negative_1.bed.gz ]; then \
+	 	echo "Missing: ort -k 1,1 -k2,2n" ; \
 		./pssm_scan --outdir output_Chr1 --genome $(GENOME) -l 0 -m $(ACC) --chr 1 ; \
 	fi
+	sort -k 1,1 -k2,2n output_Chr1/$(NAME)_$(ACC)_negative_1.bed output_Chr1/$(NAME)_$(ACC)_negative_1.bed | gzip -c > output_Chr1/$(NAME)_$(ACC)_bidirect_1.bed.gz
+	for i in output_Chr1/$(NAME)_$(ACC)_*_1.bed ]; do gzip $$i ; done
+
 
 # Generate the list of targets
 SHELL=bash
-BED_FILES := $(shell grep "^>" JASPAR2022_CORE_non-redundant_pfms_jaspar.txt | sed -e 's%[/:()]%-%g' | awk '{print $$1 "_" $$NF "_positive_1.bed"}' | sed -e 's/^>//')
+BED_FILES := $(shell grep "^>" JASPAR2022_CORE_non-redundant_pfms_jaspar.txt | sed -e 's%[/:()]%-%g' | awk '{print $$1 "_" $$NF "_positive_1.bed.gz"}' | sed -e 's/^>//')
 echo:
 	echo $(BED_FILES)
 
@@ -68,6 +72,8 @@ $(shell basename $(GENOME) .fasta )_bottom500000.fasta: $(GENOME)
 	( echo ">44 nonsense" ; tail -n 500000 $< ) > Homo_sapiens.GRCh38.dna.primary_assembly_bottom500000.fasta
 
 genome_testdata: $(shell basename $(GENOME) .fasta )_bottom500000.fasta $(shell basename $(GENOME) .fasta )_top500000.fasta
+genome_testdata_gz: genome_testdata
+	gzip -k $(shell basename $(GENOME) .fasta )_bottom500000.fasta $(shell basename $(GENOME) .fasta )_top500000.fasta
 
 testGTF: gtf_file_region_retrieval
 	echo "TP73" |  ./gtf_file_region_retrieval
@@ -81,14 +87,14 @@ test: pssm_scan Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta Homo_sa
 	#./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_bottom500000.fasta -l -500 --verbose -o output_bottom --chr 44 --from 100000 --to 103000
 	#./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_bottom500000.fasta -l -500 --verbose -o output_bottom --from 100000 --to 103000
 
-.PHONY: test all depend output_Chr1 jaspar genome genomegz genome_testdata
+.PHONY: test all output_Chr1 jaspar genome genomegz genome_testdata
 
 output_Chr1: $(addprefix output_Chr1/,$(BED_FILES))
 
-depend: .depend
+#depend: .depend
 
-.depend: $(SRCS)
-	rm -f "$@"
-	$(CC) $(CFLAGS) -MM $^ -MF "$@"
+#.depend: $(SRCS)
+#	rm -f "$@"
+#	$(CC) $(CFLAGS) -MM $^ -MF "$@"
 
-include .depend
+#include .depend

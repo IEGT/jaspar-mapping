@@ -11,6 +11,7 @@
 
 #include "progress.h"
 #include "pssm.h"
+#include "compressed_file_reader.h"
 
 typedef std::unordered_map<std::string, std::string>   genome_type;  //< Map of chromosome ID to sequence
 
@@ -53,7 +54,7 @@ std::vector<Region> Region::parseRegionsFile(const std::string& regionsFile) {
 
     std::string line;
     bool headerSkipped = false;
-    while (getline(inFile, line)) {
+    while (std::getline(inFile, line)) {
         line = PSSM::trim(line);
         if (line.empty()) continue;
 
@@ -217,6 +218,7 @@ int readFastaFile(const std::string& fastaFile, genome_type& genome) {
     if (! genome.empty() ) {
         std::cerr << "W: readFastaFile: genome passed is not empty." << std::endl;
     }
+    /*
     std::ifstream inFile(fastaFile);
 
     if (!inFile.is_open()) {
@@ -230,12 +232,16 @@ int readFastaFile(const std::string& fastaFile, genome_type& genome) {
         std::cerr << "E: Invalid file size for genome: " << genomeFileSize << std::endl;
         return -1;
     }
-
-
+*/
+    CompressedFileReader inFile(fastaFile);
+    std::cerr << "I: Determined file size for genome: ";
+    std::streampos genomeFileSize = inFile.getFileSize();
+    std::cerr << genomeFileSize << std::endl;
+    std::cerr << "I: Done" << std::endl;
     std::string line, sequence, currentChromosome;
     std::streamsize bytesRead = 0;
     size_t lineNo=0;
-    while (getline(inFile, line)) {
+    while (inFile.getline(line)) {
         line = PSSM::trim(line);
 
         if (line.empty()) continue;
@@ -263,7 +269,7 @@ int readFastaFile(const std::string& fastaFile, genome_type& genome) {
         bytesRead += line.size() + 1;  // +1 for the newline character
         // Calculate the progress as a float between 0 and 1
         // Display the progress bar
-        if (lineNo++ % 10000 == 0) {
+        if (lineNo++ % 20000 == 0) {
             float progress = static_cast<float>(bytesRead) / genomeFileSize;
             displayProgressBar(progress);
         }
@@ -275,7 +281,7 @@ int readFastaFile(const std::string& fastaFile, genome_type& genome) {
         genome[currentChromosome] = sequence;
     }
 
-    inFile.close();
+    //inFile.close();
     std::cout << std::endl;
     return 0;
 }
