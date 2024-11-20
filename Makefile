@@ -10,7 +10,7 @@ JASPAR=JASPAR2022_CORE_non-redundant_pfms_jaspar.txt
 GENOME=Homo_sapiens.GRCh38.dna.primary_assembly.fasta
 GENOMEGZ=Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz
 
-.SUFFIXES: .cpp .o .fasta .fa.gz
+.SUFFIXES: .cpp .o .fasta .fa.gz _positive_1.bed _positive_1.bed.gz _negative_1.bed _negative_1.bed.gz _bidirect_1.bed.gz
 
 all: pssm_scan gtf_file_region_retrieval context
 
@@ -42,29 +42,33 @@ $(GENOME): $(GENOMEGZ)
 genome: $(GENOME)
 genomegz: $(GENOMEGZ)
 
-
 # Define the pattern rule for generating .bed files
-output_Chr1/%_negative_1.bed.gz output_Chr1/%_positive_1.bed.gz: ACC=$(word 1,$(subst _, ,$*))
-output_Chr1/%_negative_1.bed.gz output_Chr1/%_positive_1.bed.gz: NAME=$(word 2,$(subst _, ,$*))
-output_Chr1/%_negative_1.bed.gz output_Chr1/%_positive_1.bed.gz:
+output_Chr1/%_negative_1.bed output_Chr1/%_positive_1.bed: NAME=$(word 1,$(subst _, ,$*))
+output_Chr1/%_negative_1.bed output_Chr1/%_positive_1.bed: ACC=$(word 2,$(subst _, ,$*))
+output_Chr1/%_negative_1.bed output_Chr1/%_positive_1.bed:
 	@echo "NAME=$(NAME) ACC=$(ACC)"
-	@if [ ! -f output_Chr1/$(NAME)_$(ACC)_positive_1.bed.gz ] ; then \
-	 	echo "Missing: output_Chr1/$(NAME)_$(ACC)_positive_1.bed" ; \
+	if [ ! -f output_Chr1/$(NAME)_$(ACC)_positive_1.bed ] ; then \
+	    echo "Missing: output_Chr1/$(NAME)_$(ACC)_positive_1.bed" ; \
+	    ./pssm_scan --outdir output_Chr1 --genome $(GENOME) -l 0 -m $(ACC) --chr 1 ; \
+	elif [ ! -f output_Chr1/$(NAME)_$(ACC)_negative_1.bed ]; then \
+	    echo "Missing: ort -k 1,1 -k2,2n" ; \
 		./pssm_scan --outdir output_Chr1 --genome $(GENOME) -l 0 -m $(ACC) --chr 1 ; \
 	fi
-	@if [ ! -f output_Chr1/$(NAME)_$(ACC)_negative_1.bed.gz ]; then \
-	 	echo "Missing: ort -k 1,1 -k2,2n" ; \
-		./pssm_scan --outdir output_Chr1 --genome $(GENOME) -l 0 -m $(ACC) --chr 1 ; \
-	fi
-	sort -k 1,1 -k2,2n output_Chr1/$(NAME)_$(ACC)_negative_1.bed output_Chr1/$(NAME)_$(ACC)_negative_1.bed | gzip -c > output_Chr1/$(NAME)_$(ACC)_bidirect_1.bed.gz
-	for i in output_Chr1/$(NAME)_$(ACC)_*_1.bed ]; do gzip $$i ; done
 
+%_bidirect_1.bed.gz: %_negative_1.bed.gz %_positive_1.bed.gz
+	sort -k 1,1 -k2,2n $?  | gzip -c > $@
+
+%.bed.gz: %.bed
+	gzip $<
 
 # Generate the list of targets
 SHELL=bash
-BED_FILES := $(shell grep "^>" JASPAR2022_CORE_non-redundant_pfms_jaspar.txt | sed -e 's%[/:()]%-%g' | awk '{print $$1 "_" $$NF "_positive_1.bed.gz"}' | sed -e 's/^>//')
-echo:
+BED_FILES := $(shell grep "^>" JASPAR2022_CORE_non-redundant_pfms_jaspar.txt | sed -e 's%[/:()]%-%g' | awk '{print $$NF "_" $$1 "_positive_1.bed.gz"}' | sed -e 's/[>]//')
+BIDIRECT_FILES := $(shell grep "^>" JASPAR2022_CORE_non-redundant_pfms_jaspar.txt | sed -e 's%[/:()]%-%g' | awk '{print $$NF "_" $$1 "_bidirect_1.bed.gz"}' | sed -e 's/[>]//')
+echo_bed:
 	echo $(BED_FILES)
+echo_bidirect:
+	echo $(BIDIRECT_FILES)
 
 $(shell basename $(GENOME) .fasta )_top500000.fasta: $(GENOME)
 	head -n 500000 $< > Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta
@@ -89,7 +93,8 @@ test: pssm_scan Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta Homo_sa
 
 .PHONY: test all output_Chr1 jaspar genome genomegz genome_testdata
 
-output_Chr1: $(addprefix output_Chr1/,$(BED_FILES))
+#output_Chr1: $(addprefix output_Chr1/,$(BED_FILES))
+output_Chr1: $(addprefix output_Chr1/,$(BIDIRECT_FILES))
 
 #depend: .depend
 
