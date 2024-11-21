@@ -16,7 +16,7 @@
 typedef std::unordered_map<std::string, std::string>   genome_type;  //< Map of chromosome ID to sequence
 
 int beVerbose = 0;
-int showDebug = 1;
+int showDebug = 0;
 
 // global variable to control verbosity
 std::unordered_map<char, const double> backgroundFrequencies = {
