@@ -145,9 +145,12 @@ std::string reverseComplement(const std::string& sequence) {
 int scanSequence(const std::string& chromosome, const std::string& sequence, const std::string& strand, const PSSM& pssm,
                  std::ofstream& outFile, const bool skipN, const float& threshold, const long& from, const long& to, const bool& showHeader, const bool& showSequence) {
     //size_t motifLength = pssm.begin()->second.size();
-    size_t motifLength = pssm.motifLength;
-    size_t sequenceLength = sequence.size();
-    size_t reportInterval = sequenceLength / 100;  // Update progress every 1%
+    const size_t motifLength = pssm.motifLength;
+    const size_t sequenceLength = sequence.size();
+    const size_t reportInterval = sequenceLength / 1000;  // Update progress every 0.1%
+
+    std::cerr << "D: Sequence length=" << sequenceLength << ". report inverval=" << reportInterval << std::endl;
+
 
     if (showHeader) {
         outFile << "Chromosome\tFrom\tTo\tName\tScore\tStrand";
@@ -180,10 +183,10 @@ int scanSequence(const std::string& chromosome, const std::string& sequence, con
         const double score = calculateScore(window, pssm.pssm, skipN);
         // Skip output if the window contained 'N' or invalid nucleotides
         // std::cerr << "D: Score: " << score << std::endl;
-        if (score == -1e9) {
+        if (score < threshold) {
             continue;
         }
-        if (score < threshold) {
+        if (score < -1e8) {
             continue;
         }
         outFile << chromosome << "\t" << (i+1) << "\t" << (i+1 + motifLength) << "\t" << pssm.motifName << "\t" << std::fixed << std::setprecision(3) << score << "\t" << strand;
@@ -194,7 +197,7 @@ int scanSequence(const std::string& chromosome, const std::string& sequence, con
 
         // Progress indicator
         if (i % reportInterval == 0) {
-            double progress = ((double) i) / sequenceLength;
+            const double progress = (double) i / sequenceLength;
             //auto now = std::chrono::high_resolution_clock::now();
             //auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start).count();
             //std::cout << "Progress: " << std::fixed << std::setprecision(2) << progress * 100 << "% - Elapsed time: " << elapsed << " seconds\n";
