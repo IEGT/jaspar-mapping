@@ -15,13 +15,13 @@
  */
 void displayProgressBar(const float& progress) {
     int barWidth = 75;  // Width of the progress bar
-    std::cout << "[";
+    std::cerr << "[";
     int pos = barWidth * progress;
     for (int i = 0; i < barWidth; ++i) {
-        if (i < pos) std::cout << "=";
-        else if (i == pos) std::cout << ">";
-        else std::cout << " ";
+        if (i < pos) std::cerr << "=";
+        else if (i == pos) std::cerr << ">";
+        else std::cerr << " ";
     }
-    std::cout << "] " << std::fixed << std::setprecision(3) << progress * 100.0 << " %\r";
-    std::cout.flush();
+    std::cerr << "] " << std::fixed << std::setprecision(3) << progress * 100.0 << " %\r";
+    std::cerr.flush();
 }

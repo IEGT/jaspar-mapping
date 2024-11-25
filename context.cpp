@@ -8,7 +8,13 @@
 #include <limits>
 #include <cmath>
 
-// Function to get the basename of a file path
+#include "compressed_file_reader.h"
+
+/** \brief Function to get the basename of a file path
+ * Should work on both Windows and Unix paths - crudely though
+ * @param filePath - path to file
+ * @return basename of the file
+ */
 std::string basename(const std::string& filePath) {
     const size_t lastSlash = filePath.find_last_of("/\\");
     if (lastSlash == std::string::npos) {
@@ -63,20 +69,17 @@ bool parseBedLine(const std::string& line, BedEntry& entry, const bool hasName=f
  */
 void processBedFiles(const std::string& mainBedFile,
                      const std::vector<std::string>& otherBedFiles, const bool hasName=false) {
-    std::ifstream mainFile(mainBedFile);
-    if (!mainFile.is_open()) {
+    //std::ifstream mainFile(mainBedFile);
+    CompressedFileReader mainFile(mainBedFile);
+    /*if (!mainFile.is_open()) {
         std::cerr << "Error opening main .bed file: " << mainBedFile << std::endl;
         return;
-    }
+    }*/
 
     /** open all other .bed files and add to otherFiles vector */
-    std::vector<std::ifstream> otherFiles;
+    std::vector<std::unique_ptr<CompressedFileReader>> otherFiles;
     for (const auto& file : otherBedFiles) {
-        otherFiles.emplace_back(file);
-        if (!otherFiles.back().is_open()) {
-            std::cerr << "Error opening .bed file: " << file << std::endl;
-            return;
-        }
+        otherFiles.emplace_back(std::make_unique<CompressedFileReader>(file,true));
     }
 
     /** Create all the queues that buffer the lines in the .bed files. */
@@ -89,7 +92,7 @@ void processBedFiles(const std::string& mainBedFile,
     /** Iterate over all lines in the main .bed file and annotate it. */
     std::string line;
     size_t lineCount = 0;
-    while (std::getline(mainFile, line)) {
+    while (mainFile.getline(line)) {
 
         lineCount++;
         bool readingHeader=0;
@@ -109,12 +112,22 @@ void processBedFiles(const std::string& mainBedFile,
             continue;
         }
 
+        if (readingHeader) {
+            // continue header line for other files - even though those files have not yet been read
+            for (size_t i = 1; i < otherFiles.size(); ++i) {
+                std::cout << "\t" << shortName[i]<<".Shift" << "\t" << shortName[i]<<".Score" << shortName[i]<<".Strand.Equal";
+            }
+            std::cout << std::endl;;
+            continue; // need valid mainEntry for the rest of the loop
+        }
+        
         /** Store the best annotation for each other file, see header of other files for details. */
-        std::vector<std::tuple<int, double, bool>> annotations(otherFiles.size(),
-                        std::make_tuple(std::numeric_limits<int>::max(), -std::numeric_limits<double>::max(), 0));
+        std::vector<std::tuple<int, double, bool, int>> annotations(otherFiles.size(),
+                    std::make_tuple(std::numeric_limits<int>::max(), -std::numeric_limits<double>::max(), 0, 0));
         std::vector<std::size_t> otherLineCount(otherFiles.size(), 0);
+        std::vector<std::size_t> atEndOfFile(otherFiles.size(), 0);
 
-        std::cerr << "Processing line " << lineCount << " : ";
+        //std::cerr << "Processing line " << lineCount << " : ";
 
         for (size_t i = 0; i < otherFiles.size(); ++i) {
             std::cerr << ".";
@@ -127,18 +140,17 @@ void processBedFiles(const std::string& mainBedFile,
             }
 
             /** Ensure that all queue elements within the 100 bp limit are added to queue. */
-            while (true) {
-                if (!std::getline(otherFiles[i], line)) break;
-                otherLineCount[i]++;
+            while (!atEndOfFile[i]) {
+                if (!otherFiles[i]->getline(line)) {
+                    //std::cerr << "End of file reached for " << otherBedFiles[i] << std::endl;
+                    atEndOfFile[i] = 1;
+                    break;
+                }
+                otherLineCount[i]++; // starting from 1
 
                 if (line.starts_with('#')) continue;
                 if (line.starts_with("Chr")) {
-                    if (!readingHeader) {
-                        std::cerr << "Other file '" << otherBedFiles[i] << "': reading header when expecting a regular line." << std::endl;
-                        abort();
-                    }
-                    std::cout << "\t" << shortName[i]<<".Shift" << "\t" << shortName[i]<<".Score" << shortName[i]<<".Strand.Equal";
-                    continue;
+                    continue; // skip header - may appear also at end after merge of bed files
                 }
 
                 BedEntry otherEntry("", 0, 0, "", 0.0, '.', line, true);
@@ -146,41 +158,52 @@ void processBedFiles(const std::string& mainBedFile,
                     std::cerr << "Other file '" << otherBedFiles[i] << "': Error parsing line '" << otherLineCount[i] << "' in .bed file: " << line << std::endl;
                     continue;
                 }
+                std::cerr << "D: Other entry (" << otherBedFiles[i] << ":" << otherLineCount[i] << "): " << otherEntry.chrom << ":" << otherEntry.start << "-" << otherEntry.end << std::endl;
 
-                if (    otherEntry.chrom > mainEntry.chrom
-                    || (otherEntry.chrom == mainEntry.chrom && otherEntry.start > mainEntry.end + 100)) {
-                    // Unread the line if it's too far downstream or on the next chromosome
-                    const std::streampos prevPos = otherFiles[i].tellg();
-                    if (!std::getline(otherFiles[i], line)) break;
-                    BedEntry otherEntry("", 0, 0, "", 0.0, '.', line, true);
-                    if (!parseBedLine(line, otherEntry, true)) {
-                        std::cerr << "Error parsing line in .bed file: " << line << std::endl;
-                        continue;
-                    }
 
-                    if (    otherEntry.chrom > mainEntry.chrom
-                        || (otherEntry.chrom == mainEntry.chrom && otherEntry.start > mainEntry.end + 100)) {
-                        otherFiles[i].seekg(prevPos);
-                        break;
-                    }
-
-                    if (    otherEntry.chrom < mainEntry.chrom
-                        || (otherEntry.chrom == mainEntry.chrom && otherEntry.end < mainEntry.start - 100)) {
-                        // Discard the entry if it's too far upstream or on the previous chromosome
-                        continue;
-                    }
+                // proceeding to next line of putative interest
+                if (otherEntry.chrom < mainEntry.chrom) {
+                    // need to read more lines to reach chrom of mainEntry
+                    continue;
                 }
 
+                if (otherEntry.chrom > mainEntry.chrom) {
+                    // Unread the line if it's too far downstream or on the next chromosome
+                    otherFiles[i]->unread(line);
+                    break;
+                }
+
+                if ( otherEntry.chrom != mainEntry.chrom ) {
+                    std::cerr << "E: Logic error: otherEntry.chrom != mainEntry.chrom" << std::endl;
+                    abort();
+                }
+
+                // need to read more lines to reach 100 bp upstream
+                if ( otherEntry.start < mainEntry.start - 100 ) {
+                    continue; // skip this line, read next
+                }
+
+                if (otherEntry.end > mainEntry.end + 100) {
+                    // Unread the line if it's too far downstream or on the samechromosome
+                    otherFiles[i]->unread(line);
+                    break;
+                }
+
+                // This is a valid entry to be considered
                 queues[i].push(otherEntry);
+
+                std::cerr << "D: Added to queue " << i << ": now with size " << queues[i].size() << std::endl;
+
             } // while true
 
             /** Find the best annotation within the 100 bp limit. */
             std::queue<BedEntry> tempQueue = queues[i];
+            size_t queueSize = tempQueue.size();
             while (!tempQueue.empty()) {
                 const auto& entry = tempQueue.front();
                 if (entry.chrom == mainEntry.chrom && std::abs(entry.start - mainEntry.start) <= 100) {
                     if (entry.score > std::get<1>(annotations[i])) {
-                        annotations[i] = std::make_tuple(entry.start - mainEntry.start, entry.score, entry.strand == mainEntry.strand );
+                        annotations[i] = std::make_tuple(entry.start - mainEntry.start, entry.score, entry.strand == mainEntry.strand, queueSize);
                     }
                 }
                 tempQueue.pop();
@@ -188,15 +211,10 @@ void processBedFiles(const std::string& mainBedFile,
         } // for each other file
         std::cerr << std::endl; // end of line processing
 
-        if (readingHeader) {
-            std::cout << std::endl;
-            continue;
-        }
-
         /** Write to stdout, first the complete line of the main .bed, then the extra columns for the other .bed files */
         std::cout << mainEntry.line;
         for (const auto& annotation : annotations) {
-            std::cout << "\t" << std::get<0>(annotation) << "\t" << std::get<1>(annotation) << "\t" << std::get<2>(annotation);
+            std::cout << "\t" << std::get<0>(annotation) << "\t" << std::get<1>(annotation) << "\t" << std::get<2>(annotation) << "\t" << std::get<3>(annotation);
         }
         std::cout << std::endl;
     }

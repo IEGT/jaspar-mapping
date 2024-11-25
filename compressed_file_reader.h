@@ -10,23 +10,10 @@ class CompressedFileReader {
 public:
     enum FileType { PLAIN, GZIP, BZIP2 };
 
-    explicit CompressedFileReader(const std::string& filename)
-        : CompressedFileReader(filename, determineFileType(filename)) {}
+    explicit CompressedFileReader(const std::string& filename, const int verbose=true)
+        : CompressedFileReader(filename, determineFileType(filename), verbose) {}
 
-private:
-    static FileType determineFileType(const std::string& filename) {
-        if (filename.size() >= 3 && filename.compare(filename.size() - 3, 3, ".gz") == 0) {
-            return GZIP;
-        } else if (filename.size() >= 4 && filename.compare(filename.size() - 4, 4, ".bz2") == 0) {
-            return BZIP2;
-        } else {
-            return PLAIN;
-        }
-    }
-
-public:
-
-    explicit CompressedFileReader(const std::string& filename, FileType type)
+    explicit CompressedFileReader(const std::string& filename, FileType type, const int verbose=true)
         : type_(type), file_(nullptr), unread_line_(std::nullopt) {
         if (type == GZIP) {
             gz_file_ = gzopen(filename.c_str(), "rb");
@@ -38,9 +25,28 @@ public:
             file_ = std::make_unique<std::ifstream>(filename);
             if (!file_->is_open()) throw std::runtime_error("Failed to open file: " + filename);
         }
+        if (verbose) std::cerr << "I: Opened " << filename << std::endl;
     }
 
-/** Fixme: not implemented for bzip2 */
+    // Delete copy constructor and copy assignment operator
+    CompressedFileReader(const CompressedFileReader&) = delete;
+    CompressedFileReader& operator=(const CompressedFileReader&) = delete;
+
+    // Implement move assignment operator
+    CompressedFileReader& operator=(CompressedFileReader&& other) noexcept {
+        if (this != &other) {
+            file_ = std::move(other.file_);
+            type_ = std::move(other.type_);
+            gz_file_ = std::move(other.gz_file_);
+            bz_file_ = std::move(other.bz_file_);
+            unread_line_ = std::move(other.unread_line_);
+        }
+        return *this;
+    }
+
+    static CompressedFileReader::FileType determineFileType(const std::string& filename);
+
+    /** Fixme: not implemented for bzip2 */
     std::streampos getFileSize() const {
         if (type_ == PLAIN && file_) {
             std::streampos current_pos = file_->tellg();
@@ -62,12 +68,12 @@ public:
             std::streampos size = BZ2_bztell(bz_file_);
             BZ2_bzrewind(bz_file_);
             return size;*/
-            return 1;
+            return -1;
         }
         return -1;
     }
 
-/** Fixme: not implemented for bzip2 */
+    /** Fixme: not implemented for bzip2 */
     std::streampos getBytesRead() const {
         if (type_ == PLAIN && file_) {
             return file_->tellg();
@@ -75,7 +81,7 @@ public:
             return gztell(gz_file_);
         } else if (type_ == BZIP2 && bz_file_) {
             //return BZ2_bztell(bz_file_);
-            return 1;
+            return -1;
         }
         return -1;
     }
@@ -86,8 +92,10 @@ public:
         else if (file_) file_->close();
     }
 
+    /** Read a line from the file, return false if EOF */
     bool getline(std::string& line);
 
+    /** Unread a line, to be read again on the next getline call */
     void unread(const std::string& line);
 
 private:
