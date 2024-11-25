@@ -10,7 +10,7 @@ JASPAR=JASPAR2022_CORE_non-redundant_pfms_jaspar.txt
 GENOME=Homo_sapiens.GRCh38.dna.primary_assembly.fasta
 GENOMEGZ=Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz
 
-.SUFFIXES: .cpp .o .fasta .fa.gz _positive_1.bed _positive_1.bed.gz _negative_1.bed _negative_1.bed.gz _bidirect_1.bed.gz
+.SUFFIXES: .gz .bed.gz .cpp .o .fasta .fa.gz _positive_1.bed _positive_1.bed.gz _negative_1.bed _negative_1.bed.gz _bidirect_1.bed.gz
 
 all: pssm_scan gtf_file_region_retrieval context
 
