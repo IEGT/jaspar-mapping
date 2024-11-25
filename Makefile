@@ -18,13 +18,13 @@ all: pssm_scan gtf_file_region_retrieval context
 	$(CXX) $(CXXFLAGS) -c $<
 
 context: context.o compressed_file_reader.o
-	$(CXX) $(CXXFLAGS) -o $@ $?  $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) -o $@ $^  $(LDFLAGS)
 
 pssm_scan: pssm_scan.cpp progress.o pssm.o compressed_file_reader.o
-	$(CXX) $(CXXFLAGS) -o $@ $? $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 gtf_file_region_retrieval: gtf_file_region_retrieval.cpp progress.o gtf_file_region.o
-	$(CXX) $(CXXFLAGS) -o $@ $? $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 clean:
 	$(RM) gtf_file_region_retrieval pssm_scan
@@ -56,7 +56,7 @@ output_Chr1/%_negative_1.bed output_Chr1/%_positive_1.bed:
 	fi
 
 %_bidirect_1.bed.gz: %_negative_1.bed.gz %_positive_1.bed.gz
-	sort -k 1,1 -k2,2n $?  | gzip -c > $@
+	zcat $^ | sort -k 1,1 -k2,2n | gzip -c > $@
 
 %.bed.gz: %.bed
 	gzip $<
