@@ -120,7 +120,7 @@ void processBedFiles(const std::string& mainBedFile,
             std::cout << std::endl;;
             continue; // need valid mainEntry for the rest of the loop
         }
-        
+
         /** Store the best annotation for each other file, see header of other files for details. */
         std::vector<std::tuple<int, double, bool, int>> annotations(otherFiles.size(),
                     std::make_tuple(std::numeric_limits<int>::max(), -std::numeric_limits<double>::max(), 0, 0));
@@ -197,16 +197,22 @@ void processBedFiles(const std::string& mainBedFile,
             } // while true
 
             /** Find the best annotation within the 100 bp limit. */
-            std::queue<BedEntry> tempQueue = queues[i];
-            size_t queueSize = tempQueue.size();
-            while (!tempQueue.empty()) {
-                const auto& entry = tempQueue.front();
-                if (entry.chrom == mainEntry.chrom && std::abs(entry.start - mainEntry.start) <= 100) {
-                    if (entry.score > std::get<1>(annotations[i])) {
-                        annotations[i] = std::make_tuple(entry.start - mainEntry.start, entry.score, entry.strand == mainEntry.strand, queueSize);
+            if (queues[i].empty()) {
+                //std::cerr << "No entries in queue " << i << std::endl;
+                annotations[i] = std::make_tuple(-100000, -1, ".", 0);
+            }
+            else {
+                std::queue<BedEntry> tempQueue = queues[i];
+                size_t queueSize = tempQueue.size();
+                while (!tempQueue.empty()) {
+                    const auto& entry = tempQueue.front();
+                    if (entry.chrom == mainEntry.chrom && std::abs(entry.start - mainEntry.start) <= 100) {
+                        if (entry.score > std::get<1>(annotations[i])) {
+                            annotations[i] = std::make_tuple(entry.start - mainEntry.start, entry.score, entry.strand == mainEntry.strand, queueSize);
+                        }
                     }
+                    tempQueue.pop();
                 }
-                tempQueue.pop();
             }
         } // for each other file
         std::cerr << std::endl; // end of line processing
@@ -214,7 +220,12 @@ void processBedFiles(const std::string& mainBedFile,
         /** Write to stdout, first the complete line of the main .bed, then the extra columns for the other .bed files */
         std::cout << mainEntry.line;
         for (const auto& annotation : annotations) {
-            std::cout << "\t" << std::get<0>(annotation) << "\t" << std::get<1>(annotation) << "\t" << std::get<2>(annotation) << "\t" << std::get<3>(annotation);
+            if (0 == get<3>(annotation)) {
+                std::cout << "\t" << "NA" << "\t" << "NA" << "\t" << "NA" << "\t" << std::get<3>(annotation);
+            }
+            else {
+                std::cout << "\t" << std::get<0>(annotation) << "\t" << std::get<1>(annotation) << "\t" << std::get<2>(annotation) << "\t" << std::get<3>(annotation);
+            }
         }
         std::cout << std::endl;
     }
