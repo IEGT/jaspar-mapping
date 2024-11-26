@@ -10,6 +10,8 @@
 
 #include "compressed_file_reader.h"
 
+int debug=0;
+
 /** \brief Function to get the basename of a file path
  * Should work on both Windows and Unix paths - crudely though
  * @param filePath - path to file
@@ -86,7 +88,21 @@ void processBedFiles(const std::string& mainBedFile,
     std::vector<std::queue<BedEntry>> queues(otherFiles.size());
     std::vector<std::string> shortName(otherFiles.size());
     for (size_t i = 0; i < shortName.size(); ++i) {
-        shortName[i] = basename(otherBedFiles[i]);
+        std::string base = basename(otherBedFiles[i]);
+        size_t pos = base.find('_');
+        if (pos != std::string::npos) {
+            pos = base.find('_', pos + 1);
+            if (pos != std::string::npos) {
+                //std::cerr << "A" << std::endl;
+                shortName[i] = base.substr(0, pos);
+            } else {
+                //std::cerr << "B" << std::endl;
+                shortName[i] = base;
+            }
+        } else {
+            //std::cerr << "C" << std::endl;
+            shortName[i] = base;
+        }
     }
 
     /** Iterate over all lines in the main .bed file and annotate it. */
@@ -102,6 +118,7 @@ void processBedFiles(const std::string& mainBedFile,
 
         if (line.starts_with('#')) continue;
         if (line.starts_with("Chr")) {
+            std::cerr << "D: Reading header line for main file" << std::endl;
             std::cout << line;
             readingHeader=1;
         }
@@ -113,9 +130,12 @@ void processBedFiles(const std::string& mainBedFile,
         }
 
         if (readingHeader) {
+            std::cerr << "D: Header line to represent each other file's annotation" << std::endl;
             // continue header line for other files - even though those files have not yet been read
-            for (size_t i = 1; i < otherFiles.size(); ++i) {
-                std::cout << "\t" << shortName[i]<<".Shift" << "\t" << shortName[i]<<".Score" << shortName[i]<<".Strand.Equal";
+            for (size_t i = 0; i < otherFiles.size(); ++i) {
+                std::cerr << "   - " << shortName[i] << std::endl;
+                std::cout << "\t" << shortName[i]<<"_Shift" << "\t" << shortName[i]<<"_Score"
+                          << "\t" << shortName[i]<<"_StrandEqual" << "\t" << shortName[i]<<"_NumInWindow";
             }
             std::cout << std::endl;;
             continue; // need valid mainEntry for the rest of the loop
@@ -130,7 +150,7 @@ void processBedFiles(const std::string& mainBedFile,
         //std::cerr << "Processing line " << lineCount << " : ";
 
         for (size_t i = 0; i < otherFiles.size(); ++i) {
-            std::cerr << ".";
+            if (debug) std::cerr << ".";
 
             /** Ensure that all queue elements beyond the 100 bp limit are removed from queue. */
             while (!queues[i].empty()
@@ -158,7 +178,7 @@ void processBedFiles(const std::string& mainBedFile,
                     std::cerr << "Other file '" << otherBedFiles[i] << "': Error parsing line '" << otherLineCount[i] << "' in .bed file: " << line << std::endl;
                     continue;
                 }
-                std::cerr << "D: Other entry (" << otherBedFiles[i] << ":" << otherLineCount[i] << "): " << otherEntry.chrom << ":" << otherEntry.start << "-" << otherEntry.end << std::endl;
+                if (debug) std::cerr << "D: Other entry (" << otherBedFiles[i] << ":" << otherLineCount[i] << "): " << otherEntry.chrom << ":" << otherEntry.start << "-" << otherEntry.end << std::endl;
 
 
                 // proceeding to next line of putative interest
@@ -192,7 +212,7 @@ void processBedFiles(const std::string& mainBedFile,
                 // This is a valid entry to be considered
                 queues[i].push(otherEntry);
 
-                std::cerr << "D: Added to queue " << i << ": now with size " << queues[i].size() << std::endl;
+                if (debug) std::cerr << "D: Added to queue " << i << ": now with size " << queues[i].size() << std::endl;
 
             } // while true
 
@@ -215,7 +235,7 @@ void processBedFiles(const std::string& mainBedFile,
                 }
             }
         } // for each other file
-        std::cerr << std::endl; // end of line processing
+        //if (debug) std::cerr << std::endl; // end of line processing
 
         /** Write to stdout, first the complete line of the main .bed, then the extra columns for the other .bed files */
         std::cout << mainEntry.line;

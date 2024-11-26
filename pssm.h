@@ -103,6 +103,8 @@ class PSSM {
 
             return os;
         }
+
+    static int debug;
 };
 
 typedef std::unordered_map<std::string, PSSM> pssm_list_type;

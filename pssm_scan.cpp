@@ -147,7 +147,7 @@ int scanSequence(const std::string& chromosome, const std::string& sequence, con
     //size_t motifLength = pssm.begin()->second.size();
     const size_t motifLength = pssm.motifLength;
     const size_t sequenceLength = sequence.size();
-    const size_t reportInterval = sequenceLength / 1000;  // Update progress every 0.1%
+    const size_t reportInterval = sequenceLength / 100 / 10;  // Update progress every 0.1%
 
     std::cerr << "D: Sequence length=" << sequenceLength << ". report inverval=" << reportInterval << std::endl;
 
@@ -178,31 +178,37 @@ int scanSequence(const std::string& chromosome, const std::string& sequence, con
     if (beVerbose) {
         std::cerr << "I: Scanning chromosome " << chromosome << " for motif " << pssm.motifName << " from " << posStart << " to " << posEnd << " - " << motifLength << std::endl;
     }
+    
+    displayProgressBar(0.0);
     for (size_t i = posStart; i <= posEnd - motifLength; ++i) {
         const std::string window = sequence.substr(i, motifLength);
         const double score = calculateScore(window, pssm.pssm, skipN);
         // Skip output if the window contained 'N' or invalid nucleotides
         // std::cerr << "D: Score: " << score << std::endl;
+
+        // Progress indicator
+        if (i % reportInterval == 0) {
+            const double progress = (double) ( i - posStart) / (posEnd - motifLength - posStart);
+            //auto now = std::chrono::high_resolution_clock::now();
+            //auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start).count();
+            //std::cout << "Progress: " << std::fixed << std::setprecision(2) << progress * 100 << "% - Elapsed time: " << elapsed << " seconds\n";
+            displayProgressBar(progress);
+        }
+
         if (score < threshold) {
             continue;
         }
         if (score < -1e8) {
             continue;
         }
-        outFile << chromosome << "\t" << (i+1) << "\t" << (i+1 + motifLength) << "\t" << pssm.motifName << "\t" << std::fixed << std::setprecision(3) << score << "\t" << strand;
+
+        outFile << chromosome << "\t" << (i+1) << "\t" << (i+1 + motifLength) << "\t" << pssm.motifName
+                              << "\t" << std::fixed << std::setprecision(3) << score << "\t" << strand;
         if (showSequence) {
             outFile << "\t" << window;
         }
         outFile << std::endl;
 
-        // Progress indicator
-        if (i % reportInterval == 0) {
-            const double progress = (double) i / sequenceLength;
-            //auto now = std::chrono::high_resolution_clock::now();
-            //auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start).count();
-            //std::cout << "Progress: " << std::fixed << std::setprecision(2) << progress * 100 << "% - Elapsed time: " << elapsed << " seconds\n";
-            displayProgressBar(progress);
-        }
     }
     return 0;
 }

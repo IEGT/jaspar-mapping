@@ -143,10 +143,10 @@ void PSSM::normalizePSSM(const std::unordered_map<char, const double>& backgroun
 		const auto background = backgroundFrequencies.at(nucleotide);
 
 		//int i = 0;
-		std::cerr << "Counts.size= " << counts.size() << std::endl;
+		if (debug) std::cerr << "D: Counts.size= " << counts.size() << std::endl;
 		//for (unsigned int i=0; auto& count : counts) {
 		for (unsigned int i=0; i < counts.size(); i++) {
-			std::cerr << "D: i=" << i << std::endl;
+			if (debug) std::cerr << "D: i=" << i << std::endl;
 			if (0 == this->colsums[i]) {
 				//count = 0;
 				counts[i] = 0;
@@ -158,9 +158,14 @@ void PSSM::normalizePSSM(const std::unordered_map<char, const double>& backgroun
 				//count = -1e9;
 				continue;
 			}
-			std::cerr << "I: Normalization of " << counts[i] << " counts at position " << i << " with column sum " << this->colsums[i] << " to ";
+			if (PSSM::debug) std::cerr << "I: Normalization of " << counts[i] << " counts at position " << i << " with column sum " << this->colsums[i] << " to ";
 			counts[i] = PSSM::logOddsScore(counts[i]/this->colsums[i], background);
-			std::cerr << counts[i] << std::endl;
+			if (PSSM::debug) std::cerr << counts[i] << std::endl;
 		}
 	}
 }
+
+/** \brief debug flag
+ * set to value > 0 to enable debug output
+ */
+int PSSM::debug = 0;
