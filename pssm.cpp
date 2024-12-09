@@ -17,12 +17,32 @@
 
 /** \brief Function to calculate log-odds score for a given nucleotide at a position
  */
-double PSSM::logOddsScore(const double& frequency, const double& background) {
+double PSSM::logRelativeRisk(const double& frequency, const double& background) {
     if (frequency == 0) {
         return -1e9;  // Prevent log(0) by returning a large negative score for unobserved nucleotides
         //return -log2(1024*16);  // assume one of the next upcoming tests would have found that residue to avoid -inf
     }
     return log2(frequency / background);  // Log-odds ratio
+}
+
+double PSSM::logOddsRatioACGT(const double& frequency, const double& colsum) {
+
+    static double backgroundRatio = log2(3);
+
+    if (frequency == 0.0) {
+        // not expected to happen because of numbers "smoothed" by 1 added to all counts
+        return -1e9;  // Prevent log(0) by returning a large negative score for unobserved nucleotides
+    }
+    double remainer = colsum-frequency;
+    if (remainer<0.0) {
+        std::cerr << "E: PSSM::logOddsRatioACGT: remainer<0.0 for frequency " << frequency << " and colsum " << colsum << std::endl;
+        exit(-1);
+    }
+    if (remainer == 0.0) {
+        // not expected to happen because of numbers "smoothed" by 1 added to all counts
+        return +1e9;  // Prevent frequency/0 division by returning a large negative score for unobserved nucleotides
+    }
+    return log2(frequency / remainer) - backgroundRatio;  // Log-odds ratio, assuming equal distribution as background
 }
 
 /** \brief Function to trim whitespace from strings
@@ -153,13 +173,16 @@ void PSSM::normalizePSSM(const std::unordered_map<char, const double>& backgroun
 				std::cerr << "W: Unexpected - column " << i << " has no scores assigned." << std::endl;
 				continue;
 			}
+/*
 			if (0.0 == counts[i]) { // an unobserved nucleotide
 				counts[i] = -2;
 				//count = -1e9;
 				continue;
 			}
+*/
 			if (PSSM::debug) std::cerr << "I: Normalization of " << counts[i] << " counts at position " << i << " with column sum " << this->colsums[i] << " to ";
-			counts[i] = PSSM::logOddsScore(counts[i]/this->colsums[i], background);
+            // log odds ratio, smoothed by avoiding complete coverage
+			counts[i] = PSSM::logOddsRatioACGT(counts[i]+1, this->colsums[i]+4);
 			if (PSSM::debug) std::cerr << counts[i] << std::endl;
 		}
 	}

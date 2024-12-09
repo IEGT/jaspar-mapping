@@ -74,7 +74,15 @@ class PSSM {
 
         static int parsePSSMFile(const std::string& pssmFile, std::unordered_map<std::string, PSSM>& pssm_list, const std::string& targetMotifID, const int& beVerbose=0);
         static std::string trim(const std::string& str);
-        static inline double logOddsScore(const double& frequency, const double& background);
+        /**
+         * @brief returns log(frequency/background)
+         */
+        static inline double logRelativeRisk(const double& frequency, const double& background);
+        /**
+         * @brief returns log(count/(colsum-count) minus log(background/(1-background))
+         * Background is presume to always be at 0.25, ignoring variations in the GC content. 
+         */
+        static inline double logOddsRatioACGT(const double& count, const double& colsum);
 
         // Normalize the PSSM by converting counts to log-odds scores
         void normalizePSSM(const std::unordered_map<char, const double>& backgroundFrequencies);
