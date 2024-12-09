@@ -33,8 +33,8 @@ $(JASPAR):
 	wget https://jaspar2022.genereg.net/download/data/2022/CORE/JASPAR2022_CORE_non-redundant_pfms_jaspar.txt
 jaspar: $(JASPAR)
 
-Homo_sapiens.GRCh38.dna.primary_assembly.fasta.gz:
-	wget https://ftp.ensembl.org/pub/release-113/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz
+$(GENOMEGZ):
+	wget https://ftp.ensembl.org/pub/release-113/fasta/homo_sapiens/dna/$(GENOMEGZ)
 
 $(GENOME): $(GENOMEGZ)
 	gunzip -c $< > $@
@@ -84,14 +84,15 @@ testGTF: gtf_file_region_retrieval
 
 test: pssm_scan Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta Homo_sapiens.GRCh38.dna.primary_assembly_bottom500000.fasta
 	#./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta -l -5400 --verbose -m MA0861.1 --chr 1 --from 100000 --to 103000 --help
-	./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta -l 0 --verbose -m MA0861.1 --chr 1 --from 100000 --to 103000
-	./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta -l -500 --verbose -m MA0861.1 --chr 1 --from 100000 --to 103000
+	./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta -l 0 --verbose -m MA0861.1 --chr 1 --from 100000 --to 130000
+	./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta -l -500 --verbose -m MA0861.1 --chr 1 --from 100000 --to 130000
 	./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta -l 0 --verbose -m MA0861.1 --chr 1 --from 100001 --to 103001 -s
 	./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta -l -500 --verbose -m MA0861.1 --chr 1 --from 100001 --to 103001 -s
 	#./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_bottom500000.fasta -l -500 --verbose -o output_bottom --chr 44 --from 100000 --to 103000
 	#./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_bottom500000.fasta -l -500 --verbose -o output_bottom --from 100000 --to 103000
 
 .PHONY: test all output_Chr1 jaspar genome genomegz genome_testdata count
+.PRECIOUS: $(GENOME) $(GENOMEGZ)
 
 #output_Chr1: $(addprefix output_Chr1/,$(BED_FILES))
 output_Chr1: $(addprefix output_Chr1/,$(BIDIRECT_FILES))
