@@ -15,12 +15,15 @@ TP73_MA0861.1_negative_1.bed TP73_MA0861.1_positive_1.bed:
 all: TP73_MA0861.1_positive_1.combined.bed REST_MA0138.2_positive_1.combined.bed SP1_MA0079.5_positive_1.combined.bed 
 
 # Rule to generate combined.bed files from bed files representing PSSM mapping
-%.combined.bed: %.bed
-	for i in $(FILES_CUTNRUN); do \
-		$(MAKE) $$i ; \
-	done
-	rm -f a.bed
-
+%.combined.bed: %.bed.gz $(FILES_CUTNRUN)
+	
+	#for i in $(FILES_CUTNRUN); do \
+	#	$(MAKE) $$i ; \
+	#done
+	#rm -f a.bed
+	
+	zcat $< > a.bed
+	
 	echo -n "Chr\tFrom\tTo\tName\tScore\tStrand" > $*.combined.bed
 	for i in $(FILES_CUTNRUN); do \
 		echo "I: Working on $$i" ; \
@@ -30,11 +33,12 @@ all: TP73_MA0861.1_positive_1.combined.bed REST_MA0138.2_positive_1.combined.bed
 			bedtools map -null 0 -a a.bed -b $$i > b.bed; \
 			mv b.bed a.bed; \
 		else \
-			bedtools map -null 0 -a $*.bed -b $$i > a.bed; \
+	        echo "E: a.bed should be existing" ; \
+	        exit ; \
 		fi ; \
 	done
 	echo >> $*.combined.bed
-
+	
 	cat a.bed >> $*.combined.bed
 	#rm a.bed
 
