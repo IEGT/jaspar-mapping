@@ -94,6 +94,7 @@ test: pssm_scan Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta Homo_sa
 
 .PHONY: test all output_Chr1 jaspar genome genomegz genome_testdata count datatable
 .PRECIOUS: $(GENOME) $(GENOMEGZ)
+>>>>>>> 160c9f4 (Makefile: Add construction of data table)
 
 #output_Chr1: $(addprefix output_Chr1/,$(BED_FILES))
 output_Chr1: $(addprefix output_Chr1/,$(BIDIRECT_FILES))
