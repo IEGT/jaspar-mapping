@@ -98,11 +98,8 @@ test: pssm_scan Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta Homo_sa
 #output_Chr1: $(addprefix output_Chr1/,$(BED_FILES))
 output_Chr1: $(addprefix output_Chr1/,$(BIDIRECT_FILES))
 
-TP73_datatable.bed.gz: context
-	#./context output_Chr1/TP73_MA0861.1_positive_1.combined.bed.gz output_Chr1/[a-mA-M]*bidirect*.bed.gz | gzip -c > $(SCRATCHDIR)/a.bed.gz
-	#./context $(SCRATCHDIR)/a.bed.gz output_Chr1/[n-zN-Z]*bidirect*.bed.gz | gzip -c > $@
-	./context output_Chr1/TP73_MA0861.1_positive_1.combined.bed.gz output_Chr1/*bidirect*.bed.gz | gzip -c > $@
-	#rm $(SCRATCHDIR)/a.bed.gz
+TP73_datatable.bed.gz: context output_Chr1/TP73_MA0861.1_bidirect_1.combined.bed.gz
+	./context output_Chr1/TP73_MA0861.1_bidirect_1.combined.bed.gz output_Chr1/*bidirect*.bed.gz | gzip -c > $@ || echo "I: Check ulimit -n 3000 if failing to open files"
 
 datatable: TP73_datatable.bed.gz
 
