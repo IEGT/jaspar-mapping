@@ -1,42 +1,68 @@
+#!/usr/bin/R
+
+# Script to interpret TF binding sites for their association with CUT&RUN data.
+
+options(width=180)
+
+# Import of multi-GB large compressed data file
 library(data.table)
- m <- fread("TP73_datatable.bed.gz")
- print(colnames(m))
+m <- fread("TP73_datatable.bed.gz")
+print(colnames(m))
 
- cols.NumInWindow <- grepl("_NumInWindow", colnames(m))
- selected_columns <- m[, cols.NumInWindow]
- quantiles.NumInWindow <- sapply(selected_columns, quantile, probs = c(0,0.25, 0.5, 0.75,1))
- sum.NumInWindow <- sapply(selected_columns, sum)
+# Identification of columns of particula type
+## NumInWIndow - number of binding sites of particular transcription factor
+cols.NumInWindow <- grepl("_NumInWindow", colnames(m))
+selected_columns.NumInWindows <- m[, ..cols.NumInWindow]
+quantiles.NumInWindow <- sapply(selected_columns, quantile, probs = c(0,0.25, 0.5, 0.75,1))
+sum.NumInWindow <- sapply(selected_columns, sum)
 
- cols.Score <- grepl("_Score", colnames(m))
- selected_columns <- m[, cols.Score]
- quantiles.Score <- sapply(selected_columns, quantile, probs = c(0,0.25, 0.5, 0.75,1))
- sum.Score <- sapply(selected_columns, sum, na.rm=T)
+## Score - computed affinity with which the TF is binding
+cols.Score <- grepl("_Score", colnames(m))
+selected_columns.Score <- m[, ..cols.Score]
+quantiles.Score <- sapply(selected_columns, quantile, probs = c(0,0.25, 0.5, 0.75,1), na.rm=TRUE)
+sum.Score <- sapply(selected_columns, sum, na.rm=T)
 
- cols.StrandEqual <- grepl("_StrandEqual", colnames(m))
- selected_columns.StrandEqual <- m[, cols.StrandEqual]
+## Identification of strand (same/other) at which the motif was found
+cols.StrandEqual <- grepl("_StrandEqual", colnames(m))
+selected_columns.StrandEqual <- m[, ..cols.StrandEqual]
 
+# Columns representing results from CUT&RUN data
 cols.cutandrun <- c("pos_saos2_DN", "pos_saos2_GFP", "pos_saos2_TA", "pos_skmel29_2_DN",
   "pos_skmel29_2_GFP", "pos_skmel29_2_TA", "tp73_saos2_DN", "tp73_saos2_GFP",
   "tp73_saos2_TA", "tp73_skmel29_2_DN", "tp73_skmel29_2_GFP", "tp73_skmel29_2_TA")
+# Subset of columns representing results for TP73 binding in CUT&RUN data
 cols.cutandrun.tp73 <- c("tp73_saos2_DN", "tp73_saos2_GFP", "tp73_saos2_TA", "tp73_skmel29_2_DN",
   "tp73_skmel29_2_GFP", "tp73_skmel29_2_TA")
 
-selected_columns_cutnrun <- m[, cols.cutandrun]
-selected_columns_cutnrun_tp73 <- m[, cols.cutandrun.tp73]
-quantiles_cutandrun <- sapply(selected_columns_cutnrun, quantile, probs = c(75,90,95,99,99.5,99.9,100)/100)
-sum_cutandrun_tp73 <- apply(as.matrix(selected_columns_cutnrun_tp73), 1, sum)
-sort(sum.NumInWindow)
 
-sum.NumInWindow.equal.0 <- sapply(selected_columns, function(X) sum(X[sum_cutandrun_tp73 == 0]))
-sum.NumInWindow.filtered.0 <- sapply(selected_columns, function(X) sum(X[sum_cutandrun_tp73 > 0]))
-sum.NumInWindow.filtered.20 <- sapply(selected_columns, function(X) sum(X[sum_cutandrun_tp73 > 20]))
-sort(sum.NumInWindow.filtered.0)
+# Determination of quantiles 
+selected_columns.cutnrun <- m[, ..cols.cutandrun]
+selected_columns.cutnrun.tp73 <- m[, ..cols.cutandrun.tp73]
+quantiles_cutandrun <- sapply(selected_columns.cutnrun, quantile, probs = c(75,90,95,99,99.5,99.9,100)/100)
+sum_cutandrun_tp73 <- apply(as.matrix(selected_columns.cutnrun.tp73), 1, sum)
+sort(sum.NumInWindow)
+cat("I: Quantiles for individual CUT&RUN experiments:\n")
+print(quantiles_cutandrun)
+cat("I: Quantiles for sum across all CUT&RUN experiments for p73:\n")
+print(quantile(sum.NumInWindow,probs=c(75,90,95,99,99.5,99.9,100)/100) )
+
+# Clean up memory
+gc()
+
+# Having encountered frequent crashes, maybe 
+# save.image()
+# at this point.
+
+sum.NumInWindow.equal.0 <- sapply(selected_columns.NumInWindow, function(X) sum(X[sum_cutandrun_tp73 == 0]))
+sum.NumInWindow.filtered.1 <- sapply(selected_columns.NumInWindow, function(X) sum(X[sum_cutandrun_tp73 >= 1]))
+sum.NumInWindow.filtered.20 <- sapply(selected_columns.NumInWindow, function(X) sum(X[sum_cutandrun_tp73 >= 20]))
+sort(sum.NumInWindow.filtered.1)
 sort(sum.NumInWindow.filtered.20)
 
-ratio.0 <- (sum.NumInWindow.filtered.0/sum(sum_cutandrun_tp73>0)) / (sum.NumInWindow.equal.0/sum(sum_cutandrun_tp73==0))
-ratio.20 <- (sum.NumInWindow.filtered.20/sum(sum_cutandrun_tp73>20)) / (sum.NumInWindow.equal.0/sum(sum_cutandrun_tp73==0))
+ratio.1 <- (sum.NumInWindow.filtered.1/sum(sum_cutandrun_tp73>=1)) / (sum.NumInWindow.equal.0/sum(sum_cutandrun_tp73==0))
+ratio.20 <- (sum.NumInWindow.filtered.20/sum(sum_cutandrun_tp73>=20)) / (sum.NumInWindow.equal.0/sum(sum_cutandrun_tp73==0))
 
-sort(ratio.0)
+sort(ratio.1)
 sort(ratio.20)
 
 pretty.table <- function(x) {
