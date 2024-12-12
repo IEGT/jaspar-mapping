@@ -67,9 +67,9 @@ SHELL=bash
 BED_FILES := $(shell grep "^>" JASPAR2022_CORE_non-redundant_pfms_jaspar.txt | sed -e 's%[/:()]%-%g' | awk '{print $$NF "_" $$1 "_positive_1.bed.gz"}' | sed -e 's/[>]//')
 BIDIRECT_FILES := $(shell grep "^>" JASPAR2022_CORE_non-redundant_pfms_jaspar.txt | sed -e 's%[/:()]%-%g' | awk '{print $$NF "_" $$1 "_bidirect_1.bed.gz"}' | sed -e 's/[>]//')
 echo_bed:
-	echo $(BED_FILES)
+	@echo $(BED_FILES)|sort
 echo_bidirect:
-	echo $(BIDIRECT_FILES)
+	@echo $(BIDIRECT_FILES)|sort
 
 $(shell basename $(GENOME) .fasta )_top500000.fasta: $(GENOME)
 	head -n 500000 $< > Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta
