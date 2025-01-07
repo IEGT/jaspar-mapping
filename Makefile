@@ -44,8 +44,8 @@ genome: $(GENOME)
 genomegz: $(GENOMEGZ)
 
 # Define the pattern rule for generating .bed files
-output_Chr1/%_negative_1.bed output_Chr1/%_positive_1.bed: NAME=$(word 1,$(subst _, ,$*))
-output_Chr1/%_negative_1.bed output_Chr1/%_positive_1.bed: ACC=$(word 2,$(subst _, ,$*))
+output_Chr1/%_negative_1.bed output_Chr1/%_positive_1.bed: NAME=$(shell echo $* | sed -e 's/_MA.*$$//')
+output_Chr1/%_negative_1.bed output_Chr1/%_positive_1.bed: ACC=$(shell echo $* | tr "_" "\n" |grep ^MA|head -n 1)
 output_Chr1/%_negative_1.bed output_Chr1/%_positive_1.bed:
 	@echo "NAME=$(NAME) ACC=$(ACC)"
 	if [ ! -f output_Chr1/$(NAME)_$(ACC)_positive_1.bed ] ; then \
