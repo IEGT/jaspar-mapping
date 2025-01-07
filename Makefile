@@ -4,6 +4,7 @@ CXXFLAGS=-std=c++23
 CXXFLAGS += -g
 LDFLAGS=-lz -lbz2 -lm 
 
+SCRATCHDIR=/tmp
 SRCS=$(wildcard *.cpp)
 
 JASPAR=JASPAR2022_CORE_non-redundant_pfms_jaspar.txt
@@ -91,11 +92,19 @@ test: pssm_scan Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta Homo_sa
 	#./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_bottom500000.fasta -l -500 --verbose -o output_bottom --chr 44 --from 100000 --to 103000
 	#./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_bottom500000.fasta -l -500 --verbose -o output_bottom --from 100000 --to 103000
 
-.PHONY: test all output_Chr1 jaspar genome genomegz genome_testdata count
+.PHONY: test all output_Chr1 jaspar genome genomegz genome_testdata count datatable
 .PRECIOUS: $(GENOME) $(GENOMEGZ)
 
 #output_Chr1: $(addprefix output_Chr1/,$(BED_FILES))
 output_Chr1: $(addprefix output_Chr1/,$(BIDIRECT_FILES))
+
+TP73_datatable.bed.gz: context
+	#./context output_Chr1/TP73_MA0861.1_positive_1.combined.bed.gz output_Chr1/[a-mA-M]*bidirect*.bed.gz | gzip -c > $(SCRATCHDIR)/a.bed.gz
+	#./context $(SCRATCHDIR)/a.bed.gz output_Chr1/[n-zN-Z]*bidirect*.bed.gz | gzip -c > $@
+	./context output_Chr1/TP73_MA0861.1_positive_1.combined.bed.gz output_Chr1/*bidirect*.bed.gz | gzip -c > $@
+	#rm $(SCRATCHDIR)/a.bed.gz
+
+datatable: TP73_datatable.bed.gz
 
 count:
 	find output_Chr1 -name "*_bidirect_*.bed.gz" | wc -l
