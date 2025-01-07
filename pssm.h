@@ -78,6 +78,7 @@ class PSSM {
          * @brief returns log(frequency/background)
          */
         static inline double logRelativeRisk(const double& frequency, const double& background);
+        static inline double logRelativeRiskACGT(const double& frequency);
         /**
          * @brief returns log(count/(colsum-count) minus log(background/(1-background))
          * Background is presume to always be at 0.25, ignoring variations in the GC content. 

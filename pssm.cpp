@@ -22,27 +22,38 @@ double PSSM::logRelativeRisk(const double& frequency, const double& background) 
         return -1e9;  // Prevent log(0) by returning a large negative score for unobserved nucleotides
         //return -log2(1024*16);  // assume one of the next upcoming tests would have found that residue to avoid -inf
     }
-    return log2(frequency / background);  // Log-odds ratio
+    return log2(frequency / background);  // log Risk Ratio
 }
 
-double PSSM::logOddsRatioACGT(const double& frequency, const double& colsum) {
+/** \brief Function to calculate log-odds score for a given nucleotide at a position
+ */
+double PSSM::logRelativeRiskACGT(const double& frequency) {
+    static double log2Background= -2 ; // == log2(0.25);
+    if (frequency == 0) {
+        return -1e9;  // Prevent log(0) by returning a large negative score for unobserved nucleotides
+        //return -log2(1024*16);  // assume one of the next upcoming tests would have found that residue to avoid -inf
+    }
+    return log2(frequency) - log2Background;  // log Risk Ratio
+}
 
-    static double backgroundRatio = log2(3);
+double PSSM::logOddsRatioACGT(const double& count, const double& colsum) {
 
-    if (frequency == 0.0) {
+    static double log2BackgroundOdd = log2(1.0/(4.0-1.0));
+
+    if (count == 0.0) {
         // not expected to happen because of numbers "smoothed" by 1 added to all counts
         return -1e9;  // Prevent log(0) by returning a large negative score for unobserved nucleotides
     }
-    double remainer = colsum-frequency;
+    double remainer = colsum-count;
     if (remainer<0.0) {
-        std::cerr << "E: PSSM::logOddsRatioACGT: remainer<0.0 for frequency " << frequency << " and colsum " << colsum << std::endl;
+        std::cerr << "E: PSSM::logOddsRatioACGT: remainer<0.0 for count " << count << " and colsum " << colsum << std::endl;
         exit(-1);
     }
     if (remainer == 0.0) {
         // not expected to happen because of numbers "smoothed" by 1 added to all counts
         return +1e9;  // Prevent frequency/0 division by returning a large negative score for unobserved nucleotides
     }
-    return log2(frequency / remainer) - backgroundRatio;  // Log-odds ratio, assuming equal distribution as background
+    return log2(count / remainer) - log2BackgroundOdd;  // Log-odds ratio, assuming equal distribution as background
 }
 
 /** \brief Function to trim whitespace from strings

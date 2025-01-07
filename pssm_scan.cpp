@@ -179,7 +179,7 @@ int scanSequence(const std::string& chromosome, const std::string& sequence, con
         std::cerr << "I: Scanning chromosome " << chromosome << " for motif " << pssm.motifName << " from " << posStart << " to " << posEnd << " - " << motifLength << std::endl;
     }
     
-    displayProgressBar(0.0);
+    if (beVerbose) displayProgressBar(0.0);
     for (size_t i = posStart; i <= posEnd - motifLength; ++i) {
         const std::string window = sequence.substr(i, motifLength);
         const double score = calculateScore(window, pssm.pssm, skipN);
@@ -187,7 +187,7 @@ int scanSequence(const std::string& chromosome, const std::string& sequence, con
         // std::cerr << "D: Score: " << score << std::endl;
 
         // Progress indicator
-        if (i % reportInterval == 0) {
+        if (beVerbose && i % reportInterval == 0) {
             const double progress = (double) ( i - posStart) / (posEnd - motifLength - posStart);
             //auto now = std::chrono::high_resolution_clock::now();
             //auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start).count();
@@ -278,7 +278,7 @@ int readFastaFile(const std::string& fastaFile, genome_type& genome) {
         bytesRead += line.size() + 1;  // +1 for the newline character
         // Calculate the progress as a float between 0 and 1
         // Display the progress bar
-        if (lineNo++ % 20000 == 0) {
+        if (beVerbose && lineNo++ % 20000 == 0) {
             float progress = static_cast<float>(bytesRead) / genomeFileSize;
             displayProgressBar(progress);
         }
