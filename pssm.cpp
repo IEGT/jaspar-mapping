@@ -78,6 +78,8 @@ std::string PSSM::trim(const std::string& str) {
  */
 int PSSM::parsePSSMFile(const std::string& pssmFile, pssm_list_type& pssm_list, const std::string& targetMotifID, const int& beVerbose) {
 
+    std::cerr << "D: Parsing file '" << pssmFile << "' aiming at target MotifID '" << targetMotifID << "' with verbosity level " << beVerbose << std::endl;
+
     std::ifstream inFile(pssmFile);
     if (!inFile.is_open()) {
         std::cerr << "E: Error opening file: '" << pssmFile << "'" << std::endl;
@@ -91,10 +93,12 @@ int PSSM::parsePSSMFile(const std::string& pssmFile, pssm_list_type& pssm_list, 
     std::string motifID, motifName;
 
     int length=0;
+    int numPSSMsRead=0;
     while (getline(inFile, line)) {
         line = PSSM::trim(line);
         // Check for the FASTA-like header, indicating a new motif
-        if (!line.empty() && line[0] == '>') {
+        if ( ( !line.empty() && line[0] == '>')  || inFile.eof() ) {
+            numPSSMsRead++;
             // Save the previous PSSM if there is one
             if (   !motifID.empty() // this is not the very first line read,
                                     // so a complete PSSM has already been seen
@@ -104,7 +108,7 @@ int PSSM::parsePSSMFile(const std::string& pssmFile, pssm_list_type& pssm_list, 
 
                 PSSM pssm_object(pssm, motifID, motifName, length);
                 pssm_list[motifID] = pssm_object;
-                if (beVerbose>1) std::cerr << "I: Got the following PSSM: " << std::endl << pssm_object;
+                if (beVerbose>0) std::cerr << "I: Got the following PSSM: " << std::endl << pssm_object;
                 if (beVerbose) {
                     std::cerr << "I: PSSM for motif " << motifID << " (" << motifName << ") saved with length " << length << "." << std::endl;
                 }
@@ -121,6 +125,8 @@ int PSSM::parsePSSMFile(const std::string& pssmFile, pssm_list_type& pssm_list, 
                     std::cerr << "   Parsing PSSM for motif: " << motifID << " (" << motifName << ")" << std::endl;
                 }
                 break;
+            } else if (beVerbose>1 || debug) {
+                std::cerr << "D: Skipping motif '" << motifID << "' that is != '" <<  targetMotifID << "'" << std:: endl;
             }
             // Parse new motif ID and name from the line read from the file
             std::stringstream ss(line.substr(1));  // Skip the '>'
@@ -159,6 +165,23 @@ int PSSM::parsePSSMFile(const std::string& pssmFile, pssm_list_type& pssm_list, 
         }
     }
 
+    // also inspecting last file, terminated by EOF, not by new ">" line
+    if (   length>0
+           && !motifID.empty() // this is not the very first line read,
+                            // so a complete PSSM has already been seen
+            && ( targetMotifID.empty() || motifID == targetMotifID )
+                            // no motif was specified or the desired motif was found
+       ) {
+         PSSM pssm_object(pssm, motifID, motifName, length);
+         pssm_list[motifID] = pssm_object;
+         if (beVerbose>0) std::cerr << "I: EOF handling: Got the following PSSM << '" << motifID << "' for target '" << targetMotifID << "': " << std::endl << pssm_object;
+         if (beVerbose) {
+              std::cerr << "I: EOF handling: PSSM for motif " << motifID << " (" << motifName << ") saved with length " << length << "." << std::endl;
+         }
+    }
+
+    std::cerr << "I: Read " << numPSSMsRead << " PSSMs from file '" << pssmFile << "'" << std::endl;
+
     inFile.close();
     return 0;
 }
@@ -167,36 +190,36 @@ int PSSM::parsePSSMFile(const std::string& pssmFile, pssm_list_type& pssm_list, 
  */
 void PSSM::normalizePSSM(const std::unordered_map<char, const double>& backgroundFrequencies) {
 
-	std::cerr << "I: NormalizePSSM " << std::endl;
-	std::cerr << *this;
+        std::cerr << "I: NormalizePSSM " << std::endl;
+        std::cerr << *this;
 
-	for (auto& [nucleotide, counts] : this->pssm) {
-		const auto background = backgroundFrequencies.at(nucleotide);
+        for (auto& [nucleotide, counts] : this->pssm) {
+                const auto background = backgroundFrequencies.at(nucleotide);
 
-		//int i = 0;
-		if (debug) std::cerr << "D: Counts.size= " << counts.size() << std::endl;
-		//for (unsigned int i=0; auto& count : counts) {
-		for (unsigned int i=0; i < counts.size(); i++) {
-			if (debug) std::cerr << "D: i=" << i << std::endl;
-			if (0 == this->colsums[i]) {
-				//count = 0;
-				counts[i] = 0;
-				std::cerr << "W: Unexpected - column " << i << " has no scores assigned." << std::endl;
-				continue;
-			}
+                //int i = 0;
+                if (debug) std::cerr << "D: Counts.size= " << counts.size() << std::endl;
+                //for (unsigned int i=0; auto& count : counts) {
+                for (unsigned int i=0; i < counts.size(); i++) {
+                        if (debug) std::cerr << "D: i=" << i << std::endl;
+                        if (0 == this->colsums[i]) {
+                                //count = 0;
+                                counts[i] = 0;
+                                std::cerr << "W: Unexpected - column " << i << " has no scores assigned." << std::endl;
+                                continue;
+                        }
 /*
-			if (0.0 == counts[i]) { // an unobserved nucleotide
-				counts[i] = -2;
-				//count = -1e9;
-				continue;
-			}
+                        if (0.0 == counts[i]) { // an unobserved nucleotide
+                                counts[i] = -2;
+                                //count = -1e9;
+                                continue;
+                        }
 */
-			if (PSSM::debug) std::cerr << "I: Normalization of " << counts[i] << " counts at position " << i << " with column sum " << this->colsums[i] << " to ";
+                        if (PSSM::debug) std::cerr << "I: Normalization of " << counts[i] << " counts at position " << i << " with column sum " << this->colsums[i] << " to ";
             // log odds ratio, smoothed by avoiding complete coverage
-			counts[i] = PSSM::logOddsRatioACGT(counts[i]+1, this->colsums[i]+4);
-			if (PSSM::debug) std::cerr << counts[i] << std::endl;
-		}
-	}
+                        counts[i] = PSSM::logOddsRatioACGT(counts[i]+1, this->colsums[i]+4);
+                        if (PSSM::debug) std::cerr << counts[i] << std::endl;
+                }
+        }
 }
 
 /** \brief debug flag
