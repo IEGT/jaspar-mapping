@@ -298,6 +298,7 @@ int readFastaFile(const std::string& fastaFile, genome_type& genome) {
 void printHelp(const std::string& programName, const std::string& genomeFile, const std::string& pssmFile, const std::string& targetMotifID, const float& threshold, const std::string& chromosome, const size_t& from, const size_t& to, const std::string& regions, const std::string& outdir, const bool& showSequence) {
     std::cout << "Usage: " << programName << " [-v] [-c chromosome] [-t toBp] [-f fromBp] [-g genome_file] [-p pssm_file] [-m motif_id] [--skip-N | --neutral-N] [--skip-normalization]" << std::endl;
     std::cout << " -v, --verbose        Allow verbose output (set to " << beVerbose << ")" << std::endl;
+    std::cout << " -d, --debug          Allow debug output (set to " << showDebug << ")" << std::endl;
     std::cout << " -g, --genome         Path to genome FASTA file (set to '" << genomeFile  << "')" << std::endl;
     std::cout << " -p, --pssm           Path to JASPAR PSSM file (set to '" << pssmFile << "')" << std::endl;
     std::cout << " -m, --motif          Target motif ID from JASPAR file (set to '" << targetMotifID << "')" << std::endl;
@@ -347,6 +348,7 @@ int main(int argc, char* argv[]) {
         {"neutral-N", no_argument, 0, 0},
         {"skip-normalization", no_argument, 0, 'N'},
         {"verbose", no_argument, 0, 'v'},
+        {"debug", no_argument, 0, 'd'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
     };
@@ -410,6 +412,10 @@ int main(int argc, char* argv[]) {
             case 'v':
                 beVerbose = 1;
                 break;
+            case 'd':
+                beVerbose = 2;
+		showDebug = 1;
+                break;
             default:
                 showHelp = 1;
                 break;
@@ -433,14 +439,15 @@ int main(int argc, char* argv[]) {
     // Load the PSSM matrix from a JASPAR-like file
     pssm_list_type pssm_list;
 
-    if ( PSSM::parsePSSMFile(pssmFile, pssm_list , targetMotifID ) ) {
+    if ( PSSM::parsePSSMFile(pssmFile, pssm_list , targetMotifID , beVerbose + showDebug ) ) {
         std::cerr << "E: Error parsing PSSM file '" << pssmFile << "'" << std::endl;
         return 1;
-    } else if (pssm_list.empty()) {
+    }
+    std::cerr << "D: Read " << pssm_list.size() << " PSSMs from file '" << pssmFile << "'" << std::endl;
+    if (pssm_list.empty()) {
         std::cerr << "E: PSSM sucessfully parsed but nonetheless empty." << std::endl;
         return 1;
     }
-    std::cerr << "I: Read " << pssm_list.size() << " PSSMs from file '" << pssmFile << "'" << std::endl;
 
     // Load the genome from a FASTA file
     genome_type genome ;
