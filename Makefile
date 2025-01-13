@@ -60,7 +60,7 @@ output_Chr$(CHR)/%_negative_$(CHR).bed output_Chr$(CHR)/%_positive_$(CHR).bed:
 	fi
 
 %_bidirect_$(CHR).bed.gz: %_negative_$(CHR).bed.gz %_positive_$(CHR).bed.gz
-	zcat $^ | sort -k 1,1 -k2,2n | gzip -c > $@
+	zcat $^ | sort -S 2G -k 1,1 -k2,2n | gzip -c > $@
 
 %.bed.gz: %.bed
 	gzip $<
@@ -70,9 +70,9 @@ SHELL=bash
 BED_FILES := $(shell grep "^>" JASPAR2022_CORE_non-redundant_pfms_jaspar.txt | sed -e 's%[/:()]%-%g' | awk '{print $$NF "_" $$1 "_positive_$(CHR).bed.gz"}' | sed -e 's/[>]//')
 BIDIRECT_FILES := $(shell grep "^>" JASPAR2022_CORE_non-redundant_pfms_jaspar.txt | sed -e 's%[/:()]%-%g' | awk '{print $$NF "_" $$1 "_bidirect_$(CHR).bed.gz"}' | sed -e 's/[>]//')
 echo_bed:
-	@echo $(BED_FILES)|sort
+	@echo $(BED_FILES)|sort -S 2G
 echo_bidirect:
-	@echo $(BIDIRECT_FILES)|sort
+	@echo $(BIDIRECT_FILES)|sort -S 2G
 
 $(shell basename $(GENOME) .fasta )_top500000.fasta: $(GENOME)
 	head -n 500000 $< > Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta
