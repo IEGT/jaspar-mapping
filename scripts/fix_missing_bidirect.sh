@@ -2,30 +2,35 @@
 
 set -e
 
-cd output_Chr1
-prefixes=$(find . -name "*_negative_1.bed" | sed 's/_negative_1.bed//g' |sort | uniq)
+if [ -z "$CHR" ]; then
+	CHR=unset
+fi
 
-for i in $prefixes 
+
+cd output_Chr$CHR
+prefixes=$(find . -name "*_negative_$CHR.bed" | sed 's/_negative_$CHR.bed//g' |sort | uniq)
+
+for i in $prefixes
 do
-    negbed=$i"_negative_1.bed"
+    negbed=$i"_negative_$CHR.bed"
     if [ ! -f "$negbed" ]; then
         echo "Missing file: '$negbed' - some fiddling in parallel with this directory?"
         exit 1
     fi
 
-    posbed=$i"_positive_1.bed"
+    posbed=$i"_positive_$CHR.bed"
     if [ ! -f "$posbed" ]; then
         echo "Missing file: '$posbed' - please have a look."
         exit 1
     fi
 
-    bibed="${i}_bidirect_1.bed.gz"
+    bibed="${i}_bidirect_$CHR.bed.gz"
 
     if [ -f "$bibed" ]; then
         echo "File '$bibed' already exists. Not merging."
-    else    
+    else
         echo "Merging files for $i: $negbed and $posbed > $bibed"
-        cat $negbed $posbed | grep -v ^Chromo | sort  -k 1,1 -k2,2n | gzip -c > "${i}_bidirect_1.bed.gz"    
+        cat $negbed $posbed | grep -v ^Chromo | sort  -k 1,1 -k2,2n | gzip -c > "${i}_bidirect_$CHR.bed.gz"
     fi
 
     echo "Merge successful, now removing individual files"
