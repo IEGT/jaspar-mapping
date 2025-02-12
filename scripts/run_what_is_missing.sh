@@ -7,11 +7,17 @@ if [ -z "$CHR" ]; then
     exit 1
 fi
 
-mkdir -p output_Chr$CHR
+outDir="output_Chr$CHR"
+if [ -d "${outDir}_done" ]; then
+    echo "E: Directory '${outDir}_done' already exists."
+    exit 1
+fi
+
+mkdir -p "$outDir"
 
 for i in $(make CHR=$CHR echo_bidirect)
 do
-    f="output_Chr$CHR/$i"
+    f="$outDir/$i"
     if [ -f "$f" ]; then
         # echo "I: Found $i - skipped"
         echo -n
