@@ -59,8 +59,8 @@ cat("I: Quantiles for sum across all CUT&RUN experiments for GFP-only:\n")
 print(quantile(sum_cutandrun_tp73_GFP,probs=c(0,25,50,75,90,95,99,99.5,99.9,100)/100) )
 
 # The 99th percentile for the number of reads in TFBS for different transfected isoforms
-sum_cutandrun_tp73.50 <- max(quantile(sum_cutandrun_tp73a,probs=0.50),1) # 1
-sum_cutandrun_tp73.99 <- quantile(sum_cutandrun_tp73a,probs=0.99) # 20
+sum_cutandrun_tp73.50 <- max(quantile(sum_cutandrun_tp73,probs=0.50),1) # 1
+sum_cutandrun_tp73.99 <- quantile(sum_cutandrun_tp73,probs=0.99) # 20
 sum_cutandrun_tp73_TAa.50 <- max(quantile(sum_cutandrun_tp73_TAa,probs=0.50),1) # 1
 sum_cutandrun_tp73_DNb.50 <- max(quantile(sum_cutandrun_tp73_DNb,probs=0.50),1) # 1
 sum_cutandrun_tp73_GFP.50 <- max(quantile(sum_cutandrun_tp73_GFP,probs=0.50),1) # 1
@@ -244,40 +244,65 @@ prettyIdentifierJaspar <- function(X) {
 # Creates distance plots for the selected columns
 
 plotShiftOfBinding <- function(tf="TP73_MA0861.1",
-                               tfbs.selection=(sum_cutandrun_tp73 > 20),
+                               tfbs.selection=NULL,
+                               subset.name="unknown",
                                binwidth=2
 
 ) {
-    selected_column_tf_Score <- m[tfbs.selection, paste(tf,"Score",sep="_")]
-    selected_column_tf_Shift <- m[tfbs.selection, paste(tf,"Shift",sep="_")]
-    selected_column_tf_SameStrand <- m[tfbs.selection, paste(tf,"StrandEqual",sep="_")]
+    # Extract relevant columns from the data frame
+    selected_column_tf_Score_name <- paste(tf,"Score",sep="_")
+    selected_column_tf_Shift_name <- paste(tf,"Shift",sep="_")
+    selected_column_tf_SameStrand_name <- paste(tf,"StrandEqual",sep="_")
+    #selected_column_tf_Score <- m[tfbs.selection, ..selected_column_tf_Score_name][[1]]
+    #selected_column_tf_Shift <- m[tfbs.selection, ..selected_column_tf_Shift_name][[1]]
+    selected_column_tf_SameStrand <- m[tfbs.selection, ..selected_column_tf_SameStrand_name][[1]]
 
-    data <- data.frame(
-    shift=selected_column_tf_Shift,
-    strand=selected_column_tf_SameStrand
+    plot_data <- data.frame(
+        score=m[tfbs.selection, ..selected_column_tf_Score_name][[1]],
+        shift=m[tfbs.selection, ..selected_column_tf_Shift_name][[1]]
     )
+
+    if (!is.numeric(plot_data$shift)) {
+        cat("The 'shift' column must be numeric, found:\n")
+        print(head(plot_data$shift))
+    }
+
     # Convert selected_column_tf_SameStrand to a factor with labels
-    data$selected_column_tf_SameStrand <- factor(data$strand, levels = c(1, 0), labels = c("same", "opposite"))
+    plot_data$selected_column_tf_SameStrand <- factor(selected_column_tf_SameStrand, levels = c(1, 0), labels = c("same", "opposite"))
+
+    plot_data.orig_num_lines <- nrow(plot_data)
+    plot_data <- na.omit(plot_data)
+    plot_data.contributing_num_lines <- nrow(plot_data)
+
 
     # Create the histogram
-    ggplot(data, aes(x = selected_column_tf_Shift, fill = selected_column_tf_SameStrand,
-                    group = selected_column_tf_SameStrand)) +
-    geom_histogram(position = "dodge", binwidth = binwidth ) +
-    labs(title = paste("Shift of TF ",prettyIdentifierJaspar(tf)," grouped by strand",sep=""),
-        x = "Shift",
-        y = "Count",
-        fill = "Strand") +
-    theme_minimal()
+    #p <- ggplot(plot_data, aes(x = selected_column_tf_Shift, fill = selected_column_tf_SameStrand, group = selected_column_tf_SameStrand)) +
+    p <- ggplot(plot_data, aes(x = shift, fill = selected_column_tf_SameStrand, group = selected_column_tf_SameStrand)) +
+         geom_histogram(position = "dodge", binwidth = binwidth ) +
+         labs(title = paste("Shift of TF ",prettyIdentifierJaspar(tf)," for ",subset.name," grouped by strand",sep=""),
+             x = "Shift", y = "Count", fill = "Strand") +
+         theme_minimal() +
+         annotate("text", x = Inf, y = Inf, 
+             label = paste("N / total =", plot_data.contributing_num_lines, " / ",plot_data.orig_num_lines), 
+             hjust = 1.1, vjust = 1.1, 
+             size = 5, color = "black")  # Add annotation for number of data points
   
     # Save the plot to a file
-    ggsave(paste("histogram_of_shift_for_tf_",tf,"_Shift.png",sep=""))
+    ggsave(paste("histogram_of_shift_for_tf_",tf,"_subset_",subset.name,".png",sep=""),
+        plot=p, width=8, height=6, dpi=300)
 } 
 
-for(tf in c("TP73_MA0861.1","TP63_MA0525.2","TP53_MA0106.3",
-            "E2F2_MA0864.2","RELA_MA0107.1","PLAG1_MA0163.1",
-            "SP1_MA0079.5","PLAG1_MA0163.1","REST_MA0138.2","CTCF_MA0139.1",
-            "KLF14_MA0740.2","Klf15_MA1890.1","REL_MA0101.1","YY1-2_MA1927.1","TBP_MA0108.2",
-            "POU2F1--SOX2_MA1962.1")) {
-    cat("I: plotting '",tf,"': ",sep="")
-    plotShiftOfBinding(tf)
+l <- list("TAa"=sum_cutandrun_tp73_TAa, "DNb"=sum_cutandrun_tp73_DNb, "GFP"=sum_cutandrun_tp73_GFP)
+
+for (l.name in names(l)) {
+    for(tf in c("TP73_MA0861.1","TP63_MA0525.2","TP53_MA0106.3",
+            "CTCF_MA0139.1","E2F2_MA0864.2", "FOS_MA1951.1","FOSL1--JUN_MA1129.1",
+            "FOXO4_MA0848.1","Foxq1_MA0040.1", "KLF14_MA0740.2","Klf15_MA1890.1","REL_MA0101.1",
+            "PLAG1_MA0163.1","POU2F1--SOX2_MA1962.1", "PPARG_MA0066.1",
+            "RELA_MA0107.1","REST_MA0138.2", "RXRA--VDR_MA0074.1", "SP1_MA0079.5",
+            "TBP_MA0108.2","YY1-2_MA1927.1")) {
+        cat("I: plotting '",tf,"' (",l.name,") : ",sep="")
+        plotShiftOfBinding(tf=tf,tfbs.selection=l[[l.name]],subset.name=l.name)
+        cat("\n")
+    }
 }
