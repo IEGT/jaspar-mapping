@@ -28,7 +28,7 @@ for list in $lists; do
         continue
     else
         genes=$(grep GENE_SYMBOLS "$fname" | cut -f2 | grep -v "^GENE_SYMBOL")
-        ./gtf_file_region_retrieval -n "$genes" -f promoter > $ofolder/$list.promoter.bed
-        ./gtf_file_region_retrieval -n "$genes" > $ofolder/$list.transcript.bed
+        ./gtf_file_region_retrieval -n "$genes" -f promoter > "$ofolder/$list.promoter.bed"
+        ./gtf_file_region_retrieval -n "$genes" > "$ofolder/$list.transcript.bed"
     fi
 done
