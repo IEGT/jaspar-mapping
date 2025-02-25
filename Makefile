@@ -2,8 +2,8 @@
 CXX=g++
 CXXFLAGS=-std=c++23 -I/home/sm718/miniconda3/include
 CXXFLAGS += -g
-#LDFLAGS=-lz -lbz2 -lm
-LDFLAGS=/home/sm718/miniconda3/pkgs/zlib-1.3.1-h4ab18f5_1/lib/libz.a /home/sm718/miniconda3/pkgs/bzip2-1.0.8-h4bc722e_7/lib/libbz2.a -lm
+LDFLAGS=-lz -lbz2 -lm
+#LDFLAGS=/home/sm718/miniconda3/pkgs/zlib-1.3.1-h4ab18f5_1/lib/libz.a /home/sm718/miniconda3/pkgs/bzip2-1.0.8-h4bc722e_7/lib/libbz2.a -lm
 
 SCRATCHDIR=/tmp
 SRCS=$(wildcard *.cpp)

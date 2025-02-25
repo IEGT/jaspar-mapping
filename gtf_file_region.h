@@ -1,11 +1,24 @@
 #include <string>
+#include <iostream>
 
 // Structure to store gene region information
 struct GeneRegion {
     std::string chromosome;
     size_t start;
     size_t end;
-    std::string id;
+    std::string strand;
+    std::string geneId;
+    std::string geneName;
+    std::string transcriptName;
+
+    // Return content as a line that can be written to a BED file
+    std::string toBedString() const;
+
+    // Return a new GeneRegion object that represents the region upstream of the current region
+    GeneRegion relative_upstream(size_t upstream, size_t downstream) const;
+
+    // Overload the << operator for GeneRegion
+    friend std::ostream& operator<<(std::ostream& os, const GeneRegion& region);
 };
 
 /**

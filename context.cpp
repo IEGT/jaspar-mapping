@@ -68,6 +68,12 @@ bool parseBedLine(const std::string& line, BedEntry& entry, const bool hasName=f
 /** \brief Process main .bed file and list of other .bed files
  * @param mainBedFile - path to main .bed file
  * @param otherBedFiles - list of paths to other .bed files
+ * 
+ * The annotations vector stores tuples with the following elements:
+ * 1. Distance in base pairs of the position of the feature minus the position of the reference. The strand/orientation will not affect the sign.
+ * 2. The score value of the feature.
+ * 3. Indication of the strand/orientation of the feature and the reference is the same (1 if yes, 0 if not).
+ * 4. Counter about the number of features of the same kind within the window to the reference.
  */
 void processBedFiles(const std::string& mainBedFile,
                      const std::vector<std::string>& otherBedFiles, const bool hasName=false) {
@@ -142,7 +148,7 @@ void processBedFiles(const std::string& mainBedFile,
         }
 
         /** Store the best annotation for each other file, see header of other files for details. */
-        std::vector<std::tuple<int, double, bool, int>> annotations(otherFiles.size(),
+        std::vector<std::tuple<int, double, int, int>> annotations(otherFiles.size(),
                     std::make_tuple(std::numeric_limits<int>::max(), -std::numeric_limits<double>::max(), 0, 0));
         std::vector<std::size_t> otherLineCount(otherFiles.size(), 0);
         std::vector<std::size_t> atEndOfFile(otherFiles.size(), 0);
@@ -218,8 +224,7 @@ void processBedFiles(const std::string& mainBedFile,
 
             /** Find the best annotation within the 100 bp limit. */
             if (queues[i].empty()) {
-                //std::cerr << "No entries in queue " << i << std::endl;
-                annotations[i] = std::make_tuple(-100000, -1, ".", 0);
+                annotations[i] = std::make_tuple(-100000, -1E10, 0, 0);
             }
             else {
                 std::queue<BedEntry> tempQueue = queues[i];
@@ -228,7 +233,7 @@ void processBedFiles(const std::string& mainBedFile,
                     const auto& entry = tempQueue.front();
                     if (entry.chrom == mainEntry.chrom && std::abs(entry.start - mainEntry.start) <= 100) {
                         if (entry.score > std::get<1>(annotations[i])) {
-                            annotations[i] = std::make_tuple(entry.start - mainEntry.start, entry.score, entry.strand == mainEntry.strand, queueSize);
+                            annotations[i] = std::make_tuple(entry.start - mainEntry.start, entry.score, entry.strand == mainEntry.strand ? 1 : 0, queueSize);
                         }
                     }
                     tempQueue.pop();
@@ -240,7 +245,7 @@ void processBedFiles(const std::string& mainBedFile,
         /** Write to stdout, first the complete line of the main .bed, then the extra columns for the other .bed files */
         std::cout << mainEntry.line;
         for (const auto& annotation : annotations) {
-            if (0 == get<3>(annotation)) {
+            if (0 == std::get<3>(annotation)) {
                 std::cout << "\t" << "NA" << "\t" << "NA" << "\t" << "NA" << "\t" << std::get<3>(annotation);
             }
             else {
