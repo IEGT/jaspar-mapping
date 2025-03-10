@@ -28,7 +28,7 @@ double PSSM::logRelativeRisk(const double& frequency, const double& background) 
 /** \brief Function to calculate log-odds score for a given nucleotide at a position
  */
 double PSSM::logRelativeRiskACGT(const double& frequency) {
-    static double log2Background= -2 ; // == log2(0.25);
+    const double log2Background = -2.0 ; // == log2(0.25);
     if (frequency == 0) {
         return -1e9;  // Prevent log(0) by returning a large negative score for unobserved nucleotides
         //return -log2(1024*16);  // assume one of the next upcoming tests would have found that residue to avoid -inf
@@ -38,13 +38,13 @@ double PSSM::logRelativeRiskACGT(const double& frequency) {
 
 double PSSM::logOddsRatioACGT(const double& count, const double& colsum) {
 
-    static double log2BackgroundOdd = log2(1.0/(4.0-1.0));
+    const double log2BackgroundOdd = log2(1.0/(4.0-1.0));
 
     if (count == 0.0) {
         // not expected to happen because of numbers "smoothed" by 1 added to all counts
         return -1e9;  // Prevent log(0) by returning a large negative score for unobserved nucleotides
     }
-    double remainer = colsum-count;
+    const double remainer = colsum-count;
     if (remainer<0.0) {
         std::cerr << "E: PSSM::logOddsRatioACGT: remainer<0.0 for count " << count << " and colsum " << colsum << std::endl;
         exit(-1);
@@ -216,8 +216,15 @@ void PSSM::normalizePSSM(const std::unordered_map<char, const double>& backgroun
 */
                         if (PSSM::debug) std::cerr << "I: Normalization of " << counts[i] << " counts at position " << i << " with column sum " << this->colsums[i] << " to ";
             // log odds ratio, smoothed by avoiding complete coverage
-                        counts[i] = PSSM::logOddsRatioACGT(counts[i]+1, this->colsums[i]+4);
+                        // logOdds
+                        // counts[i] = PSSM::logOddsRatioACGT(counts[i]+1, this->colsums[i]+4);
+                        // logRisk
+			//counts[i] = PSSM::logRelativeRiskACGT(counts[i]+1 / this->colsums[i]+4);
+			counts[i] = PSSM::logRelativeRiskACGT(counts[i] / this->colsums[i]);
                         if (PSSM::debug) std::cerr << counts[i] << std::endl;
+
+
+
                 }
         }
 }
