@@ -2,8 +2,10 @@
 CXX=g++
 CXXFLAGS=-std=c++23 -I/home/sm718/miniconda3/include
 CXXFLAGS += -g
-LDFLAGS=-lz -lbz2 -lm
-#LDFLAGS=/home/sm718/miniconda3/pkgs/zlib-1.3.1-h4ab18f5_1/lib/libz.a /home/sm718/miniconda3/pkgs/bzip2-1.0.8-h4bc722e_7/lib/libbz2.a -lm
+CXXFLAGS += -O3
+LDFLAGS=-lz -lbz2
+#LDFLAGS=/home/sm718/miniconda3/pkgs/zlib-1.3.1-h4ab18f5_1/lib/libz.a /home/sm718/miniconda3/pkgs/bzip2-1.0.8-h4bc722e_7/lib/libbz2.a 
+LDFLAGS += -lm
 
 SCRATCHDIR=/tmp
 SRCS=$(wildcard *.cpp)
@@ -15,7 +17,9 @@ GENOMEGZ=Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz
 
 .SUFFIXES: .gz .bed.gz .cpp .o .fasta .fa.gz _positive_$(CHR).bed _positive_$(CHR).bed.gz _negative_$(CHR).bed _negative_$(CHR).bed.gz _bidirect_$(CHR).bed.gz
 
-all: pssm_scan gtf_file_region_retrieval context
+BINARIES=pssm_scan gtf_file_region_retrieval context
+
+all: $(BINARIES)
 
 .cpp.o:
 	$(CXX) $(CXXFLAGS) -c $<
@@ -30,7 +34,7 @@ gtf_file_region_retrieval: gtf_file_region_retrieval.cpp progress.o gtf_file_reg
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 clean:
-	$(RM) gtf_file_region_retrieval pssm_scan
+	$(RM) $(BINARIES) *.o
 
 $(JASPAR):
 	wget https://jaspar2022.genereg.net/download/data/2022/CORE/JASPAR2022_CORE_non-redundant_pfms_jaspar.txt
@@ -55,15 +59,15 @@ output_Chr$(CHR)/%_negative_$(CHR).bed output_Chr$(CHR)/%_positive_$(CHR).bed:
 	    echo "Missing: output_Chr$(CHR)/$${NAME}_$${ACC}_positive_$(CHR).bed" ; \
 	    ./pssm_scan --outdir output_Chr$(CHR) --genome $(GENOME) -l 0 -m $$ACC --chr $(CHR) ; \
 	elif [ ! -f output_Chr$(CHR)/$${NAME}_$${ACC}_negative_$(CHR).bed ]; then \
-	    echo "Missing: ort -k 1,1 -k2,2n" ; \
-		./pssm_scan --outdir output_Chr$(CHR) --genome $(GENOME) -l 0 -m $$ACC --chr $(CHR) ; \
+	    echo "Missing: sort -k 1,1 -k2,2n" ; \
+	   ./pssm_scan --outdir output_Chr$(CHR) --genome $(GENOME) -l 0 -m $$ACC --chr $(CHR) ; \
 	fi
 
 %_bidirect_$(CHR).bed.gz: %_negative_$(CHR).bed.gz %_positive_$(CHR).bed.gz
-	zcat $^ | sort -S 2G -k 1,1 -k2,2n | gzip -c > $@
+	zcat $^ | sort -S 2G -k 1,1 -k2,2n | gzip -n -c > $@
 
 %.bed.gz: %.bed
-	gzip $<
+	gzip -n $<
 
 # Generate the list of targets
 SHELL=bash
@@ -81,7 +85,7 @@ $(shell basename $(GENOME) .fasta )_bottom500000.fasta: $(GENOME)
 
 genome_testdata: $(shell basename $(GENOME) .fasta )_bottom500000.fasta $(shell basename $(GENOME) .fasta )_top500000.fasta
 genome_testdata_gz: genome_testdata
-	gzip -k $(shell basename $(GENOME) .fasta )_bottom500000.fasta $(shell basename $(GENOME) .fasta )_top500000.fasta
+	gzip -n -k $(shell basename $(GENOME) .fasta )_bottom500000.fasta $(shell basename $(GENOME) .fasta )_top500000.fasta
 
 testGTF: gtf_file_region_retrieval
 	echo "TP73" |  ./gtf_file_region_retrieval
@@ -102,7 +106,7 @@ test: pssm_scan Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta Homo_sa
 output_Chr$(CHR): $(addprefix output_Chr$(CHR)/,$(BIDIRECT_FILES))
 
 TP73_datatable.bed.gz: context output_Chr$(CHR)/TP73_MA0861.1_bidirect_$(CHR).combined.bed.gz
-	./context output_Chr$(CHR)/TP73_MA0861.1_bidirect_$(CHR).combined.bed.gz output_Chr$(CHR)/*bidirect*.bed.gz | gzip -c > $@ || echo "I: Check ulimit -n 3000 if failing to open files"
+	./context output_Chr$(CHR)/TP73_MA0861.1_bidirect_$(CHR).combined.bed.gz output_Chr$(CHR)/*bidirect*.bed.gz | gzip -n -c > $@ || echo "I: Check ulimit -n 3000 if failing to open files"
 
 datatable: TP73_datatable.bed.gz
 
