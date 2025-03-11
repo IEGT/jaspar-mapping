@@ -418,6 +418,46 @@ ratio.skmel29_2.GFP.quantile.99.vs.ratio.saos2.GFP.quantile.99 <- ratio.skmel29_
 head(pretty.table(ratio.skmel29_2.GFP.quantile.99.vs.ratio.saos2.GFP.quantile.99),10)
 tail(pretty.table(ratio.skmel29_2.GFP.quantile.99.vs.ratio.saos2.GFP.quantile.99),10)
 
+# Singling out TAa and DNb
+
+mean.NumInWindow.filtered.saos2.TAa.quantile.90.wo.DNb.quantile.50 <- 
+    sapply(m[, ..cols.NumInWindow], function(X) mean(X[
+        m$"tp73_saos2_TA" >= sum.cutandrun.tp73.saos2.TAa.quantile.90 & m$"tp73_saos2_DN" <= sum.cutandrun.tp73.saos2.DNb.quantile.50
+        ]))
+
+mean.NumInWindow.filtered.saos2.DNb.quantile.90.wo.TAa.quantile.50 <- 
+    sapply(m[, ..cols.NumInWindow], function(X) mean(X[
+        m$"tp73_saos2_TA" >= sum.cutandrun.tp73.saos2.DNb.quantile.90 & m$"tp73_saos2_DN" <= sum.cutandrun.tp73.saos2.TAa.quantile.50
+        ]))
+
+ratio.saos2.TAa.quantile.90.wo.DNb.quantile.50.vs.saos2.DNb.quantile.90.wo.TAa.quantile.50 <-
+    mean.NumInWindow.filtered.saos2.TAa.quantile.90.wo.DNb.quantile.50 / mean.NumInWindow.filtered.saos2.DNb.quantile.90.wo.TAa.quantile.50
+
+head(pretty.table(ratio.saos2.TAa.quantile.90.wo.DNb.quantile.50.vs.saos2.DNb.quantile.90.wo.TAa.quantile.50),10)
+tail(pretty.table(ratio.saos2.TAa.quantile.90.wo.DNb.quantile.50.vs.saos2.DNb.quantile.90.wo.TAa.quantile.50),10)
+
+mean.NumInWindow.filtered.skmel29_2.TAa.quantile.90.wo.DNb.quantile.50 <- 
+    sapply(m[, ..cols.NumInWindow], function(X) mean(X[
+        m$"tp73_skmel29_2_TA" >= sum.cutandrun.tp73.skmel29_2.TAa.quantile.90 & m$"tp73_skmel29_2_DN" <= sum.cutandrun.tp73.skmel29_2.DNb.quantile.50
+        ]))
+
+mean.NumInWindow.filtered.skmel29_2.DNb.quantile.90.wo.TAa.quantile.50 <- 
+    sapply(m[, ..cols.NumInWindow], function(X) mean(X[
+        m$"tp73_skmel29_2_TA" >= sum.cutandrun.tp73.skmel29_2.DNb.quantile.90 & m$"tp73_skmel29_2_DN" <= sum.cutandrun.tp73.skmel29_2.TAa.quantile.50
+        ]))
+
+ratio.skmel29_2.TAa.quantile.90.wo.DNb.quantile.50.vs.skmel29_2.DNb.quantile.90.wo.TAa.quantile.50 <- 
+    mean.NumInWindow.filtered.skmel29_2.TAa.quantile.90.wo.DNb.quantile.50 / mean.NumInWindow.filtered.skmel29_2.DNb.quantile.90.wo.TAa.quantile.50
+head(pretty.table(ratio.skmel29_2.TAa.quantile.90.wo.DNb.quantile.50.vs.skmel29_2.DNb.quantile.90.wo.TAa.quantile.50),10)
+tail(pretty.table(ratio.skmel29_2.TAa.quantile.90.wo.DNb.quantile.50.vs.skmel29_2.DNb.quantile.90.wo.TAa.quantile.50),10)
+
+ratio.ratio.skmel29_2.vs.saos2.of.TAa.wo.DNb.vs.DNb.wo.TAa <- 
+    ratio.skmel29_2.TAa.quantile.90.wo.DNb.quantile.50.vs.skmel29_2.DNb.quantile.90.wo.TAa.quantile.50 /
+    ratio.saos2.TAa.quantile.90.wo.DNb.quantile.50.vs.saos2.DNb.quantile.90.wo.TAa.quantile.50
+
+head(pretty.table(ratio.ratio.skmel29_2.vs.saos2.of.TAa.wo.DNb.vs.DNb.wo.TAa),20)
+tail(pretty.table(ratio.ratio.skmel29_2.vs.saos2.of.TAa.wo.DNb.vs.DNb.wo.TAa),20)    
+
 
 ## Ugly?!?
 
@@ -445,10 +485,13 @@ prettyIdentifierJaspar <- function(X) {
 #####
 # Creates distance plots for the selected columns
 
+require(ggplot2)
+
 plotShiftOfBinding <- function(tf="TP73_MA0861.1",
                                tfbs.selection=NULL,
                                subset.name="unknown",
-                               binwidth=2
+                               binwidth=2,
+                               output.dir="images"
 
 ) {
     # Extract relevant columns from the data frame
@@ -490,11 +533,16 @@ plotShiftOfBinding <- function(tf="TP73_MA0861.1",
              size = 5, color = "black")  # Add annotation for number of data points
   
     # Save the plot to a file
-    ggsave(paste("histogram_of_shift_for_tf_",tf,"_subset_",subset.name,".png",sep=""),
+    dir.create(output.dir, showWarnings = FALSE, recursive = TRUE)
+    ggsave(paste(output.dir,paste("histogram_of_shift_for_tf_",tf,"_subset_",subset.name,".png",sep=""),sep="/"),
         plot=p, width=8, height=6, dpi=300)
 } 
 
-l <- list("TAa"=sum.cutandrun.tp73.TAa, "DNb"=sum.cutandrun.tp73.DNb, "GFP"=sum.cutandrun.tp73_GFP)
+l <- list("TAa"=sum.cutandrun.tp73.TAa>0, "DNb"=sum.cutandrun.tp73.DNb>0, "GFP"=sum.cutandrun.tp73.GFP>0,
+          "TAa_without_DNb"=sum.cutandrun.tp73.TAa>=sum.cutandrun.tp73.TAa.quantile.90 & 
+                            sum.cutandrun.tp73.DNb<=sum.cutandrun.tp73.DNb.quantile.50,
+          "DNb_without_TAa"=sum.cutandrun.tp73.DNb>=sum.cutandrun.tp73.DNb.quantile.90 & 
+                            sum.cutandrun.tp73.TAa<=sum.cutandrun.tp73.TAa.quantile.50)
 
 for (l.name in names(l)) {
     for(tf in c("TP73_MA0861.1","TP63_MA0525.2","TP53_MA0106.3",
