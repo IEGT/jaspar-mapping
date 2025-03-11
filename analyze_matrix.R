@@ -102,7 +102,7 @@ gc()
 
 sort(sum.NumInWindow)
 cat("I: Quantiles for individual CUT&RUN experiments:\n")
-print(quantiles.cutandruncutandrun)
+print(quantiles.cutandrun)
 cat("I: Quantiles for sum across all CUT&RUN experiments for p73-antibody:\n")
 print(quantile(sum.cutandrun.tp73,probs=c(0,25,50,75,90,95,99,99.5,99.9,100)/100) )
 cat("I: Quantiles for sum across all CUT&RUN experiments for p73-antibody in Saos cells:\n")
@@ -128,7 +128,7 @@ sum.cutandrun.tp73.DNb.quantile.50 <- max(quantile(sum.cutandrun.tp73.DNb,probs=
 sum.cutandrun.tp73.GFP.quantile.50 <- max(quantile(sum.cutandrun.tp73.GFP,probs=0.50),0.5) # 1
 sum.cutandrun.tp73.TAa.quantile.75 <- quantile(sum.cutandrun.tp73.TAa,probs=0.75) # 1
 sum.cutandrun.tp73.DNb.quantile.75 <- quantile(sum.cutandrun.tp73.DNb,probs=0.75) # 1
-sum.cutandrun.tp73.GFP.quantile.75 <- max(quantile(sum.cutandrun.tp73.GFP,probs=0.75) # 0, 0.5)
+sum.cutandrun.tp73.GFP.quantile.75 <- max(quantile(sum.cutandrun.tp73.GFP,probs=0.75), 0.5) # 0
 sum.cutandrun.tp73.TAa.quantile.90 <- quantile(sum.cutandrun.tp73.TAa,probs=0.90) # 2
 sum.cutandrun.tp73.DNb.quantile.90 <- quantile(sum.cutandrun.tp73.DNb,probs=0.90) # 2
 sum.cutandrun.tp73.GFP.quantile.90 <- quantile(sum.cutandrun.tp73.GFP,probs=0.90) # 1
@@ -244,30 +244,46 @@ ratio.tp73.99 <- (
                 sum(sum.cutandrun.tp73==0)      # Number of in TFBS that have no coverage in TP73 cut'n'run
             )
 
-ratio.pos.50 <- (sum.NumInWindow.filtered.50/sum(sum.cutandrun.pos >=sum.cutandrun.pos.quantile.50)) / (sum.NumInWindow.equal.0/sum(sum.cutandrun.pos==0))
-ratio.pos.75 <- (sum.NumInWindow.filtered.75/sum(sum.cutandrun.pos >=sum.cutandrun.pos.quantile.75)) / (sum.NumInWindow.equal.0/sum(sum.cutandrun.pos==0))
-ratio.pos.90 <- (sum.NumInWindow.filtered.90/sum(sum.cutandrun.pos >=sum.cutandrun.pos.quantile.90)) / (sum.NumInWindow.equal.0/sum(sum.cutandrun.pos==0))
-ratio.pos.95 <- (sum.NumInWindow.filtered.95/sum(sum.cutandrun.pos >=sum.cutandrun.pos.quantile.95)) / (sum.NumInWindow.equal.0/sum(sum.cutandrun.pos==0))
-ratio.pos.99 <- (sum.NumInWindow.filtered.99/sum(sum.cutandrun.pos >=sum.cutandrun.pos.quantile.99)) / (sum.NumInWindow.equal.0/sum(sum.cutandrun.pos==0))
-
+ratio.pos.50 <- (sum.NumInWindow.filtered.50/sum(sum.cutandrun.pos >= sum.cutandrun.pos.quantile.50)) / (sum.NumInWindow.equal.0/sum(sum.cutandrun.pos==0))
+ratio.pos.75 <- (sum.NumInWindow.filtered.75/sum(sum.cutandrun.pos >= sum.cutandrun.pos.quantile.75)) / (sum.NumInWindow.equal.0/sum(sum.cutandrun.pos==0))
+ratio.pos.90 <- (sum.NumInWindow.filtered.90/sum(sum.cutandrun.pos >= sum.cutandrun.pos.quantile.90)) / (sum.NumInWindow.equal.0/sum(sum.cutandrun.pos==0))
+ratio.pos.95 <- (sum.NumInWindow.filtered.95/sum(sum.cutandrun.pos >= sum.cutandrun.pos.quantile.95)) / (sum.NumInWindow.equal.0/sum(sum.cutandrun.pos==0))
+ratio.pos.99 <- (sum.NumInWindow.filtered.99/sum(sum.cutandrun.pos >= sum.cutandrun.pos.quantile.99)) / (sum.NumInWindow.equal.0/sum(sum.cutandrun.pos==0))
 
 gc()
-cat("head ratio@50\n")
-print(head(sort(ratio.50),5))
-cat("tail ratio@50\n")
-print(tail(sort(ratio.50),5))
-cat("head ratio@75\n")
-print(head(sort(ratio.75),5))
-cat("tail ratio@75\n")
-print(tail(sort(ratio.75),5))
-cat("head ratio@90\n")
-print(head(sort(ratio.90),5))
-cat("tail ratio@90\n")
-print(tail(sort(ratio.90),5))
-cat("head ratio@99\n")
-print(head(sort(ratio.99),5))
-cat("tail ratio@99\n")
-print(tail(sort(ratio.99),5))
+
+cat("head tp73 ratio@50\n")
+print(head(sort(ratio.tp73.50),5))
+cat("tail tp73 ratio@50\n")
+print(tail(sort(ratio.tp73.50),5))
+cat("head tp73 ratio@75\n")
+print(head(sort(ratio.tp73.75),5))
+cat("tail tp73 ratio@75\n")
+print(tail(sort(ratio.tp73.75),5))
+cat("head tp73 ratio@90\n")
+print(head(sort(ratio.tp73.90),5))
+cat("tail tp73 ratio@90\n")
+print(tail(sort(ratio.tp73.90),5))
+cat("head tp73 ratio@99\n")
+print(head(sort(ratio.tp73.99),5))
+cat("tail tp73 ratio@99\n")
+print(tail(sort(ratio.tp73.99),5))
+cat("head pos ratio@50\n")
+print(head(sort(ratio.pos.50),5))
+cat("tail pos ratio@50\n")
+print(tail(sort(ratio.pos.50),5))
+cat("head pos ratio@75\n")
+print(head(sort(ratio.pos.75),5))
+cat("tail pos ratio@75\n")
+print(tail(sort(ratio.pos.75),5))
+cat("head pos ratio@90\n")
+print(head(sort(ratio.pos.90),5))
+cat("tail pos ratio@90\n")
+print(tail(sort(ratio.pos.90),5))
+cat("head pos ratio@99\n")
+print(head(sort(ratio.pos.99),5))
+cat("tail pos ratio@99\n")
+print(tail(sort(ratio.pos.99),5))
 gc()
 
 pretty.table <- function(x) {
@@ -278,11 +294,16 @@ pretty.table <- function(x) {
     d
 }
 
-pretty.table(ratio.50)
-pretty.table(ratio.75)
-pretty.table(ratio.90)
-pretty.table(ratio.95)
-pretty.table(ratio.99)
+pretty.table(ratio.tp73.50)
+pretty.table(ratio.tp73.75)
+pretty.table(ratio.tp73.90)
+pretty.table(ratio.tp73.95)
+pretty.table(ratio.tp73.99)
+pretty.table(ratio.pos.50)
+pretty.table(ratio.pos.75)
+pretty.table(ratio.pos.90)
+pretty.table(ratio.pos.95)
+pretty.table(ratio.pos.99)
 
 # Enrichment 
 
@@ -296,44 +317,56 @@ ratio.TAa.quantile.90 <- (sum.NumInWindow.filtered.TAa.quantile.90/sum(sum.cutan
 ratio.TAa.quantile.95 <- (sum.NumInWindow.filtered.TAa.quantile.95/sum(sum.cutandrun.tp73.TAa>=sum.cutandrun.tp73.TAa.quantile.95)) / (sum.NumInWindow.equal.TAa.0/sum(sum.cutandrun.tp73.TAa==0))
 ratio.TAa.quantile.99 <- (sum.NumInWindow.filtered.TAa.quantile.99/sum(sum.cutandrun.tp73.TAa>=sum.cutandrun.tp73.TAa.quantile.99)) / (sum.NumInWindow.equal.TAa.0/sum(sum.cutandrun.tp73.TAa==0))
 sum.NumInWindow.equal.DNb.0 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.TAa == 0]))
-sum.NumInWindow.filtered.DNb.50 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.DNb >= sum.cutandrun.tp73.DNb.50]))
-sum.NumInWindow.filtered.DNb.90 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.DNb >= sum.cutandrun.tp73.DNb.90]))
-sum.NumInWindow.filtered.DNb.95 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.DNb >= sum.cutandrun.tp73.DNb.95]))
-sum.NumInWindow.filtered.DNb.99 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.DNb >= sum.cutandrun.tp73.DNb.99]))
-ratio.DNb.quantile.50 <- (sum.NumInWindow.filtered.DNb.50/sum(sum.cutandrun.tp73.DNb>=sum.cutandrun.tp73.DNb.50)) / (sum.NumInWindow.equal.DNb.0/sum(sum.cutandrun.tp73.DNb==0))
-ratio.DNb.quantile.90 <- (sum.NumInWindow.filtered.DNb.99/sum(sum.cutandrun.tp73.DNb>=sum.cutandrun.tp73.DNb.90)) / (sum.NumInWindow.equal.DNb.0/sum(sum.cutandrun.tp73.DNb==0))
-ratio.DNb.quantile.95 <- (sum.NumInWindow.filtered.DNb.95/sum(sum.cutandrun.tp73.DNb>=sum.cutandrun.tp73.DNb.95)) / (sum.NumInWindow.equal.DNb.0/sum(sum.cutandrun.tp73.DNb==0))
-ratio.DNb.quantile.99 <- (sum.NumInWindow.filtered.DNb.99/sum(sum.cutandrun.tp73.DNb>=sum.cutandrun.tp73.DNb.99)) / (sum.NumInWindow.equal.DNb.0/sum(sum.cutandrun.tp73.DNb==0))
+sum.NumInWindow.filtered.DNb.50 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.DNb >= sum.cutandrun.tp73.DNb.quantile.50]))
+sum.NumInWindow.filtered.DNb.90 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.DNb >= sum.cutandrun.tp73.DNb.quantile.90]))
+sum.NumInWindow.filtered.DNb.95 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.DNb >= sum.cutandrun.tp73.DNb.quantile.95]))
+sum.NumInWindow.filtered.DNb.99 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.DNb >= sum.cutandrun.tp73.DNb.quantile.99]))
+ratio.DNb.quantile.50 <- (sum.NumInWindow.filtered.DNb.50/sum(sum.cutandrun.tp73.DNb>=sum.cutandrun.tp73.DNb.quantile.50)) / (sum.NumInWindow.equal.DNb.0/sum(sum.cutandrun.tp73.DNb==0))
+ratio.DNb.quantile.90 <- (sum.NumInWindow.filtered.DNb.99/sum(sum.cutandrun.tp73.DNb>=sum.cutandrun.tp73.DNb.quantile.90)) / (sum.NumInWindow.equal.DNb.0/sum(sum.cutandrun.tp73.DNb==0))
+ratio.DNb.quantile.95 <- (sum.NumInWindow.filtered.DNb.95/sum(sum.cutandrun.tp73.DNb>=sum.cutandrun.tp73.DNb.quantile.95)) / (sum.NumInWindow.equal.DNb.0/sum(sum.cutandrun.tp73.DNb==0))
+ratio.DNb.quantile.99 <- (sum.NumInWindow.filtered.DNb.99/sum(sum.cutandrun.tp73.DNb>=sum.cutandrun.tp73.DNb.quantile.99)) / (sum.NumInWindow.equal.DNb.0/sum(sum.cutandrun.tp73.DNb==0))
 
-pretty.table(ratio.TAa.50)
-pretty.table(ratio.DNb.50)
+head(pretty.table(ratio.TAa.quantile.50))
+tail(pretty.table(ratio.TAa.quantile.50))
+head(pretty.table(ratio.DNb.quantile.50))
+tail(pretty.table(ratio.DNb.quantile.50))
+head(pretty.table(ratio.TAa.quantile.99))
+tail(pretty.table(ratio.TAa.quantile.99))
+head(pretty.table(ratio.DNb.quantile.99))
+tail(pretty.table(ratio.DNb.quantile.99))
 
-pretty.table(ratio.TAa.99)
-pretty.table(ratio.DNb.99)
+ratio.TAa.quantile.50.vs.ratio.DNb.quantile.50 <- ratio.TAa.quantile.50 / ratio.DNb.quantile.50
+head(pretty.table(ratio.TAa.quantile.50.vs.ratio.DNb.quantile.50))
+tail(pretty.table(ratio.TAa.quantile.50.vs.ratio.DNb.quantile.50))
 
-ratio.TAa.50.vs.ratio.DNb.50 <- ratio.TAa.50 / ratio.DNb.50
-pretty.table(ratio.TAa.50.vs.ratio.DNb.50)
+ratio.TAa.quantile.99.vs.ratio.DNb.quantile.99 <- ratio.TAa.quantile.99 / ratio.DNb.quantile.99
+head(pretty.table(ratio.TAa.quantile.99.vs.ratio.DNb.quantile.99))
+# Auffälligkeit p53
+tail(pretty.table(ratio.TAa.quantile.99.vs.ratio.DNb.quantile.99))
 
-ratio.TAa.99.vs.ratio.DNb.99 <- ratio.TAa.99 / ratio.DNb.99
-pretty.table(ratio.TAa.99.vs.ratio.DNb.99)
+
+
 
 sum.NumInWindow.equal.saos2.TAa.0 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_saos2_TA" == 0]))
-sum.NumInWindow.filtered.saos2.TAa.99 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_saos2_TA" >= sum.cutandrun.tp73_saos2.TAa.99]))
+sum.NumInWindow.filtered.saos2.TAa.quantile.99 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_saos2_TA" >= sum.cutandrun.tp73.saos2.TAa.quantile.99]))
                  # Number of TFBS for particular TF in top 1% of CUT&RUN confirmed sites
                                                        # Number of TFBS in top 1% of confirmed sites
-ratio.saos2.TAa.99 <- (sum.NumInWindow.filtered.saos2.TAa.99/sum(m$"tp73_saos2_TA">=sum.cutandrun.tp73_saos2.TAa.99)) / (sum.NumInWindow.equal.saos2.TAa.0/sum(m$"tp73_saos2_TA"==0))
+ratio.saos2.TAa.quantile.99 <- (sum.NumInWindow.filtered.saos2.TAa.quantile.99/sum(m$"tp73_saos2_TA">=sum.cutandrun.tp73.saos2.TAa.quantile.99)) / (sum.NumInWindow.equal.saos2.TAa.0/sum(m$"tp73_saos2_TA"==0))
 
 sum.NumInWindow.equal.saos2.DNb.0 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_saos2_DN" == 0]))
-sum.NumInWindow.filtered.saos2.DNb.99 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_saos2_DN" >= sum.cutandrun.tp73_saos2.DNb.99]))
-ratio.saos2.DNb.99 <- (sum.NumInWindow.filtered.saos2.DNb.99/sum(m$"tp73_saos2_DN">=sum.cutandrun.tp73_saos2.DNb.99)) / (sum.NumInWindow.equal.saos2.DNb.0/sum(m$"tp73_saos2_DN"==0))
+sum.NumInWindow.filtered.saos2.DNb.quantile.99 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_saos2_DN" >= sum.cutandrun.tp73.saos2.DNb.quantile.99]))
+ratio.saos2.DNb.quantile.99 <- (sum.NumInWindow.filtered.saos2.DNb.quantile.99/sum(m$"tp73_saos2_DN">=sum.cutandrun.tp73.saos2.DNb.quantile.99)) / (sum.NumInWindow.equal.saos2.DNb.0/sum(m$"tp73_saos2_DN"==0))
 
 sum.NumInWindow.equal.saos2.GFP.0 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_saos2_GFP" == 0]))
-sum.NumInWindow.filtered.saos2.GFP.99 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_saos2_GFP" >= sum.cutandrun.tp73_saos2.GFP.99]))
-ratio.saos2.GFP.99 <- (sum.NumInWindow.filtered.saos2.GFP.99/sum(m$"tp73_saos2_GFP">=sum.cutandrun.tp73_saos2.GFP.99)) / (sum.NumInWindow.equal.saos2.GFP.0/sum(m$"tp73_saos2_GFP"==0))
+sum.NumInWindow.filtered.saos2.GFP.quantile.99 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_saos2_GFP" >= sum.cutandrun.tp73.saos2.GFP.quantile.99]))
+ratio.saos2.GFP.quantile.99 <- (sum.NumInWindow.filtered.saos2.GFP.quantile.99/sum(m$"tp73_saos2_GFP">=sum.cutandrun.tp73.saos2.GFP.quantile.99)) / (sum.NumInWindow.equal.saos2.GFP.0/sum(m$"tp73_saos2_GFP"==0))
 
-pretty.table(ratio.saos2.TAa.99)
-pretty.table(ratio.saos2.DNb.99)
-pretty.table(ratio.saos2.GFP.99)
+head(pretty.table(ratio.saos2.TAa.quantile.99))
+tail(pretty.table(ratio.saos2.TAa.quantile.99))
+head(pretty.table(ratio.saos2.DNb.quantile.99))
+tail(pretty.table(ratio.saos2.DNb.quantile.99))
+head(pretty.table(ratio.saos2.GFP.quantile.99))
+tail(pretty.table(ratio.saos2.GFP.quantile.99))
 
 ratio.saos2.TAa.99.vs.ratio.saos2.DNb.99 <- ratio.saos2.TAa.99 / ratio.saos2.DNb.99
 pretty.table(ratio.saos2.TAa.99.vs.ratio.saos2.DNb.99)
@@ -344,37 +377,46 @@ pretty.table(ratio.saos2.DNb.99.vs.ratio.saos2.GFP.99)
 
 
 sum.NumInWindow.equal.skmel29_2.TAa.0 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_skmel29_2_TA" == 0]))
-sum.NumInWindow.filtered.skmel29_2.TAa.99 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_skmel29_2_TA" >= sum.cutandrun.tp73_skmel29_2.TAa.99]))
+sum.NumInWindow.filtered.skmel29_2.TAa.quantile.99 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_skmel29_2_TA" >= sum.cutandrun.tp73.skmel29_2.TAa.quantile.99]))
                  # Number of TFBS for particular TF in top 1% of CUT&RUN confirmed sites
                                                        # Number of TFBS in top 1% of confirmed sites
-ratio.skmel29_2.TAa.99 <- (sum.NumInWindow.filtered.skmel29_2.TAa.99/sum(m$"tp73_skmel29_2_TA">=sum.cutandrun.tp73_skmel29_2.TAa.99)) / (sum.NumInWindow.equal.skmel29_2.TAa.0/sum(m$"tp73_skmel29_2_TA"==0))
+ratio.skmel29_2.TAa.quantile.99 <- (sum.NumInWindow.filtered.skmel29_2.TAa.quantile.99/sum(m$"tp73_skmel29_2_TA">=sum.cutandrun.tp73.skmel29_2.TAa.quantile.99)) / (sum.NumInWindow.equal.skmel29_2.TAa.0/sum(m$"tp73_skmel29_2_TA"==0))
 
 sum.NumInWindow.equal.skmel29_2.DNb.0 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_skmel29_2_DN" == 0]))
-sum.NumInWindow.filtered.skmel29_2.DNb.99 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_skmel29_2_DN" >= sum.cutandrun.tp73_skmel29_2.DNb.99]))
-ratio.skmel29_2.DNb.99 <- (sum.NumInWindow.filtered.skmel29_2.DNb.99/sum(m$"tp73_skmel29_2_DN">=sum.cutandrun.tp73_skmel29_2.DNb.99)) / (sum.NumInWindow.equal.skmel29_2.DNb.0/sum(m$"tp73_skmel29_2_DN"==0))
+sum.NumInWindow.filtered.skmel29_2.DNb.quantile.99 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_skmel29_2_DN" >= sum.cutandrun.tp73.skmel29_2.DNb.quantile.99]))
+ratio.skmel29_2.DNb.quantile.99 <- (sum.NumInWindow.filtered.skmel29_2.DNb.quantile.99/sum(m$"tp73_skmel29_2_DN">=sum.cutandrun.tp73.skmel29_2.DNb.quantile.99)) / (sum.NumInWindow.equal.skmel29_2.DNb.0/sum(m$"tp73_skmel29_2_DN"==0))
 
 sum.NumInWindow.equal.skmel29_2.GFP.0 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_skmel29_2_GFP" == 0]))
-sum.NumInWindow.filtered.skmel29_2.GFP.99 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_skmel29_2_GFP" >= sum.cutandrun.tp73_skmel29_2.GFP.99]))
-ratio.skmel29_2.GFP.99 <- (sum.NumInWindow.filtered.skmel29_2.GFP.99/sum(m$"tp73_skmel29_2_GFP">=sum.cutandrun.tp73_skmel29_2.GFP.99)) / (sum.NumInWindow.equal.skmel29_2.GFP.0/sum(m$"tp73_skmel29_2_GFP"==0))
+sum.NumInWindow.filtered.skmel29_2.GFP.quantile.99 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_skmel29_2_GFP" >= sum.cutandrun.tp73.skmel29_2.GFP.quantile.99]))
+ratio.skmel29_2.GFP.quantile.99 <- (sum.NumInWindow.filtered.skmel29_2.GFP.quantile.99/sum(m$"tp73_skmel29_2_GFP">=sum.cutandrun.tp73.skmel29_2.GFP.quantile.99)) / (sum.NumInWindow.equal.skmel29_2.GFP.0/sum(m$"tp73_skmel29_2_GFP"==0))
 
-pretty.table(ratio.skmel29_2.TAa.99)
-pretty.table(ratio.skmel29_2.DNb.99)
-pretty.table(ratio.skmel29_2.GFP.99)
+head(pretty.table(ratio.skmel29_2.TAa.quantile.99),10)
+tail(pretty.table(ratio.skmel29_2.TAa.quantile.99),10)
+head(pretty.table(ratio.skmel29_2.DNb.quantile.99),10)
+tail(pretty.table(ratio.skmel29_2.DNb.quantile.99),10)
+head(pretty.table(ratio.skmel29_2.GFP.quantile.99),10)
+tail(pretty.table(ratio.skmel29_2.GFP.quantile.99),10)
 
-ratio.skmel29_2.TAa.99.vs.ratio.skmel29_2.DNb.99 <- ratio.skmel29_2.TAa.99 / ratio.skmel29_2.DNb.99
-pretty.table(ratio.skmel29_2.TAa.99.vs.ratio.skmel29_2.DNb.99)
-ratio.skmel29_2.TAa.99.vs.ratio.skmel29_2.GFP.99 <- ratio.skmel29_2.TAa.99 / ratio.skmel29_2.GFP.99
-pretty.table(ratio.skmel29_2.TAa.99.vs.ratio.skmel29_2.GFP.99)
-ratio.skmel29_2.DNb.99.vs.ratio.skmel29_2.GFP.99 <- ratio.skmel29_2.DNb.99 / ratio.skmel29_2.GFP.99
-pretty.table(ratio.skmel29_2.DNb.99.vs.ratio.skmel29_2.GFP.99)
+ratio.skmel29_2.TAa.quantile.99.vs.ratio.skmel29_2.DNb.quantile.99 <- ratio.skmel29_2.TAa.quantile.99 / ratio.skmel29_2.DNb.quantile.99
+head(pretty.table(ratio.skmel29_2.TAa.quantile.99.vs.ratio.skmel29_2.DNb.quantile.99),10)
+tail(pretty.table(ratio.skmel29_2.TAa.quantile.99.vs.ratio.skmel29_2.DNb.quantile.99),10)
+ratio.skmel29_2.TAa.quantile.99.vs.ratio.skmel29_2.GFP.quantile.99 <- ratio.skmel29_2.TAa.quantile.99 / ratio.skmel29_2.GFP.quantile.99
+head(pretty.table(ratio.skmel29_2.TAa.quantile.99.vs.ratio.skmel29_2.GFP.quantile.99),10)
+tail(pretty.table(ratio.skmel29_2.TAa.quantile.99.vs.ratio.skmel29_2.GFP.quantile.99),10)
+ratio.skmel29_2.DNb.quantile.99.vs.ratio.skmel29_2.GFP.quantile.99 <- ratio.skmel29_2.DNb.quantile.99 / ratio.skmel29_2.GFP.quantile.99
+head(pretty.table(ratio.skmel29_2.DNb.quantile.99.vs.ratio.skmel29_2.GFP.quantile.99),10)
+tail(pretty.table(ratio.skmel29_2.DNb.quantile.99.vs.ratio.skmel29_2.GFP.quantile.99),10)
 
 
-ratio.skmel29_2.TAa.99.vs.ratio.saos2.TAa.99 <- ratio.skmel29_2.TAa.99 / ratio.saos2.TAa.99
-pretty.table(ratio.skmel29_2.TAa.99.vs.ratio.saos2.TAa.99)
-ratio.skmel29_2.DNb.99.vs.ratio.saos2.DNb.99 <- ratio.skmel29_2.DNb.99 / ratio.saos2.DNb.99
-pretty.table(ratio.skmel29_2.DNb.99.vs.ratio.saos2.DNb.99)
-ratio.skmel29_2.GFP.99.vs.ratio.saos2.GFP.99 <- ratio.skmel29_2.GFP.99 / ratio.saos2.GFP.99
-pretty.table(ratio.skmel29_2.GFP.99.vs.ratio.saos2.GFP.99)
+ratio.skmel29_2.TAa.quantile.99.vs.ratio.saos2.TAa.quantile.99 <- ratio.skmel29_2.TAa.quantile.99 / ratio.saos2.TAa.quantile.99
+head(pretty.table(ratio.skmel29_2.TAa.quantile.99.vs.ratio.saos2.TAa.quantile.99),10)
+tail(pretty.table(ratio.skmel29_2.TAa.quantile.99.vs.ratio.saos2.TAa.quantile.99),10)
+ratio.skmel29_2.DNb.quantile.99.vs.ratio.saos2.DNb.quantile.99 <- ratio.skmel29_2.DNb.quantile.99 / ratio.saos2.DNb.quantile.99
+head(pretty.table(ratio.skmel29_2.DNb.quantile.99.vs.ratio.saos2.DNb.quantile.99),10)
+tail(pretty.table(ratio.skmel29_2.DNb.quantile.99.vs.ratio.saos2.DNb.quantile.99),10)
+ratio.skmel29_2.GFP.quantile.99.vs.ratio.saos2.GFP.quantile.99 <- ratio.skmel29_2.GFP.quantile.99 / ratio.saos2.GFP.quantile.99
+head(pretty.table(ratio.skmel29_2.GFP.quantile.99.vs.ratio.saos2.GFP.quantile.99),10)
+tail(pretty.table(ratio.skmel29_2.GFP.quantile.99.vs.ratio.saos2.GFP.quantile.99),10)
 
 
 ## Ugly?!?
