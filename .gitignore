@@ -12,3 +12,4 @@
 gtf_file_region_retrieval 
 pssm_scan
 context
+*.gz
