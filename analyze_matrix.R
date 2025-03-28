@@ -4,37 +4,6 @@
 
 options(width=180)
 
-# Import of multi-GB large compressed data file
-library(data.table)
-#m <- fread("TP73_datatable.bed.gz")
-m <- fread("TP73_datatable.01.bed.gz")
-print(colnames(m))
-
-# Identification of columns of particula type
-## NumInWIndow - number of binding sites of particular transcription factor
-cols.NumInWindow <- grepl("_NumInWindow", colnames(m))
-quantiles.NumInWindow <- sapply(m[, ..cols.NumInWindow], quantile, probs = c(0,0.25, 0.5, 0.75,1))
-sum.NumInWindow <- sapply(m[, ..cols.NumInWindow], sum)
-gc(full=T)
-
-## Score - computed affinity with which the TF is binding
-cols.Score <- grepl("_Score", colnames(m))
-quantiles.Score <- sapply(m[, ..cols.Score], quantile, probs = c(0,0.25, 0.5, 0.75,1), na.rm=TRUE)
-sum.Score <- sapply(m[, ..cols.Score], sum, na.rm=T)
-gc(full=T)
-
-## Identification of strand (same/other) at which the motif was found
-cols.StrandEqual <- grepl("_StrandEqual", colnames(m))
-
-## Selection of columns representing CUT&RUN data
-## This results in a data frame with columns representing the CUT&RUN data
-## with columns representing the individual PSSM and the strand of the motif
-## found in the genomic sequence.
-## The rows represent the individual binding sites of the TF. The value is
-## NA if the motif was not found within the window of 100 bp to either side of the
-## TP73 binding site. A value of 0 stands for the oposite strand, 1 for the same strand.
-selected_columns.StrandEqual <- m[, ..cols.StrandEqual]
-
 # Columns representing results from CUT&RUN data
 ## The names of the columns that represent the CUT&RUN data for the positions at which
 ## TP73 is binding.
@@ -65,6 +34,50 @@ cols.cutandrun.pos.GFP.saos  <- c("pos_saos2_GFP")
 cols.cutandrun.pos.TAa.skmel <- c("pos_skmel29_2_TA")
 cols.cutandrun.pos.DNb.skmel <- c("pos_skmel29_2_DN")
 cols.cutandrun.pos.GFP.skmel <- c("pos_skmel29_2_GFP")
+
+require(data.table)
+
+chromosome <- "22"
+filename <- paste("TP73_datatable_",chromosome,".bed.gz",sep="")
+
+# Import of multi-GB large compressed data file
+#m <- fread("TP73_datatable_1.bed.gz")
+m <- fread(filename,fill=FALSE,showProgress=TRUE)
+
+m.colnames <- colnames(m)
+m.colnames.basename <- basename(m.colnames)
+m.colnames.dirname <- dirname(m.colnames)
+colnames(m) <- m.colnames.basename
+
+
+gc()
+
+print(colnames(m))
+
+# Identification of columns of particula type
+## NumInWIndow - number of binding sites of particular transcription factor
+cols.NumInWindow <- grepl("_NumInWindow", colnames(m))
+quantiles.NumInWindow <- sapply(m[, ..cols.NumInWindow], quantile, probs = c(0,0.25, 0.5, 0.75,1))
+sum.NumInWindow <- sapply(m[, ..cols.NumInWindow], sum)
+gc(full=T)
+
+## Score - computed affinity with which the TF is binding
+cols.Score <- grepl("_Score", colnames(m))
+quantiles.Score <- sapply(m[, ..cols.Score], quantile, probs = c(0,0.25, 0.5, 0.75,1), na.rm=TRUE)
+sum.Score <- sapply(m[, ..cols.Score], sum, na.rm=T)
+gc(full=T)
+
+## Identification of strand (same/other) at which the motif was found
+cols.StrandEqual <- grepl("_StrandEqual", colnames(m))
+
+## Selection of columns representing CUT&RUN data
+## This results in a data frame with columns representing the CUT&RUN data
+## with columns representing the individual PSSM and the strand of the motif
+## found in the genomic sequence.
+## The rows represent the individual binding sites of the TF. The value is
+## NA if the motif was not found within the window of 100 bp to either side of the
+## TP73 binding site. A value of 0 stands for the oposite strand, 1 for the same strand.
+selected_columns.StrandEqual <- m[, ..cols.StrandEqual]
 
 
 # Determination of quantiles 
@@ -200,55 +213,61 @@ gc(full=T)
 
 # Association of CUT&RUN data with PSSM binding sites
 ## The number of PSSM matches that are in the top 1%,10%,25%,50% of CUT&RUN data
-sum.NumInWindow.equal.0 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73 == 0]))
-sum.NumInWindow.filtered.50 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73 >= sum.cutandrun.tp73.quantile.50]))
-sum.NumInWindow.filtered.75 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73 >= sum.cutandrun.tp73.quantile.75 ]))
-sum.NumInWindow.filtered.90 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73 >= sum.cutandrun.tp73.quantile.90 ]))
-sum.NumInWindow.filtered.95 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73 >= sum.cutandrun.tp73.quantile.95 ]))
-sum.NumInWindow.filtered.99 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73 >= sum.cutandrun.tp73.quantile.99 ]))
+sum.NumInWindow.tp73.equal.0 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73 == 0]))
+sum.NumInWindow.tp73.filtered.50 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73 >= sum.cutandrun.tp73.quantile.50]))
+sum.NumInWindow.tp73.filtered.75 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73 >= sum.cutandrun.tp73.quantile.75 ]))
+sum.NumInWindow.tp73.filtered.90 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73 >= sum.cutandrun.tp73.quantile.90 ]))
+sum.NumInWindow.tp73.filtered.95 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73 >= sum.cutandrun.tp73.quantile.95 ]))
+sum.NumInWindow.tp73.filtered.99 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73 >= sum.cutandrun.tp73.quantile.99 ]))
+sum.NumInWindow.pos.equal.0 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.pos == 0]))
+sum.NumInWindow.pos.filtered.50 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.pos >= sum.cutandrun.pos.quantile.50]))
+sum.NumInWindow.pos.filtered.75 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.pos >= sum.cutandrun.pos.quantile.75 ]))
+sum.NumInWindow.pos.filtered.90 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.pos >= sum.cutandrun.pos.quantile.90 ]))
+sum.NumInWindow.pos.filtered.95 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.pos >= sum.cutandrun.pos.quantile.95 ]))
+sum.NumInWindow.pos.filtered.99 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.pos >= sum.cutandrun.pos.quantile.99 ]))
 cat("head fitered@50\n")
-print(head(sort(sum.NumInWindow.filtered.50),5))
+print(head(sort(sum.NumInWindow.tp73.filtered.50),5))
 cat("head fitered@75\n")
-print(head(sort(sum.NumInWindow.filtered.75),5))
+print(head(sort(sum.NumInWindow.tp73.filtered.75),5))
 cat("head fitered@90\n")
-print(head(sort(sum.NumInWindow.filtered.90),5))
+print(head(sort(sum.NumInWindow.tp73.filtered.90),5))
 cat("head fitered@95\n")
-print(head(sort(sum.NumInWindow.filtered.95),5))
+print(head(sort(sum.NumInWindow.tp73.filtered.95),5))
 cat("head fitered@99\n")
-print(head(sort(sum.NumInWindow.filtered.99),5))
+print(head(sort(sum.NumInWindow.tp73.filtered.99),5))
 
 cat("tail fitered@50\n")
-print(tail(sort(sum.NumInWindow.filtered.50),5))
+print(tail(sort(sum.NumInWindow.tp73.filtered.50),5))
 cat("tail fitered@75\n")
-print(tail(sort(sum.NumInWindow.filtered.75),5))
+print(tail(sort(sum.NumInWindow.tp73.filtered.75),5))
 cat("tail fitered@90\n")
-print(tail(sort(sum.NumInWindow.filtered.90),5))
+print(tail(sort(sum.NumInWindow.tp73.filtered.90),5))
 cat("tail fitered@95\n")
-print(tail(sort(sum.NumInWindow.filtered.95),5))
+print(tail(sort(sum.NumInWindow.tp73.filtered.95),5))
 cat("tail fitered@99\n")
-print(tail(sort(sum.NumInWindow.filtered.99),5))
+print(tail(sort(sum.NumInWindow.tp73.filtered.99),5))
 gc()
 
-ratio.tp73.50 <- (sum.NumInWindow.filtered.50/sum(sum.cutandrun.tp73>=sum.cutandrun.tp73.quantile.50)) / (sum.NumInWindow.equal.0/sum(sum.cutandrun.tp73==0))
-ratio.tp73.75 <- (sum.NumInWindow.filtered.75/sum(sum.cutandrun.tp73>=sum.cutandrun.tp73.quantile.75)) / (sum.NumInWindow.equal.0/sum(sum.cutandrun.tp73==0))
-ratio.tp73.90 <- (sum.NumInWindow.filtered.90/sum(sum.cutandrun.tp73>=sum.cutandrun.tp73.quantile.90)) / (sum.NumInWindow.equal.0/sum(sum.cutandrun.tp73==0))
-ratio.tp73.95 <- (sum.NumInWindow.filtered.95/sum(sum.cutandrun.tp73>=sum.cutandrun.tp73.quantile.95)) / (sum.NumInWindow.equal.0/sum(sum.cutandrun.tp73==0))
+ratio.tp73.50 <- (sum.NumInWindow.tp73.filtered.50/sum(sum.cutandrun.tp73>=sum.cutandrun.tp73.quantile.50)) / (sum.NumInWindow.tp73.equal.0/sum(sum.cutandrun.tp73==0))
+ratio.tp73.75 <- (sum.NumInWindow.tp73.filtered.75/sum(sum.cutandrun.tp73>=sum.cutandrun.tp73.quantile.75)) / (sum.NumInWindow.tp73.equal.0/sum(sum.cutandrun.tp73==0))
+ratio.tp73.90 <- (sum.NumInWindow.tp73.filtered.90/sum(sum.cutandrun.tp73>=sum.cutandrun.tp73.quantile.90)) / (sum.NumInWindow.tp73.equal.0/sum(sum.cutandrun.tp73==0))
+ratio.tp73.95 <- (sum.NumInWindow.tp73.filtered.95/sum(sum.cutandrun.tp73>=sum.cutandrun.tp73.quantile.95)) / (sum.NumInWindow.tp73.equal.0/sum(sum.cutandrun.tp73==0))
 
 ratio.tp73.99 <- (
-                sum.NumInWindow.filtered.99     # Number of predicted occurences of TF in TFBS that are in top 1% of signals of TP73 cut'n'run
+                sum.NumInWindow.tp73.filtered.99     # Number of predicted occurences of TF in TFBS that are in top 1% of signals of TP73 cut'n'run
                  /
                 sum(sum.cutandrun.tp73>=sum.cutandrun.tp73.quantile.99) # Number of TFBS that constitute the top 1%
             ) / (
-                sum.NumInWindow.equal.0         # Number of predicted occurences of TF in TFBS that have no coverage in TP73 cut'n'run
+                sum.NumInWindow.tp73.equal.0         # Number of predicted occurences of TF in TFBS that have no coverage in TP73 cut'n'run
                 /
                 sum(sum.cutandrun.tp73==0)      # Number of in TFBS that have no coverage in TP73 cut'n'run
             )
 
-ratio.pos.50 <- (sum.NumInWindow.filtered.50/sum(sum.cutandrun.pos >= sum.cutandrun.pos.quantile.50)) / (sum.NumInWindow.equal.0/sum(sum.cutandrun.pos==0))
-ratio.pos.75 <- (sum.NumInWindow.filtered.75/sum(sum.cutandrun.pos >= sum.cutandrun.pos.quantile.75)) / (sum.NumInWindow.equal.0/sum(sum.cutandrun.pos==0))
-ratio.pos.90 <- (sum.NumInWindow.filtered.90/sum(sum.cutandrun.pos >= sum.cutandrun.pos.quantile.90)) / (sum.NumInWindow.equal.0/sum(sum.cutandrun.pos==0))
-ratio.pos.95 <- (sum.NumInWindow.filtered.95/sum(sum.cutandrun.pos >= sum.cutandrun.pos.quantile.95)) / (sum.NumInWindow.equal.0/sum(sum.cutandrun.pos==0))
-ratio.pos.99 <- (sum.NumInWindow.filtered.99/sum(sum.cutandrun.pos >= sum.cutandrun.pos.quantile.99)) / (sum.NumInWindow.equal.0/sum(sum.cutandrun.pos==0))
+ratio.pos.50 <- (sum.NumInWindow.pos.filtered.50/sum(sum.cutandrun.pos >= sum.cutandrun.pos.quantile.50)) / (sum.NumInWindow.tp73.equal.0/sum(sum.cutandrun.pos==0))
+ratio.pos.75 <- (sum.NumInWindow.pos.filtered.75/sum(sum.cutandrun.pos >= sum.cutandrun.pos.quantile.75)) / (sum.NumInWindow.tp73.equal.0/sum(sum.cutandrun.pos==0))
+ratio.pos.90 <- (sum.NumInWindow.pos.filtered.90/sum(sum.cutandrun.pos >= sum.cutandrun.pos.quantile.90)) / (sum.NumInWindow.tp73.equal.0/sum(sum.cutandrun.pos==0))
+ratio.pos.95 <- (sum.NumInWindow.pos.filtered.95/sum(sum.cutandrun.pos >= sum.cutandrun.pos.quantile.95)) / (sum.NumInWindow.tp73.equal.0/sum(sum.cutandrun.pos==0))
+ratio.pos.99 <- (sum.NumInWindow.pos.filtered.99/sum(sum.cutandrun.pos >= sum.cutandrun.pos.quantile.99)) / (sum.NumInWindow.tp73.equal.0/sum(sum.cutandrun.pos==0))
 
 gc()
 
@@ -286,79 +305,154 @@ cat("tail pos ratio@99\n")
 print(tail(sort(ratio.pos.99),5))
 gc()
 
-pretty.table <- function(x) {
+pretty.table <- function(x,sep.inner=" (") {
     x.sort <- sort(x)
-    d<-data.frame(sapply(strsplit(x=names(x.sort),split="_"),function(X) paste(X[1]," (",X[2],")",sep="")), round(x.sort,3))
+    d<-data.frame(sapply(strsplit(x=names(x.sort),split="_"),function(X) paste(X[1],sep.inner,X[2],
+                                                                               ifelse(sep.inner %in% c("("," ("),")",""),sep="")),
+                  round(x.sort,3))
     rownames(d) <- NULL
     colnames(d) <- c("TF","Ratio")
     d
 }
 
-pretty.table(ratio.tp73.50)
-pretty.table(ratio.tp73.75)
-pretty.table(ratio.tp73.90)
-pretty.table(ratio.tp73.95)
-pretty.table(ratio.tp73.99)
-pretty.table(ratio.pos.50)
-pretty.table(ratio.pos.75)
-pretty.table(ratio.pos.90)
-pretty.table(ratio.pos.95)
-pretty.table(ratio.pos.99)
+reportdir <- "Reports"
+dir.create(path=reportdir,recursive=TRUE)
+write.table(file=paste(reportdir,paste("report_ratio_tp73_chr_",chromosome,"_quantile_",50,".tsv",sep=""),sep="/"),x=pretty.table(ratio.tp73.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_tp73_chr_",chromosome,"_quantile_",75,".tsv",sep=""),sep="/"),x=pretty.table(ratio.tp73.75),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_tp73_chr_",chromosome,"_quantile_",90,".tsv",sep=""),sep="/"),x=pretty.table(ratio.tp73.90),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_tp73_chr_",chromosome,"_quantile_",95,".tsv",sep=""),sep="/"),x=pretty.table(ratio.tp73.95),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_tp73_chr_",chromosome,"_quantile_",99,".tsv",sep=""),sep="/"),x=pretty.table(ratio.tp73.99),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_pos_chr_",chromosome,"_quantile_",50,".tsv",sep=""),sep="/"),x=pretty.table(ratio.pos.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_pos_chr_",chromosome,"_quantile_",75,".tsv",sep=""),sep="/"),x=pretty.table(ratio.pos.75),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_pos_chr_",chromosome,"_quantile_",90,".tsv",sep=""),sep="/"),x=pretty.table(ratio.pos.90),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_pos_chr_",chromosome,"_quantile_",95,".tsv",sep=""),sep="/"),x=pretty.table(ratio.pos.95),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_pos_chr_",chromosome,"_quantile_",99,".tsv",sep=""),sep="/"),x=pretty.table(ratio.pos.99),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+gc()
 
 # Enrichment 
 
 sum.NumInWindow.equal.TAa.0 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.TAa == 0]))
 sum.NumInWindow.filtered.TAa.quantile.50 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.TAa >= sum.cutandrun.tp73.TAa.quantile.50]))
+sum.NumInWindow.filtered.TAa.quantile.75 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.TAa >= sum.cutandrun.tp73.TAa.quantile.75]))
 sum.NumInWindow.filtered.TAa.quantile.90 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.TAa >= sum.cutandrun.tp73.TAa.quantile.90]))
 sum.NumInWindow.filtered.TAa.quantile.95 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.TAa >= sum.cutandrun.tp73.TAa.quantile.95]))
 sum.NumInWindow.filtered.TAa.quantile.99 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.TAa >= sum.cutandrun.tp73.TAa.quantile.99]))
 ratio.TAa.quantile.50 <- (sum.NumInWindow.filtered.TAa.quantile.50/sum(sum.cutandrun.tp73.TAa>=sum.cutandrun.tp73.TAa.quantile.50)) / (sum.NumInWindow.equal.TAa.0/sum(sum.cutandrun.tp73.TAa==0))
+ratio.TAa.quantile.75 <- (sum.NumInWindow.filtered.TAa.quantile.75/sum(sum.cutandrun.tp73.TAa>=sum.cutandrun.tp73.TAa.quantile.75)) / (sum.NumInWindow.equal.TAa.0/sum(sum.cutandrun.tp73.TAa==0))
 ratio.TAa.quantile.90 <- (sum.NumInWindow.filtered.TAa.quantile.90/sum(sum.cutandrun.tp73.TAa>=sum.cutandrun.tp73.TAa.quantile.90)) / (sum.NumInWindow.equal.TAa.0/sum(sum.cutandrun.tp73.TAa==0))
 ratio.TAa.quantile.95 <- (sum.NumInWindow.filtered.TAa.quantile.95/sum(sum.cutandrun.tp73.TAa>=sum.cutandrun.tp73.TAa.quantile.95)) / (sum.NumInWindow.equal.TAa.0/sum(sum.cutandrun.tp73.TAa==0))
 ratio.TAa.quantile.99 <- (sum.NumInWindow.filtered.TAa.quantile.99/sum(sum.cutandrun.tp73.TAa>=sum.cutandrun.tp73.TAa.quantile.99)) / (sum.NumInWindow.equal.TAa.0/sum(sum.cutandrun.tp73.TAa==0))
-sum.NumInWindow.equal.DNb.0 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.TAa == 0]))
-sum.NumInWindow.filtered.DNb.50 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.DNb >= sum.cutandrun.tp73.DNb.quantile.50]))
-sum.NumInWindow.filtered.DNb.90 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.DNb >= sum.cutandrun.tp73.DNb.quantile.90]))
-sum.NumInWindow.filtered.DNb.95 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.DNb >= sum.cutandrun.tp73.DNb.quantile.95]))
-sum.NumInWindow.filtered.DNb.99 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.DNb >= sum.cutandrun.tp73.DNb.quantile.99]))
-ratio.DNb.quantile.50 <- (sum.NumInWindow.filtered.DNb.50/sum(sum.cutandrun.tp73.DNb>=sum.cutandrun.tp73.DNb.quantile.50)) / (sum.NumInWindow.equal.DNb.0/sum(sum.cutandrun.tp73.DNb==0))
-ratio.DNb.quantile.90 <- (sum.NumInWindow.filtered.DNb.99/sum(sum.cutandrun.tp73.DNb>=sum.cutandrun.tp73.DNb.quantile.90)) / (sum.NumInWindow.equal.DNb.0/sum(sum.cutandrun.tp73.DNb==0))
-ratio.DNb.quantile.95 <- (sum.NumInWindow.filtered.DNb.95/sum(sum.cutandrun.tp73.DNb>=sum.cutandrun.tp73.DNb.quantile.95)) / (sum.NumInWindow.equal.DNb.0/sum(sum.cutandrun.tp73.DNb==0))
-ratio.DNb.quantile.99 <- (sum.NumInWindow.filtered.DNb.99/sum(sum.cutandrun.tp73.DNb>=sum.cutandrun.tp73.DNb.quantile.99)) / (sum.NumInWindow.equal.DNb.0/sum(sum.cutandrun.tp73.DNb==0))
+sum.NumInWindow.equal.DNb.0 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.DNb == 0]))
+sum.NumInWindow.filtered.DNb.quantile.50 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.DNb >= sum.cutandrun.tp73.DNb.quantile.50]))
+sum.NumInWindow.filtered.DNb.quantile.75 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.DNb >= sum.cutandrun.tp73.DNb.quantile.75]))
+sum.NumInWindow.filtered.DNb.quantile.90 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.DNb >= sum.cutandrun.tp73.DNb.quantile.90]))
+sum.NumInWindow.filtered.DNb.quantile.95 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.DNb >= sum.cutandrun.tp73.DNb.quantile.95]))
+sum.NumInWindow.filtered.DNb.quantile.99 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.DNb >= sum.cutandrun.tp73.DNb.quantile.99]))
+ratio.DNb.quantile.50 <- (sum.NumInWindow.filtered.DNb.quantile.50/sum(sum.cutandrun.tp73.DNb>=sum.cutandrun.tp73.DNb.quantile.50)) / (sum.NumInWindow.equal.DNb.0/sum(sum.cutandrun.tp73.DNb==0))
+ratio.DNb.quantile.75 <- (sum.NumInWindow.filtered.DNb.quantile.75/sum(sum.cutandrun.tp73.DNb>=sum.cutandrun.tp73.DNb.quantile.75)) / (sum.NumInWindow.equal.DNb.0/sum(sum.cutandrun.tp73.DNb==0))
+ratio.DNb.quantile.90 <- (sum.NumInWindow.filtered.DNb.quantile.99/sum(sum.cutandrun.tp73.DNb>=sum.cutandrun.tp73.DNb.quantile.90)) / (sum.NumInWindow.equal.DNb.0/sum(sum.cutandrun.tp73.DNb==0))
+ratio.DNb.quantile.95 <- (sum.NumInWindow.filtered.DNb.quantile.95/sum(sum.cutandrun.tp73.DNb>=sum.cutandrun.tp73.DNb.quantile.95)) / (sum.NumInWindow.equal.DNb.0/sum(sum.cutandrun.tp73.DNb==0))
+ratio.DNb.quantile.99 <- (sum.NumInWindow.filtered.DNb.quantile.99/sum(sum.cutandrun.tp73.DNb>=sum.cutandrun.tp73.DNb.quantile.99)) / (sum.NumInWindow.equal.DNb.0/sum(sum.cutandrun.tp73.DNb==0))
+sum.NumInWindow.equal.GFP.0 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.GFP == 0]))
+sum.NumInWindow.filtered.GFP.quantile.50 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.GFP >= sum.cutandrun.tp73.GFP.quantile.50]))
+sum.NumInWindow.filtered.GFP.quantile.75 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.GFP >= sum.cutandrun.tp73.GFP.quantile.75]))
+sum.NumInWindow.filtered.GFP.quantile.90 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.GFP >= sum.cutandrun.tp73.GFP.quantile.90]))
+sum.NumInWindow.filtered.GFP.quantile.95 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.GFP >= sum.cutandrun.tp73.GFP.quantile.95]))
+sum.NumInWindow.filtered.GFP.quantile.99 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[sum.cutandrun.tp73.GFP >= sum.cutandrun.tp73.GFP.quantile.99]))
+ratio.GFP.quantile.50 <- (sum.NumInWindow.filtered.GFP.quantile.50/sum(sum.cutandrun.tp73.GFP>=sum.cutandrun.tp73.GFP.quantile.50)) / (sum.NumInWindow.equal.GFP.0/sum(sum.cutandrun.tp73.GFP==0))
+ratio.GFP.quantile.75 <- (sum.NumInWindow.filtered.GFP.quantile.75/sum(sum.cutandrun.tp73.GFP>=sum.cutandrun.tp73.GFP.quantile.75)) / (sum.NumInWindow.equal.GFP.0/sum(sum.cutandrun.tp73.GFP==0))
+ratio.GFP.quantile.90 <- (sum.NumInWindow.filtered.GFP.quantile.90/sum(sum.cutandrun.tp73.GFP>=sum.cutandrun.tp73.GFP.quantile.90)) / (sum.NumInWindow.equal.GFP.0/sum(sum.cutandrun.tp73.GFP==0))
+ratio.GFP.quantile.95 <- (sum.NumInWindow.filtered.GFP.quantile.95/sum(sum.cutandrun.tp73.GFP>=sum.cutandrun.tp73.GFP.quantile.95)) / (sum.NumInWindow.equal.GFP.0/sum(sum.cutandrun.tp73.GFP==0))
+ratio.GFP.quantile.99 <- (sum.NumInWindow.filtered.GFP.quantile.99/sum(sum.cutandrun.tp73.GFP>=sum.cutandrun.tp73.GFP.quantile.99)) / (sum.NumInWindow.equal.GFP.0/sum(sum.cutandrun.tp73.GFP==0))
 
 head(pretty.table(ratio.TAa.quantile.50))
 tail(pretty.table(ratio.TAa.quantile.50))
 head(pretty.table(ratio.DNb.quantile.50))
 tail(pretty.table(ratio.DNb.quantile.50))
+head(pretty.table(ratio.GFP.quantile.50))
+tail(pretty.table(ratio.GFP.quantile.50))
 head(pretty.table(ratio.TAa.quantile.99))
 tail(pretty.table(ratio.TAa.quantile.99))
 head(pretty.table(ratio.DNb.quantile.99))
 tail(pretty.table(ratio.DNb.quantile.99))
+head(pretty.table(ratio.GFP.quantile.99))
+tail(pretty.table(ratio.GFP.quantile.99))
+
+write.table(file=paste(reportdir,paste("report_ratio_TAa_vs_empty_chr_",chromosome,"_quantile_",50,".tsv",sep=""),sep="/"),x=pretty.table(ratio.TAa.quantile.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_TAa_vs_empty_chr_",chromosome,"_quantile_",75,".tsv",sep=""),sep="/"),x=pretty.table(ratio.TAa.quantile.75),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_TAa_vs_empty_chr_",chromosome,"_quantile_",90,".tsv",sep=""),sep="/"),x=pretty.table(ratio.TAa.quantile.90),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_TAa_vs_empty_chr_",chromosome,"_quantile_",95,".tsv",sep=""),sep="/"),x=pretty.table(ratio.TAa.quantile.95),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_TAa_vs_empty_chr_",chromosome,"_quantile_",99,".tsv",sep=""),sep="/"),x=pretty.table(ratio.TAa.quantile.99),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+
+write.table(file=paste(reportdir,paste("report_ratio_DNb_vs_empty_chr_",chromosome,"_quantile_",50,".tsv",sep=""),sep="/"),x=pretty.table(ratio.DNb.quantile.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_DNb_vs_empty_chr_",chromosome,"_quantile_",75,".tsv",sep=""),sep="/"),x=pretty.table(ratio.DNb.quantile.75),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_DNb_vs_empty_chr_",chromosome,"_quantile_",90,".tsv",sep=""),sep="/"),x=pretty.table(ratio.DNb.quantile.90),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_DNb_vs_empty_chr_",chromosome,"_quantile_",95,".tsv",sep=""),sep="/"),x=pretty.table(ratio.DNb.quantile.95),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_DNb_vs_empty_chr_",chromosome,"_quantile_",99,".tsv",sep=""),sep="/"),x=pretty.table(ratio.DNb.quantile.99),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+
+write.table(file=paste(reportdir,paste("report_ratio_GFP_vs_empty_chr_",chromosome,"_quantile_",50,".tsv",sep=""),sep="/"),x=pretty.table(ratio.GFP.quantile.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_GFP_vs_empty_chr_",chromosome,"_quantile_",75,".tsv",sep=""),sep="/"),x=pretty.table(ratio.GFP.quantile.75),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_GFP_vs_empty_chr_",chromosome,"_quantile_",90,".tsv",sep=""),sep="/"),x=pretty.table(ratio.GFP.quantile.90),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_GFP_vs_empty_chr_",chromosome,"_quantile_",95,".tsv",sep=""),sep="/"),x=pretty.table(ratio.GFP.quantile.95),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_GFP_vs_empty_chr_",chromosome,"_quantile_",99,".tsv",sep=""),sep="/"),x=pretty.table(ratio.GFP.quantile.99),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+
 
 ratio.TAa.quantile.50.vs.ratio.DNb.quantile.50 <- ratio.TAa.quantile.50 / ratio.DNb.quantile.50
 head(pretty.table(ratio.TAa.quantile.50.vs.ratio.DNb.quantile.50))
 tail(pretty.table(ratio.TAa.quantile.50.vs.ratio.DNb.quantile.50))
-
+ratio.TAa.quantile.75.vs.ratio.DNb.quantile.75 <- ratio.TAa.quantile.75 / ratio.DNb.quantile.75
+ratio.TAa.quantile.90.vs.ratio.DNb.quantile.90 <- ratio.TAa.quantile.90 / ratio.DNb.quantile.90
+ratio.TAa.quantile.95.vs.ratio.DNb.quantile.95 <- ratio.TAa.quantile.95 / ratio.DNb.quantile.95
 ratio.TAa.quantile.99.vs.ratio.DNb.quantile.99 <- ratio.TAa.quantile.99 / ratio.DNb.quantile.99
 head(pretty.table(ratio.TAa.quantile.99.vs.ratio.DNb.quantile.99))
 # Auffälligkeit p53
 tail(pretty.table(ratio.TAa.quantile.99.vs.ratio.DNb.quantile.99))
 
 
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_TAa_vs_empty__vs__DNb_vs_empty_chr_",chromosome,"_quantile_",50,".tsv",sep=""),sep="/"),x=pretty.table(ratio.TAa.quantile.50.vs.ratio.DNb.quantile.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_TAa_vs_empty__vs__DNb_vs_empty_chr_",chromosome,"_quantile_",75,".tsv",sep=""),sep="/"),x=pretty.table(ratio.TAa.quantile.75.vs.ratio.DNb.quantile.75),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_TAa_vs_empty__vs__DNb_vs_empty_chr_",chromosome,"_quantile_",90,".tsv",sep=""),sep="/"),x=pretty.table(ratio.TAa.quantile.90.vs.ratio.DNb.quantile.90),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_TAa_vs_empty__vs__DNb_vs_empty_chr_",chromosome,"_quantile_",95,".tsv",sep=""),sep="/"),x=pretty.table(ratio.TAa.quantile.95.vs.ratio.DNb.quantile.95),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_TAa_vs_empty__vs__DNb_vs_empty_chr_",chromosome,"_quantile_",99,".tsv",sep=""),sep="/"),x=pretty.table(ratio.TAa.quantile.99.vs.ratio.DNb.quantile.99),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+
 
 
 sum.NumInWindow.equal.saos2.TAa.0 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_saos2_TA" == 0]))
+sum.NumInWindow.filtered.saos2.TAa.quantile.50 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_saos2_TA" >= sum.cutandrun.tp73.saos2.TAa.quantile.50]))
+sum.NumInWindow.filtered.saos2.TAa.quantile.75 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_saos2_TA" >= sum.cutandrun.tp73.saos2.TAa.quantile.75]))
+sum.NumInWindow.filtered.saos2.TAa.quantile.90 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_saos2_TA" >= sum.cutandrun.tp73.saos2.TAa.quantile.90]))
+sum.NumInWindow.filtered.saos2.TAa.quantile.95 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_saos2_TA" >= sum.cutandrun.tp73.saos2.TAa.quantile.95]))
 sum.NumInWindow.filtered.saos2.TAa.quantile.99 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_saos2_TA" >= sum.cutandrun.tp73.saos2.TAa.quantile.99]))
                  # Number of TFBS for particular TF in top 1% of CUT&RUN confirmed sites
                                                        # Number of TFBS in top 1% of confirmed sites
+ratio.saos2.TAa.quantile.50 <- (sum.NumInWindow.filtered.saos2.TAa.quantile.50/sum(m$"tp73_saos2_TA">=sum.cutandrun.tp73.saos2.TAa.quantile.50)) / (sum.NumInWindow.equal.saos2.TAa.0/sum(m$"tp73_saos2_TA"==0))
+ratio.saos2.TAa.quantile.75 <- (sum.NumInWindow.filtered.saos2.TAa.quantile.75/sum(m$"tp73_saos2_TA">=sum.cutandrun.tp73.saos2.TAa.quantile.75)) / (sum.NumInWindow.equal.saos2.TAa.0/sum(m$"tp73_saos2_TA"==0))
+ratio.saos2.TAa.quantile.90 <- (sum.NumInWindow.filtered.saos2.TAa.quantile.90/sum(m$"tp73_saos2_TA">=sum.cutandrun.tp73.saos2.TAa.quantile.90)) / (sum.NumInWindow.equal.saos2.TAa.0/sum(m$"tp73_saos2_TA"==0))
+ratio.saos2.TAa.quantile.95 <- (sum.NumInWindow.filtered.saos2.TAa.quantile.95/sum(m$"tp73_saos2_TA">=sum.cutandrun.tp73.saos2.TAa.quantile.95)) / (sum.NumInWindow.equal.saos2.TAa.0/sum(m$"tp73_saos2_TA"==0))
 ratio.saos2.TAa.quantile.99 <- (sum.NumInWindow.filtered.saos2.TAa.quantile.99/sum(m$"tp73_saos2_TA">=sum.cutandrun.tp73.saos2.TAa.quantile.99)) / (sum.NumInWindow.equal.saos2.TAa.0/sum(m$"tp73_saos2_TA"==0))
 
 sum.NumInWindow.equal.saos2.DNb.0 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_saos2_DN" == 0]))
+sum.NumInWindow.filtered.saos2.DNb.quantile.50 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_saos2_DN" >= sum.cutandrun.tp73.saos2.DNb.quantile.50]))
+sum.NumInWindow.filtered.saos2.DNb.quantile.75 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_saos2_DN" >= sum.cutandrun.tp73.saos2.DNb.quantile.75]))
+sum.NumInWindow.filtered.saos2.DNb.quantile.90 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_saos2_DN" >= sum.cutandrun.tp73.saos2.DNb.quantile.90]))
+sum.NumInWindow.filtered.saos2.DNb.quantile.95 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_saos2_DN" >= sum.cutandrun.tp73.saos2.DNb.quantile.95]))
 sum.NumInWindow.filtered.saos2.DNb.quantile.99 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_saos2_DN" >= sum.cutandrun.tp73.saos2.DNb.quantile.99]))
+ratio.saos2.DNb.quantile.50 <- (sum.NumInWindow.filtered.saos2.DNb.quantile.50/sum(m$"tp73_saos2_DN">=sum.cutandrun.tp73.saos2.DNb.quantile.50)) / (sum.NumInWindow.equal.saos2.DNb.0/sum(m$"tp73_saos2_DN"==0))
+ratio.saos2.DNb.quantile.75 <- (sum.NumInWindow.filtered.saos2.DNb.quantile.75/sum(m$"tp73_saos2_DN">=sum.cutandrun.tp73.saos2.DNb.quantile.75)) / (sum.NumInWindow.equal.saos2.DNb.0/sum(m$"tp73_saos2_DN"==0))
+ratio.saos2.DNb.quantile.90 <- (sum.NumInWindow.filtered.saos2.DNb.quantile.90/sum(m$"tp73_saos2_DN">=sum.cutandrun.tp73.saos2.DNb.quantile.90)) / (sum.NumInWindow.equal.saos2.DNb.0/sum(m$"tp73_saos2_DN"==0))
+ratio.saos2.DNb.quantile.95 <- (sum.NumInWindow.filtered.saos2.DNb.quantile.95/sum(m$"tp73_saos2_DN">=sum.cutandrun.tp73.saos2.DNb.quantile.95)) / (sum.NumInWindow.equal.saos2.DNb.0/sum(m$"tp73_saos2_DN"==0))
 ratio.saos2.DNb.quantile.99 <- (sum.NumInWindow.filtered.saos2.DNb.quantile.99/sum(m$"tp73_saos2_DN">=sum.cutandrun.tp73.saos2.DNb.quantile.99)) / (sum.NumInWindow.equal.saos2.DNb.0/sum(m$"tp73_saos2_DN"==0))
 
 sum.NumInWindow.equal.saos2.GFP.0 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_saos2_GFP" == 0]))
+sum.NumInWindow.filtered.saos2.GFP.quantile.50 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_saos2_GFP" >= sum.cutandrun.tp73.saos2.GFP.quantile.50]))
+sum.NumInWindow.filtered.saos2.GFP.quantile.75 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_saos2_GFP" >= sum.cutandrun.tp73.saos2.GFP.quantile.75]))
+sum.NumInWindow.filtered.saos2.GFP.quantile.90 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_saos2_GFP" >= sum.cutandrun.tp73.saos2.GFP.quantile.90]))
+sum.NumInWindow.filtered.saos2.GFP.quantile.95 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_saos2_GFP" >= sum.cutandrun.tp73.saos2.GFP.quantile.95]))
 sum.NumInWindow.filtered.saos2.GFP.quantile.99 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_saos2_GFP" >= sum.cutandrun.tp73.saos2.GFP.quantile.99]))
+ratio.saos2.GFP.quantile.50 <- (sum.NumInWindow.filtered.saos2.GFP.quantile.50/sum(m$"tp73_saos2_GFP">=sum.cutandrun.tp73.saos2.GFP.quantile.50)) / (sum.NumInWindow.equal.saos2.GFP.0/sum(m$"tp73_saos2_GFP"==0))
+ratio.saos2.GFP.quantile.75 <- (sum.NumInWindow.filtered.saos2.GFP.quantile.75/sum(m$"tp73_saos2_GFP">=sum.cutandrun.tp73.saos2.GFP.quantile.75)) / (sum.NumInWindow.equal.saos2.GFP.0/sum(m$"tp73_saos2_GFP"==0))
+ratio.saos2.GFP.quantile.90 <- (sum.NumInWindow.filtered.saos2.GFP.quantile.90/sum(m$"tp73_saos2_GFP">=sum.cutandrun.tp73.saos2.GFP.quantile.90)) / (sum.NumInWindow.equal.saos2.GFP.0/sum(m$"tp73_saos2_GFP"==0))
+ratio.saos2.GFP.quantile.95 <- (sum.NumInWindow.filtered.saos2.GFP.quantile.95/sum(m$"tp73_saos2_GFP">=sum.cutandrun.tp73.saos2.GFP.quantile.95)) / (sum.NumInWindow.equal.saos2.GFP.0/sum(m$"tp73_saos2_GFP"==0))
 ratio.saos2.GFP.quantile.99 <- (sum.NumInWindow.filtered.saos2.GFP.quantile.99/sum(m$"tp73_saos2_GFP">=sum.cutandrun.tp73.saos2.GFP.quantile.99)) / (sum.NumInWindow.equal.saos2.GFP.0/sum(m$"tp73_saos2_GFP"==0))
 
 head(pretty.table(ratio.saos2.TAa.quantile.99))
@@ -375,19 +469,61 @@ pretty.table(ratio.saos2.TAa.99.vs.ratio.saos2.GFP.99)
 ratio.saos2.DNb.99.vs.ratio.saos2.GFP.99 <- ratio.saos2.DNb.99 / ratio.saos2.GFP.99
 pretty.table(ratio.saos2.DNb.99.vs.ratio.saos2.GFP.99)
 
+write.table(file=paste(reportdir,paste("report_ratio_TAa_vs_noTAa_in_Saos2_chr_",chromosome,"_quantile_",50,".tsv",sep=""),sep="/"),x=pretty.table(ratio.saos2.TAa.quantile.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_TAa_vs_noTAa_in_Saos2_chr_",chromosome,"_quantile_",75,".tsv",sep=""),sep="/"),x=pretty.table(ratio.saos2.TAa.quantile.75),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_TAa_vs_noTAa_in_Saos2_chr_",chromosome,"_quantile_",90,".tsv",sep=""),sep="/"),x=pretty.table(ratio.saos2.TAa.quantile.90),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_TAa_vs_noTAa_in_Saos2_chr_",chromosome,"_quantile_",95,".tsv",sep=""),sep="/"),x=pretty.table(ratio.saos2.TAa.quantile.95),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_TAa_vs_noTAa_in_Saos2_chr_",chromosome,"_quantile_",99,".tsv",sep=""),sep="/"),x=pretty.table(ratio.saos2.TAa.quantile.99),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+
+write.table(file=paste(reportdir,paste("report_ratio_DNb_vs_noDNb_in_Saos2_chr_",chromosome,"_quantile_",50,".tsv",sep=""),sep="/"),x=pretty.table(ratio.saos2.DNb.quantile.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_DNb_vs_noDNb_in_Saos2_chr_",chromosome,"_quantile_",75,".tsv",sep=""),sep="/"),x=pretty.table(ratio.saos2.DNb.quantile.75),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_DNb_vs_noDNb_in_Saos2_chr_",chromosome,"_quantile_",90,".tsv",sep=""),sep="/"),x=pretty.table(ratio.saos2.DNb.quantile.90),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_DNb_vs_noDNb_in_Saos2_chr_",chromosome,"_quantile_",95,".tsv",sep=""),sep="/"),x=pretty.table(ratio.saos2.DNb.quantile.95),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_DNb_vs_noDNb_in_Saos2_chr_",chromosome,"_quantile_",99,".tsv",sep=""),sep="/"),x=pretty.table(ratio.saos2.DNb.quantile.99),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+
+write.table(file=paste(reportdir,paste("report_ratio_GFP_vs_noGFP_in_Saos2_chr_",chromosome,"_quantile_",50,".tsv",sep=""),sep="/"),x=pretty.table(ratio.saos2.GFP.quantile.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_GFP_vs_noGFP_in_Saos2_chr_",chromosome,"_quantile_",75,".tsv",sep=""),sep="/"),x=pretty.table(ratio.saos2.GFP.quantile.75),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_GFP_vs_noGFP_in_Saos2_chr_",chromosome,"_quantile_",90,".tsv",sep=""),sep="/"),x=pretty.table(ratio.saos2.GFP.quantile.90),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_GFP_vs_noGFP_in_Saos2_chr_",chromosome,"_quantile_",95,".tsv",sep=""),sep="/"),x=pretty.table(ratio.saos2.GFP.quantile.95),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_GFP_vs_noGFP_in_Saos2_chr_",chromosome,"_quantile_",99,".tsv",sep=""),sep="/"),x=pretty.table(ratio.saos2.GFP.quantile.99),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+
 
 sum.NumInWindow.equal.skmel29_2.TAa.0 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_skmel29_2_TA" == 0]))
+sum.NumInWindow.filtered.skmel29_2.TAa.quantile.50 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_skmel29_2_TA" >= sum.cutandrun.tp73.skmel29_2.TAa.quantile.50]))
+sum.NumInWindow.filtered.skmel29_2.TAa.quantile.75 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_skmel29_2_TA" >= sum.cutandrun.tp73.skmel29_2.TAa.quantile.75]))
+sum.NumInWindow.filtered.skmel29_2.TAa.quantile.90 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_skmel29_2_TA" >= sum.cutandrun.tp73.skmel29_2.TAa.quantile.90]))
+sum.NumInWindow.filtered.skmel29_2.TAa.quantile.95 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_skmel29_2_TA" >= sum.cutandrun.tp73.skmel29_2.TAa.quantile.95]))
 sum.NumInWindow.filtered.skmel29_2.TAa.quantile.99 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_skmel29_2_TA" >= sum.cutandrun.tp73.skmel29_2.TAa.quantile.99]))
                  # Number of TFBS for particular TF in top 1% of CUT&RUN confirmed sites
                                                        # Number of TFBS in top 1% of confirmed sites
+ratio.skmel29_2.TAa.quantile.50 <- (sum.NumInWindow.filtered.skmel29_2.TAa.quantile.50/sum(m$"tp73_skmel29_2_TA">=sum.cutandrun.tp73.skmel29_2.TAa.quantile.50)) / (sum.NumInWindow.equal.skmel29_2.TAa.0/sum(m$"tp73_skmel29_2_TA"==0))
+ratio.skmel29_2.TAa.quantile.75 <- (sum.NumInWindow.filtered.skmel29_2.TAa.quantile.75/sum(m$"tp73_skmel29_2_TA">=sum.cutandrun.tp73.skmel29_2.TAa.quantile.75)) / (sum.NumInWindow.equal.skmel29_2.TAa.0/sum(m$"tp73_skmel29_2_TA"==0))
+ratio.skmel29_2.TAa.quantile.90 <- (sum.NumInWindow.filtered.skmel29_2.TAa.quantile.90/sum(m$"tp73_skmel29_2_TA">=sum.cutandrun.tp73.skmel29_2.TAa.quantile.90)) / (sum.NumInWindow.equal.skmel29_2.TAa.0/sum(m$"tp73_skmel29_2_TA"==0))
+ratio.skmel29_2.TAa.quantile.95 <- (sum.NumInWindow.filtered.skmel29_2.TAa.quantile.95/sum(m$"tp73_skmel29_2_TA">=sum.cutandrun.tp73.skmel29_2.TAa.quantile.95)) / (sum.NumInWindow.equal.skmel29_2.TAa.0/sum(m$"tp73_skmel29_2_TA"==0))
 ratio.skmel29_2.TAa.quantile.99 <- (sum.NumInWindow.filtered.skmel29_2.TAa.quantile.99/sum(m$"tp73_skmel29_2_TA">=sum.cutandrun.tp73.skmel29_2.TAa.quantile.99)) / (sum.NumInWindow.equal.skmel29_2.TAa.0/sum(m$"tp73_skmel29_2_TA"==0))
 
 sum.NumInWindow.equal.skmel29_2.DNb.0 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_skmel29_2_DN" == 0]))
+sum.NumInWindow.filtered.skmel29_2.DNb.quantile.50 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_skmel29_2_DN" >= sum.cutandrun.tp73.skmel29_2.DNb.quantile.50]))
+sum.NumInWindow.filtered.skmel29_2.DNb.quantile.75 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_skmel29_2_DN" >= sum.cutandrun.tp73.skmel29_2.DNb.quantile.75]))
+sum.NumInWindow.filtered.skmel29_2.DNb.quantile.90 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_skmel29_2_DN" >= sum.cutandrun.tp73.skmel29_2.DNb.quantile.90]))
+sum.NumInWindow.filtered.skmel29_2.DNb.quantile.95 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_skmel29_2_DN" >= sum.cutandrun.tp73.skmel29_2.DNb.quantile.95]))
 sum.NumInWindow.filtered.skmel29_2.DNb.quantile.99 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_skmel29_2_DN" >= sum.cutandrun.tp73.skmel29_2.DNb.quantile.99]))
+ratio.skmel29_2.DNb.quantile.50 <- (sum.NumInWindow.filtered.skmel29_2.DNb.quantile.50/sum(m$"tp73_skmel29_2_DN">=sum.cutandrun.tp73.skmel29_2.DNb.quantile.50)) / (sum.NumInWindow.equal.skmel29_2.DNb.0/sum(m$"tp73_skmel29_2_DN"==0))
+ratio.skmel29_2.DNb.quantile.75 <- (sum.NumInWindow.filtered.skmel29_2.DNb.quantile.75/sum(m$"tp73_skmel29_2_DN">=sum.cutandrun.tp73.skmel29_2.DNb.quantile.75)) / (sum.NumInWindow.equal.skmel29_2.DNb.0/sum(m$"tp73_skmel29_2_DN"==0))
+ratio.skmel29_2.DNb.quantile.90 <- (sum.NumInWindow.filtered.skmel29_2.DNb.quantile.90/sum(m$"tp73_skmel29_2_DN">=sum.cutandrun.tp73.skmel29_2.DNb.quantile.90)) / (sum.NumInWindow.equal.skmel29_2.DNb.0/sum(m$"tp73_skmel29_2_DN"==0))
+ratio.skmel29_2.DNb.quantile.95 <- (sum.NumInWindow.filtered.skmel29_2.DNb.quantile.95/sum(m$"tp73_skmel29_2_DN">=sum.cutandrun.tp73.skmel29_2.DNb.quantile.95)) / (sum.NumInWindow.equal.skmel29_2.DNb.0/sum(m$"tp73_skmel29_2_DN"==0))
 ratio.skmel29_2.DNb.quantile.99 <- (sum.NumInWindow.filtered.skmel29_2.DNb.quantile.99/sum(m$"tp73_skmel29_2_DN">=sum.cutandrun.tp73.skmel29_2.DNb.quantile.99)) / (sum.NumInWindow.equal.skmel29_2.DNb.0/sum(m$"tp73_skmel29_2_DN"==0))
 
 sum.NumInWindow.equal.skmel29_2.GFP.0 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_skmel29_2_GFP" == 0]))
+sum.NumInWindow.filtered.skmel29_2.GFP.quantile.50 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_skmel29_2_GFP" >= sum.cutandrun.tp73.skmel29_2.GFP.quantile.50]))
+sum.NumInWindow.filtered.skmel29_2.GFP.quantile.75 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_skmel29_2_GFP" >= sum.cutandrun.tp73.skmel29_2.GFP.quantile.75]))
+sum.NumInWindow.filtered.skmel29_2.GFP.quantile.90 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_skmel29_2_GFP" >= sum.cutandrun.tp73.skmel29_2.GFP.quantile.90]))
+sum.NumInWindow.filtered.skmel29_2.GFP.quantile.95 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_skmel29_2_GFP" >= sum.cutandrun.tp73.skmel29_2.GFP.quantile.95]))
 sum.NumInWindow.filtered.skmel29_2.GFP.quantile.99 <- sapply(m[, ..cols.NumInWindow], function(X) sum(X[m$"tp73_skmel29_2_GFP" >= sum.cutandrun.tp73.skmel29_2.GFP.quantile.99]))
+ratio.skmel29_2.GFP.quantile.50 <- (sum.NumInWindow.filtered.skmel29_2.GFP.quantile.50/sum(m$"tp73_skmel29_2_GFP">=sum.cutandrun.tp73.skmel29_2.GFP.quantile.50)) / (sum.NumInWindow.equal.skmel29_2.GFP.0/sum(m$"tp73_skmel29_2_GFP"==0))
+ratio.skmel29_2.GFP.quantile.75 <- (sum.NumInWindow.filtered.skmel29_2.GFP.quantile.75/sum(m$"tp73_skmel29_2_GFP">=sum.cutandrun.tp73.skmel29_2.GFP.quantile.75)) / (sum.NumInWindow.equal.skmel29_2.GFP.0/sum(m$"tp73_skmel29_2_GFP"==0))
+ratio.skmel29_2.GFP.quantile.90 <- (sum.NumInWindow.filtered.skmel29_2.GFP.quantile.90/sum(m$"tp73_skmel29_2_GFP">=sum.cutandrun.tp73.skmel29_2.GFP.quantile.90)) / (sum.NumInWindow.equal.skmel29_2.GFP.0/sum(m$"tp73_skmel29_2_GFP"==0))
+ratio.skmel29_2.GFP.quantile.95 <- (sum.NumInWindow.filtered.skmel29_2.GFP.quantile.95/sum(m$"tp73_skmel29_2_GFP">=sum.cutandrun.tp73.skmel29_2.GFP.quantile.95)) / (sum.NumInWindow.equal.skmel29_2.GFP.0/sum(m$"tp73_skmel29_2_GFP"==0))
 ratio.skmel29_2.GFP.quantile.99 <- (sum.NumInWindow.filtered.skmel29_2.GFP.quantile.99/sum(m$"tp73_skmel29_2_GFP">=sum.cutandrun.tp73.skmel29_2.GFP.quantile.99)) / (sum.NumInWindow.equal.skmel29_2.GFP.0/sum(m$"tp73_skmel29_2_GFP"==0))
 
 head(pretty.table(ratio.skmel29_2.TAa.quantile.99),10)
@@ -397,26 +533,122 @@ tail(pretty.table(ratio.skmel29_2.DNb.quantile.99),10)
 head(pretty.table(ratio.skmel29_2.GFP.quantile.99),10)
 tail(pretty.table(ratio.skmel29_2.GFP.quantile.99),10)
 
+write.table(file=paste(reportdir,paste("report_ratio_TAa_vs_noTAa_in_SKMel29_chr_",chromosome,"_quantile_",50,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.TAa.quantile.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_TAa_vs_noTAa_in_SKMel29_chr_",chromosome,"_quantile_",75,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.TAa.quantile.75),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_TAa_vs_noTAa_in_SKMel29_chr_",chromosome,"_quantile_",90,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.TAa.quantile.90),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_TAa_vs_noTAa_in_SKMel29_chr_",chromosome,"_quantile_",95,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.TAa.quantile.95),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_TAa_vs_noTAa_in_SKMel29_chr_",chromosome,"_quantile_",99,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.TAa.quantile.99),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+
+write.table(file=paste(reportdir,paste("report_ratio_DNb_vs_noDNb_in_SKMel29_chr_",chromosome,"_quantile_",50,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.DNb.quantile.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_DNb_vs_noDNb_in_SKMel29_chr_",chromosome,"_quantile_",75,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.DNb.quantile.75),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_DNb_vs_noDNb_in_SKMel29_chr_",chromosome,"_quantile_",90,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.DNb.quantile.90),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_DNb_vs_noDNb_in_SKMel29_chr_",chromosome,"_quantile_",95,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.DNb.quantile.95),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_DNb_vs_noDNb_in_SKMel29_chr_",chromosome,"_quantile_",99,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.DNb.quantile.99),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+
+write.table(file=paste(reportdir,paste("report_ratio_GFP_vs_noGFP_in_SKMel29_chr_",chromosome,"_quantile_",50,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.GFP.quantile.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_GFP_vs_noGFP_in_SKMel29_chr_",chromosome,"_quantile_",75,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.GFP.quantile.75),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_GFP_vs_noGFP_in_SKMel29_chr_",chromosome,"_quantile_",90,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.GFP.quantile.90),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_GFP_vs_noGFP_in_SKMel29_chr_",chromosome,"_quantile_",95,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.GFP.quantile.95),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_GFP_vs_noGFP_in_SKMel29_chr_",chromosome,"_quantile_",99,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.GFP.quantile.99),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+
+#
+# tissue specific ratios of TFBS
+#
+
+ratio.skmel29_2.TAa.quantile.50.vs.ratio.skmel29_2.DNb.quantile.50 <- ratio.skmel29_2.TAa.quantile.50 / ratio.skmel29_2.DNb.quantile.50
+ratio.skmel29_2.TAa.quantile.75.vs.ratio.skmel29_2.DNb.quantile.75 <- ratio.skmel29_2.TAa.quantile.75 / ratio.skmel29_2.DNb.quantile.75
+ratio.skmel29_2.TAa.quantile.90.vs.ratio.skmel29_2.DNb.quantile.90 <- ratio.skmel29_2.TAa.quantile.90 / ratio.skmel29_2.DNb.quantile.90
+ratio.skmel29_2.TAa.quantile.95.vs.ratio.skmel29_2.DNb.quantile.95 <- ratio.skmel29_2.TAa.quantile.95 / ratio.skmel29_2.DNb.quantile.95
 ratio.skmel29_2.TAa.quantile.99.vs.ratio.skmel29_2.DNb.quantile.99 <- ratio.skmel29_2.TAa.quantile.99 / ratio.skmel29_2.DNb.quantile.99
+
 head(pretty.table(ratio.skmel29_2.TAa.quantile.99.vs.ratio.skmel29_2.DNb.quantile.99),10)
 tail(pretty.table(ratio.skmel29_2.TAa.quantile.99.vs.ratio.skmel29_2.DNb.quantile.99),10)
+
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_TAa_vs_empty__vs__DNb_vs_empty_in_SKMel29_chr_",chromosome,"_quantile_",50,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.TAa.quantile.50.vs.ratio.skmel29_2.DNb.quantile.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_TAa_vs_empty__vs__DNb_vs_empty_in_SKMel29_chr_",chromosome,"_quantile_",75,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.TAa.quantile.75.vs.ratio.skmel29_2.DNb.quantile.75),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_TAa_vs_empty__vs__DNb_vs_empty_in_SKMel29_chr_",chromosome,"_quantile_",90,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.TAa.quantile.90.vs.ratio.skmel29_2.DNb.quantile.90),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_TAa_vs_empty__vs__DNb_vs_empty_in_SKMel29_chr_",chromosome,"_quantile_",95,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.TAa.quantile.95.vs.ratio.skmel29_2.DNb.quantile.95),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_TAa_vs_empty__vs__DNb_vs_empty_in_SKMel29_chr_",chromosome,"_quantile_",99,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.TAa.quantile.99.vs.ratio.skmel29_2.DNb.quantile.99),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+
+ratio.skmel29_2.TAa.quantile.50.vs.ratio.skmel29_2.GFP.quantile.50 <- ratio.skmel29_2.TAa.quantile.50 / ratio.skmel29_2.GFP.quantile.50
+ratio.skmel29_2.TAa.quantile.75.vs.ratio.skmel29_2.GFP.quantile.75 <- ratio.skmel29_2.TAa.quantile.75 / ratio.skmel29_2.GFP.quantile.75
+ratio.skmel29_2.TAa.quantile.90.vs.ratio.skmel29_2.GFP.quantile.90 <- ratio.skmel29_2.TAa.quantile.90 / ratio.skmel29_2.GFP.quantile.90
+ratio.skmel29_2.TAa.quantile.95.vs.ratio.skmel29_2.GFP.quantile.95 <- ratio.skmel29_2.TAa.quantile.95 / ratio.skmel29_2.GFP.quantile.95
 ratio.skmel29_2.TAa.quantile.99.vs.ratio.skmel29_2.GFP.quantile.99 <- ratio.skmel29_2.TAa.quantile.99 / ratio.skmel29_2.GFP.quantile.99
 head(pretty.table(ratio.skmel29_2.TAa.quantile.99.vs.ratio.skmel29_2.GFP.quantile.99),10)
 tail(pretty.table(ratio.skmel29_2.TAa.quantile.99.vs.ratio.skmel29_2.GFP.quantile.99),10)
+
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_TAa_vs_empty__vs_GFP_vs_empty_in_SKMel29_chr_",chromosome,"_quantile_",50,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.TAa.quantile.50.vs.ratio.skmel29_2.GFP.quantile.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_TAa_vs_empty__vs_GFP_vs_empty_in_SKMel29_chr_",chromosome,"_quantile_",75,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.TAa.quantile.75.vs.ratio.skmel29_2.GFP.quantile.75),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_TAa_vs_empty__vs_GFP_vs_empty_in_SKMel29_chr_",chromosome,"_quantile_",90,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.TAa.quantile.90.vs.ratio.skmel29_2.GFP.quantile.90),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_TAa_vs_empty__vs_GFP_vs_empty_in_SKMel29_chr_",chromosome,"_quantile_",95,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.TAa.quantile.95.vs.ratio.skmel29_2.GFP.quantile.95),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_TAa_vs_empty__vs_GFP_vs_empty_in_SKMel29_chr_",chromosome,"_quantile_",99,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.TAa.quantile.99.vs.ratio.skmel29_2.GFP.quantile.99),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+
+ratio.skmel29_2.DNb.quantile.50.vs.ratio.skmel29_2.GFP.quantile.50 <- ratio.skmel29_2.DNb.quantile.50 / ratio.skmel29_2.GFP.quantile.50
+ratio.skmel29_2.DNb.quantile.75.vs.ratio.skmel29_2.GFP.quantile.75 <- ratio.skmel29_2.DNb.quantile.75 / ratio.skmel29_2.GFP.quantile.75
+ratio.skmel29_2.DNb.quantile.90.vs.ratio.skmel29_2.GFP.quantile.90 <- ratio.skmel29_2.DNb.quantile.90 / ratio.skmel29_2.GFP.quantile.90
+ratio.skmel29_2.DNb.quantile.95.vs.ratio.skmel29_2.GFP.quantile.95 <- ratio.skmel29_2.DNb.quantile.95 / ratio.skmel29_2.GFP.quantile.95
 ratio.skmel29_2.DNb.quantile.99.vs.ratio.skmel29_2.GFP.quantile.99 <- ratio.skmel29_2.DNb.quantile.99 / ratio.skmel29_2.GFP.quantile.99
+
 head(pretty.table(ratio.skmel29_2.DNb.quantile.99.vs.ratio.skmel29_2.GFP.quantile.99),10)
 tail(pretty.table(ratio.skmel29_2.DNb.quantile.99.vs.ratio.skmel29_2.GFP.quantile.99),10)
 
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_DNb_vs_empty__vs_GFP_vs_empty_in_SKMel29_chr_",chromosome,"_quantile_",50,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.DNb.quantile.50.vs.ratio.skmel29_2.GFP.quantile.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_DNb_vs_empty__vs_GFP_vs_empty_in_SKMel29_chr_",chromosome,"_quantile_",75,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.DNb.quantile.75.vs.ratio.skmel29_2.GFP.quantile.75),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_DNb_vs_empty__vs_GFP_vs_empty_in_SKMel29_chr_",chromosome,"_quantile_",90,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.DNb.quantile.90.vs.ratio.skmel29_2.GFP.quantile.90),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_DNb_vs_empty__vs_GFP_vs_empty_in_SKMel29_chr_",chromosome,"_quantile_",95,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.DNb.quantile.95.vs.ratio.skmel29_2.GFP.quantile.95),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_DNb_vs_empty__vs_GFP_vs_empty_in_SKMel29_chr_",chromosome,"_quantile_",99,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.DNb.quantile.99.vs.ratio.skmel29_2.GFP.quantile.99),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
 
+
+#
+# cross-tissue comparisons
+#
+
+ratio.skmel29_2.TAa.quantile.50.vs.ratio.saos2.TAa.quantile.50 <- ratio.skmel29_2.TAa.quantile.50 / ratio.saos2.TAa.quantile.50
+ratio.skmel29_2.TAa.quantile.75.vs.ratio.saos2.TAa.quantile.75 <- ratio.skmel29_2.TAa.quantile.99 / ratio.saos2.TAa.quantile.75
+ratio.skmel29_2.TAa.quantile.90.vs.ratio.saos2.TAa.quantile.90 <- ratio.skmel29_2.TAa.quantile.90 / ratio.saos2.TAa.quantile.90
+ratio.skmel29_2.TAa.quantile.95.vs.ratio.saos2.TAa.quantile.95 <- ratio.skmel29_2.TAa.quantile.95 / ratio.saos2.TAa.quantile.95
 ratio.skmel29_2.TAa.quantile.99.vs.ratio.saos2.TAa.quantile.99 <- ratio.skmel29_2.TAa.quantile.99 / ratio.saos2.TAa.quantile.99
+
 head(pretty.table(ratio.skmel29_2.TAa.quantile.99.vs.ratio.saos2.TAa.quantile.99),10)
 tail(pretty.table(ratio.skmel29_2.TAa.quantile.99.vs.ratio.saos2.TAa.quantile.99),10)
+
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_TAa_in_SKMel29_vs_empty__vs__TAa_in_Saos2_vs_empty_chr_",chromosome,"_quantile_",50,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.TAa.quantile.50.vs.ratio.saos2.TAa.quantile.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_TAa_in_SKMel29_vs_empty__vs__TAa_in_Saos2_vs_empty_chr_",chromosome,"_quantile_",75,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.TAa.quantile.75.vs.ratio.saos2.TAa.quantile.75),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_TAa_in_SKMel29_vs_empty__vs__TAa_in_Saos2_vs_empty_chr_",chromosome,"_quantile_",90,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.TAa.quantile.90.vs.ratio.saos2.TAa.quantile.90),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_TAa_in_SKMel29_vs_empty__vs__TAa_in_Saos2_vs_empty_chr_",chromosome,"_quantile_",95,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.TAa.quantile.95.vs.ratio.saos2.TAa.quantile.95),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_TAa_in_SKMel29_vs_empty__vs__TAa_in_Saos2_vs_empty_chr_",chromosome,"_quantile_",99,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.TAa.quantile.99.vs.ratio.saos2.TAa.quantile.99),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+
+ratio.skmel29_2.DNb.quantile.50.vs.ratio.saos2.DNb.quantile.50 <- ratio.skmel29_2.DNb.quantile.50 / ratio.saos2.DNb.quantile.50
+ratio.skmel29_2.DNb.quantile.75.vs.ratio.saos2.DNb.quantile.75 <- ratio.skmel29_2.DNb.quantile.75 / ratio.saos2.DNb.quantile.75
+ratio.skmel29_2.DNb.quantile.90.vs.ratio.saos2.DNb.quantile.90 <- ratio.skmel29_2.DNb.quantile.90 / ratio.saos2.DNb.quantile.90
+ratio.skmel29_2.DNb.quantile.95.vs.ratio.saos2.DNb.quantile.95 <- ratio.skmel29_2.DNb.quantile.95 / ratio.saos2.DNb.quantile.95
 ratio.skmel29_2.DNb.quantile.99.vs.ratio.saos2.DNb.quantile.99 <- ratio.skmel29_2.DNb.quantile.99 / ratio.saos2.DNb.quantile.99
+
 head(pretty.table(ratio.skmel29_2.DNb.quantile.99.vs.ratio.saos2.DNb.quantile.99),10)
 tail(pretty.table(ratio.skmel29_2.DNb.quantile.99.vs.ratio.saos2.DNb.quantile.99),10)
+
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_DNb_in_SKMel29_vs_empty__vs__DNb_in_Saos2_vs_empty_chr_",chromosome,"_quantile_",50,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.DNb.quantile.50.vs.ratio.saos2.DNb.quantile.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_DNb_in_SKMel29_vs_empty__vs__DNb_in_Saos2_vs_empty_chr_",chromosome,"_quantile_",75,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.DNb.quantile.75.vs.ratio.saos2.DNb.quantile.75),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_DNb_in_SKMel29_vs_empty__vs__DNb_in_Saos2_vs_empty_chr_",chromosome,"_quantile_",90,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.DNb.quantile.90.vs.ratio.saos2.DNb.quantile.90),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_DNb_in_SKMel29_vs_empty__vs__DNb_in_Saos2_vs_empty_chr_",chromosome,"_quantile_",95,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.DNb.quantile.95.vs.ratio.saos2.DNb.quantile.95),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_DNb_in_SKMel29_vs_empty__vs__DNb_in_Saos2_vs_empty_chr_",chromosome,"_quantile_",99,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.DNb.quantile.99.vs.ratio.saos2.DNb.quantile.99),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+
+ratio.skmel29_2.GFP.quantile.50.vs.ratio.saos2.GFP.quantile.50 <- ratio.skmel29_2.GFP.quantile.50 / ratio.saos2.GFP.quantile.50
+ratio.skmel29_2.GFP.quantile.75.vs.ratio.saos2.GFP.quantile.75 <- ratio.skmel29_2.GFP.quantile.75 / ratio.saos2.GFP.quantile.75
+ratio.skmel29_2.GFP.quantile.90.vs.ratio.saos2.GFP.quantile.90 <- ratio.skmel29_2.GFP.quantile.90 / ratio.saos2.GFP.quantile.90
+ratio.skmel29_2.GFP.quantile.95.vs.ratio.saos2.GFP.quantile.95 <- ratio.skmel29_2.GFP.quantile.95 / ratio.saos2.GFP.quantile.95
 ratio.skmel29_2.GFP.quantile.99.vs.ratio.saos2.GFP.quantile.99 <- ratio.skmel29_2.GFP.quantile.99 / ratio.saos2.GFP.quantile.99
+
 head(pretty.table(ratio.skmel29_2.GFP.quantile.99.vs.ratio.saos2.GFP.quantile.99),10)
 tail(pretty.table(ratio.skmel29_2.GFP.quantile.99.vs.ratio.saos2.GFP.quantile.99),10)
+
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_GFP_in_SKMel29_vs_empty__vs__GFP_in_Saos2_vs_empty_chr_",chromosome,"_quantile_",50,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.GFP.quantile.50.vs.ratio.saos2.GFP.quantile.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_GFP_in_SKMel29_vs_empty__vs__GFP_in_Saos2_vs_empty_chr_",chromosome,"_quantile_",75,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.GFP.quantile.75.vs.ratio.saos2.GFP.quantile.75),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_GFP_in_SKMel29_vs_empty__vs__GFP_in_Saos2_vs_empty_chr_",chromosome,"_quantile_",90,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.GFP.quantile.90.vs.ratio.saos2.GFP.quantile.90),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_GFP_in_SKMel29_vs_empty__vs__GFP_in_Saos2_vs_empty_chr_",chromosome,"_quantile_",95,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.GFP.quantile.95.vs.ratio.saos2.GFP.quantile.95),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+write.table(file=paste(reportdir,paste("report_ratio_of_ratios_GFP_in_SKMel29_vs_empty__vs__GFP_in_Saos2_vs_empty_chr_",chromosome,"_quantile_",99,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.GFP.quantile.99.vs.ratio.saos2.GFP.quantile.99),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+
 
 # Singling out TAa and DNb
 
@@ -436,6 +668,8 @@ ratio.saos2.TAa.quantile.90.wo.DNb.quantile.50.vs.saos2.DNb.quantile.90.wo.TAa.q
 head(pretty.table(ratio.saos2.TAa.quantile.90.wo.DNb.quantile.50.vs.saos2.DNb.quantile.90.wo.TAa.quantile.50),10)
 tail(pretty.table(ratio.saos2.TAa.quantile.90.wo.DNb.quantile.50.vs.saos2.DNb.quantile.90.wo.TAa.quantile.50),10)
 
+write.table(file=paste(reportdir,paste("report_ratio_TAa_quantile_90_without_DNb_quantile_50__vs__DNb_quantile_90_without_TAa_quantile_50_in_Saos2_chr_",chromosome,".tsv",sep=""),sep="/"),x=pretty.table(ratio.saos2.TAa.quantile.90.wo.DNb.quantile.50.vs.saos2.DNb.quantile.90.wo.TAa.quantile.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+
 mean.NumInWindow.filtered.skmel29_2.TAa.quantile.90.wo.DNb.quantile.50 <- 
     sapply(m[, ..cols.NumInWindow], function(X) mean(X[
         m$"tp73_skmel29_2_TA" >= sum.cutandrun.tp73.skmel29_2.TAa.quantile.90 & m$"tp73_skmel29_2_DN" <= sum.cutandrun.tp73.skmel29_2.DNb.quantile.50
@@ -448,8 +682,11 @@ mean.NumInWindow.filtered.skmel29_2.DNb.quantile.90.wo.TAa.quantile.50 <-
 
 ratio.skmel29_2.TAa.quantile.90.wo.DNb.quantile.50.vs.skmel29_2.DNb.quantile.90.wo.TAa.quantile.50 <- 
     mean.NumInWindow.filtered.skmel29_2.TAa.quantile.90.wo.DNb.quantile.50 / mean.NumInWindow.filtered.skmel29_2.DNb.quantile.90.wo.TAa.quantile.50
+
 head(pretty.table(ratio.skmel29_2.TAa.quantile.90.wo.DNb.quantile.50.vs.skmel29_2.DNb.quantile.90.wo.TAa.quantile.50),10)
 tail(pretty.table(ratio.skmel29_2.TAa.quantile.90.wo.DNb.quantile.50.vs.skmel29_2.DNb.quantile.90.wo.TAa.quantile.50),10)
+
+write.table(file=paste(reportdir,paste("report_ratio_TAa_quantile_90_without_DNb_quantile_50__vs__DNb_quantile_90_without_TAa_quantile_50_in_SKMel29_chr_",chromosome,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.TAa.quantile.90.wo.DNb.quantile.50.vs.skmel29_2.DNb.quantile.90.wo.TAa.quantile.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
 
 ratio.ratio.skmel29_2.vs.saos2.of.TAa.wo.DNb.vs.DNb.wo.TAa <- 
     ratio.skmel29_2.TAa.quantile.90.wo.DNb.quantile.50.vs.skmel29_2.DNb.quantile.90.wo.TAa.quantile.50 /
@@ -457,6 +694,9 @@ ratio.ratio.skmel29_2.vs.saos2.of.TAa.wo.DNb.vs.DNb.wo.TAa <-
 
 head(pretty.table(ratio.ratio.skmel29_2.vs.saos2.of.TAa.wo.DNb.vs.DNb.wo.TAa),20)
 tail(pretty.table(ratio.ratio.skmel29_2.vs.saos2.of.TAa.wo.DNb.vs.DNb.wo.TAa),20)    
+
+write.table(file=paste(reportdir,paste("report_ratio_SKMel_vs_Saos2_of_TAa_without_DNb_vs_DNb_without_TAa_chr_",chromosome,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.TAa.quantile.90.wo.DNb.quantile.50.vs.skmel29_2.DNb.quantile.90.wo.TAa.quantile.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+
 
 
 ## Ugly?!?
