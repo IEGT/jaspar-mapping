@@ -16,7 +16,8 @@ source("analyze_matrix_function_distances.R")
 
 for(i in as.character(1:22)) {
     cat("I: processing chromosome ",i,"...\n",sep="")
-    m <- create.lists.for.chromosome(i)
+    m <- read.data.table.for.chromosome(i)
+    m <- create.lists.for.chromosome(m,i)
 }
 
 l <- list("TAa"=sum.cutandrun.tp73.TAa>0, "DNb"=sum.cutandrun.tp73.DNb>0, "GFP"=sum.cutandrun.tp73.GFP>0,
