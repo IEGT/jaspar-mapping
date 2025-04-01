@@ -45,6 +45,7 @@ pretty.table <- function(x,sep.inner=" (") {
     d
 }
 
+## Function to read the data table for a particular chromosome
 read.data.table.for.chromosome <- function(chromosome=22) {
 
     filename <- paste("TP73_datatable_",chromosome,".bed.gz",sep="")
@@ -94,7 +95,11 @@ read.data.table.for.chromosome <- function(chromosome=22) {
     invisible(m)
 }
 
-create.lists.for.chromosome <- function(m, reportdir="Reports") {
+## Function to create lists for a particular chromosome, derived from the data table
+# @param m data.table
+# @param reportdir directory for reports
+# @param offset added to frequencies to avoid division by zero
+create.lists.for.chromosome <- function(m, reportdir="Reports",offset=0.01) {
 
     chromosome <- attr(m,"chromosome")
     cat("I: processing chromosome ",chromosome,".\n",sep="")
@@ -143,18 +148,18 @@ create.lists.for.chromosome <- function(m, reportdir="Reports") {
     attr(m,"quantiles.cutandrun.pos.GFP") <- quantiles.cutandrun.pos.GFP <- sapply(m[, ..cols.cutandrun.pos.GFP], quantile, probs = c(0,25,50,75,90,95,99,99.5,99.9,100)/100)
 
     # Sum of activities in CUT&RUN data
-    sum.cutandrun.tp73 <- rowSums(m[, ..cols.cutandrun.tp73])
-    sum.cutandrun.tp73.saos <- rowSums(m[, ..cols.cutandrun.tp73.saos])
-    sum.cutandrun.tp73.skmel <- rowSums(m[, ..cols.cutandrun.tp73.skmel])
-    sum.cutandrun.tp73.TAa <- rowSums(m[, ..cols.cutandrun.tp73.TAa])
-    sum.cutandrun.tp73.DNb <- rowSums(m[, ..cols.cutandrun.tp73.DNb])
-    sum.cutandrun.tp73.GFP <- rowSums(m[, ..cols.cutandrun.tp73.GFP])
-    sum.cutandrun.pos <- rowSums(m[, ..cols.cutandrun.pos])
-    sum.cutandrun.pos.saos <- rowSums(m[, ..cols.cutandrun.pos.saos])
-    sum.cutandrun.pos.skmel <- rowSums(m[, ..cols.cutandrun.pos.skmel])
-    sum.cutandrun.pos.TAa <- rowSums(m[, ..cols.cutandrun.pos.TAa])
-    sum.cutandrun.pos.DNb <- rowSums(m[, ..cols.cutandrun.pos.DNb])
-    sum.cutandrun.pos.GFP <- rowSums(m[, ..cols.cutandrun.pos.GFP])
+    sum.cutandrun.tp73 <- rowSums(m[, ..cols.cutandrun.tp73]) + offset
+    sum.cutandrun.tp73.saos <- rowSums(m[, ..cols.cutandrun.tp73.saos]) + offset
+    sum.cutandrun.tp73.skmel <- rowSums(m[, ..cols.cutandrun.tp73.skmel]) + offset
+    sum.cutandrun.tp73.TAa <- rowSums(m[, ..cols.cutandrun.tp73.TAa]) + offset
+    sum.cutandrun.tp73.DNb <- rowSums(m[, ..cols.cutandrun.tp73.DNb]) + offset
+    sum.cutandrun.tp73.GFP <- rowSums(m[, ..cols.cutandrun.tp73.GFP]) + offset
+    sum.cutandrun.pos <- rowSums(m[, ..cols.cutandrun.pos]) + offset
+    sum.cutandrun.pos.saos <- rowSums(m[, ..cols.cutandrun.pos.saos]) + offset
+    sum.cutandrun.pos.skmel <- rowSums(m[, ..cols.cutandrun.pos.skmel]) + offset
+    sum.cutandrun.pos.TAa <- rowSums(m[, ..cols.cutandrun.pos.TAa]) + offset
+    sum.cutandrun.pos.DNb <- rowSums(m[, ..cols.cutandrun.pos.DNb]) + offset
+    sum.cutandrun.pos.GFP <- rowSums(m[, ..cols.cutandrun.pos.GFP]) + offset
 
     gc()
 
