@@ -14,11 +14,19 @@ rm(list=grep(ls(),pattern="^mean.NumInWindow*",value=T))
 source("analyze_matrix_function_lists.R")  
 source("analyze_matrix_function_distances.R")  
 
+m.findings <- list()
 for(i in as.character(1:22)) {
     cat("I: processing chromosome ",i,"...\n",sep="")
     m <- read.data.table.for.chromosome(i)
     m <- create.lists.for.chromosome(m)
+    m.findings[[i]] <- attributes(m)
 }
+
+# Identify most promising transcription factors for 90% quantile
+
+
+
+# Plot distance of binding sites to CUT&RUN-confirmed p73 binding sites
 
 l <- list("TAa"=sum.cutandrun.tp73.TAa>0, "DNb"=sum.cutandrun.tp73.DNb>0, "GFP"=sum.cutandrun.tp73.GFP>0,
           "TAa_without_DNb"=sum.cutandrun.tp73.TAa>=sum.cutandrun.tp73.TAa.quantile.90 & 

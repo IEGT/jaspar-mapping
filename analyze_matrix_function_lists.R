@@ -354,7 +354,7 @@ create.lists.for.chromosome <- function(m, reportdir="Reports") {
         dir.create(path=reportdir,recursive=TRUE)
     }
 
-    cat("I: Preparing to write to file '",paste(reportdir,paste("report_ratio_tp73_chr_",chromosome,"_quantile_50.tsv",sep=""),sep="/"),"'\n",sep="")
+    #cat("I: Preparing to write to file '",paste(reportdir,paste("report_ratio_tp73_chr_",chromosome,"_quantile_50.tsv",sep=""),sep="/"),"'\n",sep="")
 
     write.table(file=paste(reportdir,paste("report_ratio_tp73_chr_",chromosome,"_quantile_",50,".tsv",sep=""),sep="/"),x=pretty.table(ratio.tp73.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
     write.table(file=paste(reportdir,paste("report_ratio_tp73_chr_",chromosome,"_quantile_",75,".tsv",sep=""),sep="/"),x=pretty.table(ratio.tp73.75),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
