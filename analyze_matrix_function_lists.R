@@ -1,8 +1,8 @@
 #!/usr/bin/R
 
-# Script to interpret TF binding sites for their association with CUT&RUN data.
+require(data.table)
 
-options(width=180)
+# Script to interpret TF binding sites for their association with CUT&RUN data.
 
 # Columns representing results from CUT&RUN data
 ## The names of the columns that represent the CUT&RUN data for the positions at which
@@ -35,7 +35,17 @@ cols.cutandrun.pos.TAa.skmel <- c("pos_skmel29_2_TA")
 cols.cutandrun.pos.DNb.skmel <- c("pos_skmel29_2_DN")
 cols.cutandrun.pos.GFP.skmel <- c("pos_skmel29_2_GFP")
 
-require(data.table)
+
+pretty.table <- function(x,sep.inner=" (") {
+    x.sort <- sort(x)
+    d<-data.frame(sapply(strsplit(x=names(x.sort),split="_"),function(X) paste(X[0],sep.inner,X[2],
+                                                                            ifelse(sep.inner %in% c("("," ("),")",""),sep="")),
+                    round(x.sort,2))
+    rownames(d) <- NULL
+    colnames(d) <- c("TF","Ratio")
+    d
+}
+
 
 create.lists.for.chromosome <- function(chromosome="22",reportdir="Reports") {
 
@@ -305,17 +315,9 @@ create.lists.for.chromosome <- function(chromosome="22",reportdir="Reports") {
     print(tail(sort(ratio.pos.99),5))
     gc()
 
-    pretty.table <- function(x,sep.inner=" (") {
-        x.sort <- sort(x)
-        d<-data.frame(sapply(strsplit(x=names(x.sort),split="_"),function(X) paste(X[1],sep.inner,X[2],
-                                                                                ifelse(sep.inner %in% c("("," ("),")",""),sep="")),
-                    round(x.sort,3))
-        rownames(d) <- NULL
-        colnames(d) <- c("TF","Ratio")
-        d
+    if (!dir.exists(reportdir)) {
+        dir.create(path=reportdir,recursive=TRUE)
     }
-
-    dir.create(path=reportdir,recursive=TRUE)
     write.table(file=paste(reportdir,paste("report_ratio_tp73_chr_",chromosome,"_quantile_",50,".tsv",sep=""),sep="/"),x=pretty.table(ratio.tp73.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
     write.table(file=paste(reportdir,paste("report_ratio_tp73_chr_",chromosome,"_quantile_",75,".tsv",sep=""),sep="/"),x=pretty.table(ratio.tp73.75),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
     write.table(file=paste(reportdir,paste("report_ratio_tp73_chr_",chromosome,"_quantile_",90,".tsv",sep=""),sep="/"),x=pretty.table(ratio.tp73.90),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
@@ -697,6 +699,5 @@ create.lists.for.chromosome <- function(chromosome="22",reportdir="Reports") {
     write.table(file=paste(reportdir,paste("report_ratio_SKMel_vs_Saos2_of_TAa_without_DNb_vs_DNb_without_TAa_chr_",chromosome,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.TAa.quantile.90.wo.DNb.quantile.50.vs.skmel29_2.DNb.quantile.90.wo.TAa.quantile.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
 
     invisible(m)
-
 }
 
