@@ -38,7 +38,7 @@ cols.cutandrun.pos.GFP.skmel <- c("pos_skmel29_2_GFP")
 
 pretty.table <- function(x,sep.inner=" (") {
     x.sort <- sort(x)
-    d<-data.frame(sapply(strsplit(x=names(x.sort),split="_"),function(X) paste(X[0],sep.inner,X[2],
+    d<-data.frame(sapply(strsplit(x=names(x.sort),split="_"),function(X) paste(X[1],sep.inner,X[2],
                                                                             ifelse(sep.inner %in% c("("," ("),")",""),sep="")),
                     round(x.sort,2))
     rownames(d) <- NULL
