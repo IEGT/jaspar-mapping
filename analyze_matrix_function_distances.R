@@ -1,23 +1,22 @@
 #!/usr/bin/R
 
-/*
-## Ugly?!?
 
 require(ggplot2)
-melted_data <- melt(selected_columns_cutnrun)
 
-# Create the boxplot
-ggplot(melted_data, aes(x = variable, y = value)) +
-  geom_boxplot() +
-  labs(title = "CUT&RUN signal distribution for TP73 binding sites",
-       x = "Columns",
-       y = "Values") +
-  theme_minimal()
+plot.binding.affinity <- function(m) {
+    melted_data <- melt(selected_columns_cutnrun)
 
-# Save the plot to a file
-ggsave("boxplot_selected_columns_cutnrun.png")
+    # Create the boxplot
+    ggplot(melted_data, aes(x = variable, y = value)) +
+    geom_boxplot() +
+    labs(title = "CUT&RUN signal distribution for TP73 binding sites",
+        x = "Columns",
+        y = "Values") +
+    theme_minimal()
 
-*/
+    # Save the plot to a file
+    ggsave("boxplot_selected_columns_cutnrun.png")
+}
 
 
 prettyIdentifierJaspar <- function(X) {
