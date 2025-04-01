@@ -94,18 +94,21 @@ read.data.table.for.chromosome <- function(chromosome=22) {
     invisible(m)
 }
 
-create.lists.for.chromosome <- function(chromosome="22",reportdir="Reports") {
+create.lists.for.chromosome <- function(m, reportdir="Reports") {
+
+    chromosome <- attr(m,"chromosome")
+    cat("I: processing chromosome ",chromosome,".\n",sep="")
 
     # Identification of columns of particula type
     ## NumInWIndow - number of binding sites of particular transcription factor
     cols.NumInWindow <- grepl("_NumInWindow", colnames(m))
-    quantiles.NumInWindow <- sapply(m[, ..cols.NumInWindow], quantile, probs = c(0,0.25, 0.5, 0.75,1))
+    quantiles.NumInWindow <- sapply(m[, ..cols.NumInWindow], quantile, probs = c(0,0.25, 0.5, 0.75, 0.9, 0.95, 0.99, 1))
     sum.NumInWindow <- sapply(m[, ..cols.NumInWindow], sum)
     gc(full=T)
 
     ## Score - computed affinity with which the TF is binding
     cols.Score <- grepl("_Score", colnames(m))
-    quantiles.Score <- sapply(m[, ..cols.Score], quantile, probs = c(0,0.25, 0.5, 0.75,1), na.rm=TRUE)
+    quantiles.Score <- sapply(m[, ..cols.Score], quantile, probs = c(0,0.25, 0.5, 0.75, 0.9, 0.95, 0.99, 1), na.rm=TRUE)
     sum.Score <- sapply(m[, ..cols.Score], sum, na.rm=T)
     gc(full=T)
 
@@ -125,19 +128,19 @@ create.lists.for.chromosome <- function(chromosome="22",reportdir="Reports") {
     # Determination of quantiles 
     ## These quantiles are used to determine the threshold for the number of reads in the CUT&RUN data
     ## that are considered to be reliable
-    quantiles.cutandrun <- sapply(m[, ..cols.cutandrun], quantile, probs = c(0,25,50,75,90,95,99,99.5,99.9,100)/100)
-    quantiles.cutandrun.tp73 <- sapply(m[, ..cols.cutandrun.tp73], quantile, probs = c(0,25,50,75,90,95,99,99.5,99.9,100)/100)
-    quantiles.cutandrun.tp73.saos <- sapply(m[, ..cols.cutandrun.tp73.saos], quantile, probs = c(0,25,50,75,90,95,99,99.5,99.9,100)/100)
-    quantiles.cutandrun.tp73.skmel <- sapply(m[, ..cols.cutandrun.tp73.skmel], quantile, probs = c(0,25,50,75,90,95,99,99.5,99.9,100)/100)
-    quantiles.cutandrun.tp73.TAa <- sapply(m[, ..cols.cutandrun.tp73.TAa], quantile, probs = c(0,25,50,75,90,95,99,99.5,99.9,100)/100)
-    quantiles.cutandrun.tp73.DNb <- sapply(m[, ..cols.cutandrun.tp73.DNb], quantile, probs = c(0,25,50,75,90,95,99,99.5,99.9,100)/100)
-    quantiles.cutandrun.tp73.GFP <- sapply(m[, ..cols.cutandrun.tp73.GFP], quantile, probs = c(0,25,50,75,90,95,99,99.5,99.9,100)/100)
-    quantiles.cutandrun.pos <- sapply(m[, ..cols.cutandrun.pos], quantile, probs = c(0,25,50,75,90,95,99,99.5,99.9,100)/100)
-    quantiles.cutandrun.pos.saos <- sapply(m[, ..cols.cutandrun.pos.saos], quantile, probs = c(0,25,50,75,90,95,99,99.5,99.9,100)/100)
-    quantiles.cutandrun.pos.skmel <- sapply(m[, ..cols.cutandrun.pos.skmel], quantile, probs = c(0,25,50,75,90,95,99,99.5,99.9,100)/100)
-    quantiles.cutandrun.pos.TAa <- sapply(m[, ..cols.cutandrun.pos.TAa], quantile, probs = c(0,25,50,75,90,95,99,99.5,99.9,100)/100)
-    quantiles.cutandrun.pos.DNb <- sapply(m[, ..cols.cutandrun.pos.DNb], quantile, probs = c(0,25,50,75,90,95,99,99.5,99.9,100)/100)
-    quantiles.cutandrun.pos.GFP <- sapply(m[, ..cols.cutandrun.pos.GFP], quantile, probs = c(0,25,50,75,90,95,99,99.5,99.9,100)/100)
+    attr(m,"quantiles.cutandrun") <- quantiles.cutandrun <- sapply(m[, ..cols.cutandrun], quantile, probs = c(0,25,50,75,90,95,99,99.5,99.9,100)/100)
+    attr(m,"quantiles.cutandrun.tp73") <- quantiles.cutandrun.tp73 <- sapply(m[, ..cols.cutandrun.tp73], quantile, probs = c(0,25,50,75,90,95,99,99.5,99.9,100)/100)
+    attr(m,"quantiles.cutandrun.tp73.saos") <- quantiles.cutandrun.tp73.saos <- sapply(m[, ..cols.cutandrun.tp73.saos], quantile, probs = c(0,25,50,75,90,95,99,99.5,99.9,100)/100)
+    attr(m,"quantiles.cutandrun.tp73.skmel") <- quantiles.cutandrun.tp73.skmel <- sapply(m[, ..cols.cutandrun.tp73.skmel], quantile, probs = c(0,25,50,75,90,95,99,99.5,99.9,100)/100)
+    attr(m,"quantiles.cutandrun.tp73.TAa") <- quantiles.cutandrun.tp73.TAa <- sapply(m[, ..cols.cutandrun.tp73.TAa], quantile, probs = c(0,25,50,75,90,95,99,99.5,99.9,100)/100)
+    attr(m,"quantiles.cutandrun.tp73.DNb") <- quantiles.cutandrun.tp73.DNb <- sapply(m[, ..cols.cutandrun.tp73.DNb], quantile, probs = c(0,25,50,75,90,95,99,99.5,99.9,100)/100)
+    attr(m,"quantiles.cutandrun.tp73.GFP") <- quantiles.cutandrun.tp73.GFP <- sapply(m[, ..cols.cutandrun.tp73.GFP], quantile, probs = c(0,25,50,75,90,95,99,99.5,99.9,100)/100)
+    attr(m,"quantiles.cutandrun.pos") <- quantiles.cutandrun.pos <- sapply(m[, ..cols.cutandrun.pos], quantile, probs = c(0,25,50,75,90,95,99,99.5,99.9,100)/100)
+    attr(m,"quantiles.cutandrun.pos.saos") <- quantiles.cutandrun.pos.saos <- sapply(m[, ..cols.cutandrun.pos.saos], quantile, probs = c(0,25,50,75,90,95,99,99.5,99.9,100)/100)
+    attr(m,"quantiles.cutandrun.pos.skmel") <- quantiles.cutandrun.pos.skmel <- sapply(m[, ..cols.cutandrun.pos.skmel], quantile, probs = c(0,25,50,75,90,95,99,99.5,99.9,100)/100)
+    attr(m,"quantiles.cutandrun.pos.TAa") <- quantiles.cutandrun.pos.TAa <- sapply(m[, ..cols.cutandrun.pos.TAa], quantile, probs = c(0,25,50,75,90,95,99,99.5,99.9,100)/100)
+    attr(m,"quantiles.cutandrun.pos.DNb") <- quantiles.cutandrun.pos.DNb <- sapply(m[, ..cols.cutandrun.pos.DNb], quantile, probs = c(0,25,50,75,90,95,99,99.5,99.9,100)/100)
+    attr(m,"quantiles.cutandrun.pos.GFP") <- quantiles.cutandrun.pos.GFP <- sapply(m[, ..cols.cutandrun.pos.GFP], quantile, probs = c(0,25,50,75,90,95,99,99.5,99.9,100)/100)
 
     # Sum of activities in CUT&RUN data
     sum.cutandrun.tp73 <- rowSums(m[, ..cols.cutandrun.tp73])
@@ -175,7 +178,7 @@ create.lists.for.chromosome <- function(chromosome="22",reportdir="Reports") {
     # The 50th, 75th, 90th and 99th percentile for the number of reads in TFBS for different transfected isoforms
     sum.cutandrun.tp73.quantile.50 <- max(quantile(sum.cutandrun.tp73,probs=0.50),0.5) # 1
     sum.cutandrun.tp73.quantile.75 <- max(quantile(sum.cutandrun.tp73,probs=0.75),0.5) # 2
-    sum.cutandrun.tp73.quantile.90 <- quantile(sum.cutandrun.tp73,probs=0.90) # 4
+    attr(m,"sum.cutandrun.tp73.quantile.90") <-  sum.cutandrun.tp73.quantile.90 <- quantile(sum.cutandrun.tp73,probs=0.90) # 4
     sum.cutandrun.tp73.quantile.95 <- quantile(sum.cutandrun.tp73,probs=0.95) # 6
     sum.cutandrun.tp73.quantile.99 <- quantile(sum.cutandrun.tp73,probs=0.99) # 20
     sum.cutandrun.tp73.TAa.quantile.50 <- max(quantile(sum.cutandrun.tp73.TAa,probs=0.50),0.5) # 1
@@ -184,9 +187,9 @@ create.lists.for.chromosome <- function(chromosome="22",reportdir="Reports") {
     sum.cutandrun.tp73.TAa.quantile.75 <- quantile(sum.cutandrun.tp73.TAa,probs=0.75) # 1
     sum.cutandrun.tp73.DNb.quantile.75 <- quantile(sum.cutandrun.tp73.DNb,probs=0.75) # 1
     sum.cutandrun.tp73.GFP.quantile.75 <- max(quantile(sum.cutandrun.tp73.GFP,probs=0.75), 0.5) # 0
-    sum.cutandrun.tp73.TAa.quantile.90 <- quantile(sum.cutandrun.tp73.TAa,probs=0.90) # 2
-    sum.cutandrun.tp73.DNb.quantile.90 <- quantile(sum.cutandrun.tp73.DNb,probs=0.90) # 2
-    sum.cutandrun.tp73.GFP.quantile.90 <- quantile(sum.cutandrun.tp73.GFP,probs=0.90) # 1
+    attr(m,"sum.cutandrun.tp73.TAa.quantile.90") <- sum.cutandrun.tp73.TAa.quantile.90 <- quantile(sum.cutandrun.tp73.TAa,probs=0.90) # 2
+    attr(m,"sum.cutandrun.tp73.DNb.quantile.90") <- sum.cutandrun.tp73.DNb.quantile.90 <- quantile(sum.cutandrun.tp73.DNb,probs=0.90) # 2
+    attr(m,"sum.cutandrun.tp73.GFP.quantile.90") <- sum.cutandrun.tp73.GFP.quantile.90 <- quantile(sum.cutandrun.tp73.GFP,probs=0.90) # 1
     sum.cutandrun.tp73.TAa.quantile.95 <- quantile(sum.cutandrun.tp73.TAa,probs=0.95) # 3
     sum.cutandrun.tp73.DNb.quantile.95 <- quantile(sum.cutandrun.tp73.DNb,probs=0.95) # 3
     sum.cutandrun.tp73.GFP.quantile.95 <- quantile(sum.cutandrun.tp73.GFP,probs=0.95) # 1
@@ -199,9 +202,9 @@ create.lists.for.chromosome <- function(chromosome="22",reportdir="Reports") {
     sum.cutandrun.tp73.skmel29_2.TAa.quantile.75 <- quantile(m$"tp73_skmel29_2_TA",probs=0.75)
     sum.cutandrun.tp73.skmel29_2.DNb.quantile.75 <- quantile(m$"tp73_skmel29_2_DN",probs=0.75)
     sum.cutandrun.tp73.skmel29_2.GFP.quantile.75 <- quantile(m$"tp73_skmel29_2_GFP",probs=0.75)
-    sum.cutandrun.tp73.skmel29_2.TAa.quantile.90 <- quantile(m$"tp73_skmel29_2_TA",probs=0.90)
-    sum.cutandrun.tp73.skmel29_2.DNb.quantile.90 <- quantile(m$"tp73_skmel29_2_DN",probs=0.90)
-    sum.cutandrun.tp73.skmel29_2.GFP.quantile.90 <- quantile(m$"tp73_skmel29_2_GFP",probs=0.90)
+    attr(m,"sum.cutandrun.tp73.skmel29_2.TAa.quantile.90") <- sum.cutandrun.tp73.skmel29_2.TAa.quantile.90 <- quantile(m$"tp73_skmel29_2_TA",probs=0.90)
+    attr(m,"sum.cutandrun.tp73.skmel29_2.DNb.quantile.90") <- sum.cutandrun.tp73.skmel29_2.DNb.quantile.90 <- quantile(m$"tp73_skmel29_2_DN",probs=0.90)
+    attr(m,"sum.cutandrun.tp73.skmel29_2.GFP.quantile.90") <- sum.cutandrun.tp73.skmel29_2.GFP.quantile.90 <- quantile(m$"tp73_skmel29_2_GFP",probs=0.90)
     sum.cutandrun.tp73.skmel29_2.TAa.quantile.95 <- quantile(m$"tp73_skmel29_2_TA",probs=0.95)
     sum.cutandrun.tp73.skmel29_2.DNb.quantile.95 <- quantile(m$"tp73_skmel29_2_DN",probs=0.95)
     sum.cutandrun.tp73.skmel29_2.GFP.quantile.95 <- quantile(m$"tp73_skmel29_2_GFP",probs=0.95)
@@ -214,9 +217,9 @@ create.lists.for.chromosome <- function(chromosome="22",reportdir="Reports") {
     sum.cutandrun.tp73.saos2.TAa.quantile.75 <- quantile(m$"tp73_saos2_TA",probs=0.75)
     sum.cutandrun.tp73.saos2.DNb.quantile.75 <- quantile(m$"tp73_saos2_DN",probs=0.75)
     sum.cutandrun.tp73.saos2.GFP.quantile.75 <- quantile(m$"tp73_saos2_GFP",probs=0.75)
-    sum.cutandrun.tp73.saos2.TAa.quantile.90 <- quantile(m$"tp73_saos2_TA",probs=0.90)
-    sum.cutandrun.tp73.saos2.DNb.quantile.90 <- quantile(m$"tp73_saos2_DN",probs=0.90)
-    sum.cutandrun.tp73.saos2.GFP.quantile.90 <- quantile(m$"tp73_saos2_GFP",probs=0.90)
+    attr(m,"sum.cutandrun.tp73.saos2.TAa.quantile.90") <- sum.cutandrun.tp73.saos2.TAa.quantile.90 <- quantile(m$"tp73_saos2_TA",probs=0.90)
+    attr(m,"sum.cutandrun.tp73.saos2.DNb.quantile.90") <- sum.cutandrun.tp73.saos2.DNb.quantile.90 <- quantile(m$"tp73_saos2_DN",probs=0.90)
+    attr(m,"sum.cutandrun.tp73.saos2.GFP.quantile.90") <- sum.cutandrun.tp73.saos2.GFP.quantile.90 <- quantile(m$"tp73_saos2_GFP",probs=0.90)
     sum.cutandrun.tp73.saos2.TAa.quantile.95 <- quantile(m$"tp73_saos2_TA",probs=0.95)
     sum.cutandrun.tp73.saos2.DNb.quantile.95 <- quantile(m$"tp73_saos2_DN",probs=0.95)
     sum.cutandrun.tp73.saos2.GFP.quantile.95 <- quantile(m$"tp73_saos2_GFP",probs=0.95)
@@ -227,7 +230,7 @@ create.lists.for.chromosome <- function(chromosome="22",reportdir="Reports") {
     # analogously for pos
     sum.cutandrun.pos.quantile.50 <- max(quantile(sum.cutandrun.pos,probs=0.50),0.5) # 0
     sum.cutandrun.pos.quantile.75 <- max(quantile(sum.cutandrun.pos,probs=0.75),0.5) # 1
-    sum.cutandrun.pos.quantile.90 <- quantile(sum.cutandrun.pos,probs=0.90) # 3
+    attr(m,"sum.cutandrun.pos.quantile.90") <- sum.cutandrun.pos.quantile.90 <- quantile(sum.cutandrun.pos,probs=0.90) # 3
     sum.cutandrun.pos.quantile.95 <- quantile(sum.cutandrun.pos,probs=0.95) # 6
     sum.cutandrun.pos.quantile.99 <- quantile(sum.cutandrun.pos,probs=0.99) # 80
     sum.cutandrun.pos.TAa.quantile.50 <- max(quantile(sum.cutandrun.pos.TAa,probs=0.50),0.5) # 1
@@ -236,9 +239,9 @@ create.lists.for.chromosome <- function(chromosome="22",reportdir="Reports") {
     sum.cutandrun.pos.TAa.quantile.75 <- quantile(sum.cutandrun.pos.TAa,probs=0.75) # 1
     sum.cutandrun.pos.DNb.quantile.75 <- quantile(sum.cutandrun.pos.DNb,probs=0.75) # 1
     sum.cutandrun.pos.GFP.quantile.75 <- quantile(sum.cutandrun.pos.GFP,probs=0.75) # 1
-    sum.cutandrun.pos.TAa.quantile.90 <- quantile(sum.cutandrun.pos.TAa,probs=0.90) # 1
-    sum.cutandrun.pos.DNb.quantile.90 <- quantile(sum.cutandrun.pos.DNb,probs=0.90) # 1
-    sum.cutandrun.pos.GFP.quantile.90 <- quantile(sum.cutandrun.pos.GFP,probs=0.90) # 1
+    attr(m,"sum.cutandrun.pos.TAa.quantile.90") <- sum.cutandrun.pos.TAa.quantile.90 <- quantile(sum.cutandrun.pos.TAa,probs=0.90) # 1
+    attr(m,"sum.cutandrun.pos.DNb.quantile.90") <- sum.cutandrun.pos.DNb.quantile.90 <- quantile(sum.cutandrun.pos.DNb,probs=0.90) # 1
+    attr(m,"sum.cutandrun.pos.GFP.quantile.90") <- sum.cutandrun.pos.GFP.quantile.90 <- quantile(sum.cutandrun.pos.GFP,probs=0.90) # 1
     sum.cutandrun.pos.TAa.quantile.95 <- quantile(sum.cutandrun.pos.TAa,probs=0.95) # 2
     sum.cutandrun.pos.DNb.quantile.95 <- quantile(sum.cutandrun.pos.DNb,probs=0.95) # 2
     sum.cutandrun.pos.GFP.quantile.95 <- quantile(sum.cutandrun.pos.GFP,probs=0.95) # 2
@@ -350,6 +353,9 @@ create.lists.for.chromosome <- function(chromosome="22",reportdir="Reports") {
     if (!dir.exists(reportdir)) {
         dir.create(path=reportdir,recursive=TRUE)
     }
+
+    cat("I: Preparing to write to file '",paste(reportdir,paste("report_ratio_tp73_chr_",chromosome,"_quantile_50.tsv",sep=""),sep="/"),"'\n",sep="")
+
     write.table(file=paste(reportdir,paste("report_ratio_tp73_chr_",chromosome,"_quantile_",50,".tsv",sep=""),sep="/"),x=pretty.table(ratio.tp73.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
     write.table(file=paste(reportdir,paste("report_ratio_tp73_chr_",chromosome,"_quantile_",75,".tsv",sep=""),sep="/"),x=pretty.table(ratio.tp73.75),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
     write.table(file=paste(reportdir,paste("report_ratio_tp73_chr_",chromosome,"_quantile_",90,".tsv",sep=""),sep="/"),x=pretty.table(ratio.tp73.90),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
