@@ -4,40 +4,21 @@
 
 options(width=180)
 
-# Columns representing results from CUT&RUN data
-## The names of the columns that represent the CUT&RUN data for the positions at which
-## TP73 is binding.
-cols.cutandrun <- c("pos_saos2_DN", "pos_saos2_GFP", "pos_saos2_TA", "pos_skmel29_2_DN",  "pos_skmel29_2_GFP", "pos_skmel29_2_TA",
- "tp73_saos2_DN", "tp73_saos2_GFP", "tp73_saos2_TA", "tp73_skmel29_2_DN", "tp73_skmel29_2_GFP", "tp73_skmel29_2_TA")
-# Subset of columns representing results for TP73 binding in CUT&RUN data
-cols.cutandrun.tp73 <- c("tp73_saos2_DN", "tp73_saos2_GFP", "tp73_saos2_TA", "tp73_skmel29_2_DN", "tp73_skmel29_2_GFP", "tp73_skmel29_2_TA")
-cols.cutandrun.tp73.saos <- c("tp73_saos2_DN", "tp73_saos2_GFP", "tp73_saos2_TA")
-cols.cutandrun.tp73.skmel <- c("tp73_skmel29_2_DN", "tp73_skmel29_2_GFP", "tp73_skmel29_2_TA")
-cols.cutandrun.tp73.TAa <- c("tp73_saos2_TA", "tp73_skmel29_2_TA")
-cols.cutandrun.tp73.DNb <- c("tp73_saos2_DN", "tp73_skmel29_2_DN")
-cols.cutandrun.tp73.GFP <- c("tp73_saos2_GFP", "tp73_skmel29_2_GFP")
-cols.cutandrun.tp73.TAa.saos <- c("tp73_saos2_TA")
-cols.cutandrun.tp73.DNb.saos <- c("tp73_saos2_DN")
-cols.cutandrun.tp73.GFP.saos <- c("tp73_saos2_GFP")
-cols.cutandrun.tp73.TAa.skmel <- c("tp73_skmel29_2_TA")
-cols.cutandrun.tp73.DNb.skmel <- c("tp73_skmel29_2_DN")
-cols.cutandrun.tp73.GFP.skmel <- c("tp73_skmel29_2_GFP")
-cols.cutandrun.pos <- c("pos_saos2_DN", "pos_saos2_GFP", "pos_saos2_TA", "pos_skmel29_2_DN", "pos_skmel29_2_GFP", "pos_skmel29_2_TA")
-cols.cutandrun.pos.saos <- c("pos_saos2_DN", "pos_saos2_GFP", "pos_saos2_TA")
-cols.cutandrun.pos.skmel <- c("pos_skmel29_2_DN", "pos_skmel29_2_GFP", "pos_skmel29_2_TA")
-cols.cutandrun.pos.TAa <- c("pos_saos2_TA", "pos_skmel29_2_TA")
-cols.cutandrun.pos.DNb <- c("pos_saos2_DN", "pos_skmel29_2_DN")
-cols.cutandrun.pos.GFP <- c("pos_saos2_GFP","pos_skmel29_2_GFP")
-cols.cutandrun.pos.TAa.saos  <- c("pos_saos2_TA")
-cols.cutandrun.pos.DNb.saos  <- c("pos_saos2_DN")
-cols.cutandrun.pos.GFP.saos  <- c("pos_saos2_GFP")
-cols.cutandrun.pos.TAa.skmel <- c("pos_skmel29_2_TA")
-cols.cutandrun.pos.DNb.skmel <- c("pos_skmel29_2_DN")
-cols.cutandrun.pos.GFP.skmel <- c("pos_skmel29_2_GFP")
-
+# Remove prior data on ratios or sums
+rm(list=grep(ls(),pattern="^sum*",value=T))
+rm(list=grep(ls(),pattern="^ratio.*",value=T))
+rm(list=grep(ls(),pattern="^quantiles.*",value=T))
+rm(list=grep(ls(),pattern="^mean.NumInWindow*",value=T))
 
 # Import function to read and interpret the matrix for individual chromosomes
 source("analyze_matrix_function_lists.R")  
+
+for(i in as.character(1:22)) {
+    cat("I: processing chromosome ",i,"...\n",sep="")
+    m <- create.lists.for.chromosome(i)
+}
+
+
 
 ## Ugly?!?
 

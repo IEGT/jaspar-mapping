@@ -37,7 +37,8 @@ cols.cutandrun.pos.GFP.skmel <- c("pos_skmel29_2_GFP")
 
 require(data.table)
 
-create.lists.for.chromosome <- function(chromosome="22") {
+create.lists.for.chromosome <- function(chromosome="22",reportdir="Reports") {
+
     filename <- paste("TP73_datatable_",chromosome,".bed.gz",sep="")
 
     # Import of multi-GB large compressed data file
@@ -48,7 +49,6 @@ create.lists.for.chromosome <- function(chromosome="22") {
     m.colnames.basename <- basename(m.colnames)
     m.colnames.dirname <- dirname(m.colnames)
     colnames(m) <- m.colnames.basename
-
 
     gc()
 
@@ -315,7 +315,6 @@ create.lists.for.chromosome <- function(chromosome="22") {
         d
     }
 
-    reportdir <- "Reports"
     dir.create(path=reportdir,recursive=TRUE)
     write.table(file=paste(reportdir,paste("report_ratio_tp73_chr_",chromosome,"_quantile_",50,".tsv",sep=""),sep="/"),x=pretty.table(ratio.tp73.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
     write.table(file=paste(reportdir,paste("report_ratio_tp73_chr_",chromosome,"_quantile_",75,".tsv",sep=""),sep="/"),x=pretty.table(ratio.tp73.75),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
@@ -462,11 +461,11 @@ create.lists.for.chromosome <- function(chromosome="22") {
     head(pretty.table(ratio.saos2.GFP.quantile.99))
     tail(pretty.table(ratio.saos2.GFP.quantile.99))
 
-    ratio.saos2.TAa.99.vs.ratio.saos2.DNb.99 <- ratio.saos2.TAa.99 / ratio.saos2.DNb.99
+    ratio.saos2.TAa.99.vs.ratio.saos2.DNb.99 <- ratio.saos2.TAa.quantile.99 / ratio.saos2.DNb.quantile.99
     pretty.table(ratio.saos2.TAa.99.vs.ratio.saos2.DNb.99)
-    ratio.saos2.TAa.99.vs.ratio.saos2.GFP.99 <- ratio.saos2.TAa.99 / ratio.saos2.GFP.99
+    ratio.saos2.TAa.99.vs.ratio.saos2.GFP.99 <- ratio.saos2.TAa.quantile.99 / ratio.saos2.GFP.quantile.99
     pretty.table(ratio.saos2.TAa.99.vs.ratio.saos2.GFP.99)
-    ratio.saos2.DNb.99.vs.ratio.saos2.GFP.99 <- ratio.saos2.DNb.99 / ratio.saos2.GFP.99
+    ratio.saos2.DNb.99.vs.ratio.saos2.GFP.99 <- ratio.saos2.DNb.quantile.99 / ratio.saos2.GFP.quantile.99
     pretty.table(ratio.saos2.DNb.99.vs.ratio.saos2.GFP.99)
 
     write.table(file=paste(reportdir,paste("report_ratio_TAa_vs_noTAa_in_Saos2_chr_",chromosome,"_quantile_",50,".tsv",sep=""),sep="/"),x=pretty.table(ratio.saos2.TAa.quantile.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
@@ -696,5 +695,8 @@ create.lists.for.chromosome <- function(chromosome="22") {
     tail(pretty.table(ratio.ratio.skmel29_2.vs.saos2.of.TAa.wo.DNb.vs.DNb.wo.TAa),20)    
 
     write.table(file=paste(reportdir,paste("report_ratio_SKMel_vs_Saos2_of_TAa_without_DNb_vs_DNb_without_TAa_chr_",chromosome,".tsv",sep=""),sep="/"),x=pretty.table(ratio.skmel29_2.TAa.quantile.90.wo.DNb.quantile.50.vs.skmel29_2.DNb.quantile.90.wo.TAa.quantile.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
+
+    invisible(m)
+
 }
 
