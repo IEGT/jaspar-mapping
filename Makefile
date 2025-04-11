@@ -1,10 +1,12 @@
 
 CXX=g++
-CXXFLAGS=-std=c++23 -I/home/sm718/miniconda3/include
+CXXFLAGS= -std=c++23
+# CXXFKAGS += -I/home/sm718/miniconda3/include
 CXXFLAGS += -g
 CXXFLAGS += -O3
 #LDFLAGS=-lz -lbz2
-LDFLAGS=/home/sm718/miniconda3/pkgs/zlib-1.3.1-h4ab18f5_1/lib/libz.a /home/sm718/miniconda3/pkgs/bzip2-1.0.8-h4bc722e_7/lib/libbz2.a 
+#LDFLAGS=/home/sm718/miniconda3/pkgs/zlib-1.3.1-h4ab18f5_1/lib/libz.a /home/sm718/miniconda3/pkgs/bzip2-1.0.8-h4bc722e_7/lib/libbz2.a
+LDFLAGS += -lz -lbz2
 LDFLAGS += -lm
 
 SCRATCHDIR=/tmp
@@ -124,10 +126,10 @@ FILES_CUTNRUN= $(PATH_CUTNRUN)/pos_saos2_DN_R1.clipped.clean.bed \
 files_cutandrun_clean: $(FILES_CUTNRUN)
 
 #test2: $(OUTPUTDIR)/output_Chr$(CHR)/TP73_MA0861.1_bidirect_$(CHR).combined.bed.gz
-#$(OUTPUTDIR)/output_Chr$(CHR)/TP73_MA0861.1_bidirect_$(CHR).combined.bed.gz: $(OUTPUTDIR)/output_Chr$(CHR)/TP73_MA0861.1_bidirect_$(CHR).bed.gz 
-#	ls $(OUTPUTDIR)/output_Chr$(CHR)/TP73_MA0861.1_bidirect_$(CHR).bed.gz 
+#$(OUTPUTDIR)/output_Chr$(CHR)/TP73_MA0861.1_bidirect_$(CHR).combined.bed.gz: $(OUTPUTDIR)/output_Chr$(CHR)/TP73_MA0861.1_bidirect_$(CHR).bed.gz
+#	ls $(OUTPUTDIR)/output_Chr$(CHR)/TP73_MA0861.1_bidirect_$(CHR).bed.gz
 
-%_$(CHR).combined.bed: $(OUTPUTDIR)/output_Chr$(CHR)/TP73_MA0861.1_bidirect_$(CHR).bed.gz $(FILES_CUTNRUN) 
+%_$(CHR).combined.bed: $(OUTPUTDIR)/output_Chr$(CHR)/TP73_MA0861.1_bidirect_$(CHR).bed.gz $(FILES_CUTNRUN)
 	if ! which bedtools; then echo "E: Need bedtools in path."; exit 1; fi
 
 	#echo -n "Chr\tFrom\tTo\tName\tScore\tStrand" > "$$outputfile"
