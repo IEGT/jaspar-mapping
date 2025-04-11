@@ -506,12 +506,15 @@ create.lists.for.chromosome <- function(m, reportdir="Reports",offset=0.01) {
     head(pretty.table(ratio.saos2.GFP.quantile.99))
     tail(pretty.table(ratio.saos2.GFP.quantile.99))
 
-    attr(m,"ratio.saos2.TAa.99.vs.ratio.saos2.DNb.90") <- ratio.saos2.TAa.90.vs.ratio.saos2.DNb.90 <- ratio.saos2.TAa.quantile.90 / ratio.saos2.DNb.quantile.90
+    attr(m,"ratio.saos2.TAa.75.vs.ratio.saos2.DNb.75") <- ratio.saos2.TAa.75.vs.ratio.saos2.DNb.75 <- ratio.saos2.TAa.quantile.75 / ratio.saos2.DNb.quantile.75
+    attr(m,"ratio.saos2.TAa.90.vs.ratio.saos2.DNb.90") <- ratio.saos2.TAa.90.vs.ratio.saos2.DNb.90 <- ratio.saos2.TAa.quantile.90 / ratio.saos2.DNb.quantile.90
     attr(m,"ratio.saos2.TAa.99.vs.ratio.saos2.DNb.99") <- ratio.saos2.TAa.99.vs.ratio.saos2.DNb.99 <- ratio.saos2.TAa.quantile.99 / ratio.saos2.DNb.quantile.99
     pretty.table(ratio.saos2.TAa.99.vs.ratio.saos2.DNb.99)
+    attr(m,"ratio.saos2.TAa.75.vs.ratio.saos2.GFP.75") <- ratio.saos2.TAa.75.vs.ratio.saos2.GFP.90 <- ratio.saos2.TAa.quantile.75 / ratio.saos2.GFP.quantile.75
     attr(m,"ratio.saos2.TAa.90.vs.ratio.saos2.GFP.90") <- ratio.saos2.TAa.90.vs.ratio.saos2.GFP.90 <- ratio.saos2.TAa.quantile.90 / ratio.saos2.GFP.quantile.90
     attr(m,"ratio.saos2.TAa.99.vs.ratio.saos2.GFP.99") <- ratio.saos2.TAa.99.vs.ratio.saos2.GFP.99 <- ratio.saos2.TAa.quantile.99 / ratio.saos2.GFP.quantile.99
     pretty.table(ratio.saos2.TAa.99.vs.ratio.saos2.GFP.99)
+    attr(m,"ratio.saos2.DNb.75.vs.ratio.saos2.GFP.75") <- ratio.saos2.DNb.90.vs.ratio.saos2.GFP.75 <- ratio.saos2.DNb.quantile.75 / ratio.saos2.GFP.quantile.75
     attr(m,"ratio.saos2.DNb.90.vs.ratio.saos2.GFP.90") <- ratio.saos2.DNb.90.vs.ratio.saos2.GFP.90 <- ratio.saos2.DNb.quantile.90 / ratio.saos2.GFP.quantile.90
     attr(m,"ratio.saos2.DNb.99.vs.ratio.saos2.GFP.99") <- ratio.saos2.DNb.99.vs.ratio.saos2.GFP.99 <- ratio.saos2.DNb.quantile.99 / ratio.saos2.GFP.quantile.99
     pretty.table(ratio.saos2.DNb.99.vs.ratio.saos2.GFP.99)

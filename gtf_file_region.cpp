@@ -89,8 +89,7 @@ std::unordered_map<std::string, GeneRegion> parseGTFFile(const std::string& gtfF
         std::getline(ss,attributes);
 
         if (
-            feature != "gene" &&
-            feature != "transcript"
+            feature != "gene" && feature != "transcript"
         ) {
             continue; // Skip lines that are not gene or transcript entries
         }

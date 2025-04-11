@@ -61,7 +61,7 @@ static bool beVerbose=false;
 static bool showHelp=false;
 
 void printHelp(const std::string& gtfFile, const std::vector<std::string>& geneNames) {
-    std::cerr << "Usage: gtf_file_region_retrieval [-g gtf_file] [-f \"promoter\"] [--gene gene_name1 --gene gene_name2 ...]\n";
+    std::cerr << "Usage: gtf_file_region_retrieval [-g gtf_file] [-c head_count] [-f \"promoter\"] [--gene gene_name1 --gene gene_name2 ...]\n";
     exit(1);
 }
 
@@ -82,6 +82,7 @@ int main(int argc, char* argv[]) {
     std::string gtfFile = "Homo_sapiens.GRCh38.112.gtf";  // Default GTF file
     std::string filter; // Modification of GeneRegion to perform
     std::vector<std::string> geneNames;
+    int head = 0; // number of top hits to show
 
     // Option flags and variables for getopt
     int option;
@@ -89,14 +90,18 @@ int main(int argc, char* argv[]) {
         {"gtf", required_argument, 0, 'g'},   // Path to GTF file
         {"gene", required_argument, 0, 'n'},  // Specify genes of interest
         {"filter", required_argument, 0, 'f'},  // Specify genes of interest
+        {"head", required_argument, 0, 'c'}, // Head - show only specified number of first hits
         {"verbose", required_argument, 0, 'v'},  // Instructs to generate help info
         {"help", no_argument, 0, 'h'}, // Instructs to be chatty about what is happening
         {0, 0, 0, 0}
     };
 
     // Parse command line arguments using getopt
-    while ((option = getopt_long(argc, argv, "g:n:f:vh", long_options, nullptr)) != -1) {
+    while ((option = getopt_long(argc, argv, "c:f:g:n:vh", long_options, nullptr)) != -1) {
         switch (option) {
+            case 'c':
+                head = std::stoi(optarg);
+                break;
             case 'f':
                 filter = optarg;
                 break;
@@ -166,15 +171,22 @@ int main(int argc, char* argv[]) {
     // Print the regions for the genes
     for (const std::string& geneName : geneNames) {
         //std::cerr << "D: testing for relevance of gene name '" << geneName << "'" << std::endl;
+        int c = 0;
+        // Check if the gene name exists in the map
         if (geneNameToRegions.find(geneName) != geneNameToRegions.end()) {
             std::vector<std::reference_wrapper<const GeneRegion>>& regions = geneNameToRegions[geneName];
             //std::cout << "# Genename: " << geneName << std::endl;
+            // Print the regions for the gene
             for (const GeneRegion& region : regions) {
                 if ("promoter" == filter) {
                     std::cout << region.relative_upstream(1,500).toBedString() << std::endl;
                 }
                 else {
                     std::cout << region.toBedString() << std::endl;
+                }
+                c++;
+                if (head > 0 && c >= head) {
+                    break; // Stop after printing the specified number of regions
                 }
             }
         } else {

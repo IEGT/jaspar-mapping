@@ -14,6 +14,8 @@ rm(list=grep(ls(),pattern="^mean.NumInWindow*",value=T))
 source("analyze_matrix_function_lists.R")  
 source("analyze_matrix_function_distances.R")  
 
+
+
 m.findings <- list()
 chromosomes <- as.character(1:22)
 for(i in chromosomes) {
