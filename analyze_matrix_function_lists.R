@@ -51,8 +51,15 @@ read.data.table.for.chromosome <- function(chromosome=22) {
     filename <- paste("TP73_datatable_",chromosome,".bed.gz",sep="")
 
     # Import of multi-GB large compressed data file
-    #m <- fread("TP73_datatable_1.bed.gz")
-    m <- fread(filename,fill=FALSE,showProgress=TRUE)
+    m <- fread(filename, fill=FALSE, showProgress=TRUE)
+
+    # Explicitly coerce columns to desired types
+    m[, Chr := as.character(Chr)]
+    m[, From := as.integer(From)]
+    m[, To := as.integer(To)]
+    m[, Score := as.integer(Score)]  # Coerce Score to integer
+    m[, Strand := as.character(Strand)]  # Ensure Strand is a character
+
     attr(m,"chromosome") <- chromosome
 
     m.colnames <- colnames(m)

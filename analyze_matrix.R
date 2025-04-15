@@ -13,16 +13,31 @@ rm(list=grep(ls(),pattern="^mean.NumInWindow*",value=T))
 # Import function to read and interpret the matrix for individual chromosomes
 source("analyze_matrix_function_lists.R")  
 source("analyze_matrix_function_distances.R")  
-
+source("analyze_matrix_function_promoters.R")
 
 
 m.findings <- list()
-chromosomes <- as.character(1:22)
+m.contexts <- list()
+chromosomes <- c(as.character(1:22),"X","Y")
 for(i in chromosomes) {
     cat("I: processing chromosome ",i,"...\n",sep="")
-    m <- read.data.table.for.chromosome(i)
+    m.contexts[[i]] <- m <- read.data.table.for.chromosome(i)
+    m.promoters.index <- sapply(promoterBedTables, function(x) {
+        checkBedOverlaps(m,x)
+    })
+
+    # Print rows where m.promoters.index is > 0
+    if (any(m.promoters.index > 0)) {
+        cat("Rows with m.promoters.index > 0 for chromosome ", i, ":\n", sep = "")
+        for (j in colnames(m.promoters.index)) {
+            cat("  ", j, ": ", sum(m.promoters.index[, j]), "\n", sep = "")
+            print(m[m.promoters.index[,j] > 0,c("Chr","From","To")])
+        }
+    }
+
     m <- create.lists.for.chromosome(m)
     m.findings[[i]] <- attributes(m)
+    rm(m)
 }
 
 # Identify most promising transcription factors for 90% quantile
