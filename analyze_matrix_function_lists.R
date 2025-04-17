@@ -58,7 +58,7 @@ read.data.table.for.chromosome <- function(chromosome=22) {
     m[, From := as.integer(From)]
     m[, To := as.integer(To)]
     m[, Score := as.integer(Score)]  # Coerce Score to integer
-    m[, Strand := as.character(Strand)]  # Ensure Strand is a character
+    m[, Strand := as.integer(Strand)]  # Ensure Strand is a integer
 
     attr(m,"chromosome") <- chromosome
 

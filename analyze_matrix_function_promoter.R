@@ -4,20 +4,20 @@ library(data.table)
 readPromoterBedFiles <- function() {
     # List all files matching the pattern
     bedFiles <- list.files(path="GeneLists", pattern = "*.promoter.bed", full.names = TRUE)
-    
+
     if (length(bedFiles) == 0) {
         stop("No BED files matching the pattern were found.")
     }
-    
+
     # Read each BED file into a data table
     bedDataTables <- lapply(bedFiles, function(file) {
         fread(file, colClasses = c("Chr"="character", "From"="integer", "To"="integer",
                                    "Gene"="character", "Score"="integer", "Strand"="integer"))
     })
-    
+
     # Assign file names as names of the list
     names(bedDataTables) <- basename(bedFiles)
-    
+
     return(bedDataTables)
 }
 
@@ -27,25 +27,26 @@ checkBedOverlaps <- function(bed1, bed2) {
     if (!all(c("Chr", "From", "To") %in% colnames(bed1)) || !all(c("Chr", "From", "To") %in% colnames(bed2))) {
         stop("Both BED files must have columns: Chr (chromosome), From (start), End (end).")
     }
-    
+
+    # Add an identifier column to bed2 for tracking overlaps
+    bed2[, id := .I]
+
     # Sort both BED files by chromosome and start position
     setkey(bed1, Chr, From, To)
     setkey(bed2, Chr, From, To)
-    
+
     # Perform a non-equi join to check for overlaps
     overlaps <- foverlaps(
-        x = bed1[, .(Chr, From_start = From, To_end = To)], 
-        y = bed2[, .(Chr, From_start = From, To_end = To)], 
-        by.x = c("Chr", "From_start", "To_end"), 
-        by.y = c("Chr", "From_start", "To_end"), 
-        type = "any", 
+        x = bed1[, .(Chr, From_start = From, To_end = To)],
+        y = bed2[, .(Chr, From_start = From, To_end = To, id)],
+        by.x = c("Chr", "From_start", "To_end"),
+        by.y = c("Chr", "From_start", "To_end"),
+        type = "any",
         nomatch = 0L
     )
-    
-    # Return a logical vector indicating if each row in bed1 overlaps with any row in bed2
-    result <- rep(FALSE, nrow(bed1))
-    result[overlaps[, xid]] <- TRUE
-    return(result)
+
+    # Return the positions in bed2 where overlaps occur
+    return(overlaps$id)
 }
 
 # Example usage
