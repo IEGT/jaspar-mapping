@@ -22,17 +22,13 @@ chromosomes <- c(as.character(1:22),"X","Y")
 for(i in chromosomes) {
     cat("I: processing chromosome ",i,"...\n",sep="")
     m.contexts[[i]] <- m <- read.data.table.for.chromosome(i)
-    m.promoters.index <- sapply(promoterBedTables, function(x) {
-        checkBedOverlaps(m,x)
+    m.promoters.index <- lapply(promoterBedTables, function(x) {
+        checkBedOverlaps(x,m)
     })
 
-    # Print rows where m.promoters.index is > 0
-    if (any(m.promoters.index > 0)) {
-        cat("Rows with m.promoters.index > 0 for chromosome ", i, ":\n", sep = "")
-        for (j in colnames(m.promoters.index)) {
-            cat("  ", j, ": ", sum(m.promoters.index[, j]), "\n", sep = "")
-            print(m[m.promoters.index[,j] > 0,c("Chr","From","To")])
-        }
+    for (j in names(m.promoters.index)) {
+        cat("  ", j, ": ", length(m.promoters.index[[j]]), "\n", sep = "")
+        print(m[m.promoters.index[[j]] > 0,c("Chr","From","To")])
     }
 
     m <- create.lists.for.chromosome(m)
