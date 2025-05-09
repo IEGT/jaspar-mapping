@@ -10,16 +10,16 @@ mkdir -p "$ofolder"
 
 URL_prefix="https://www.gsea-msigdb.org/gsea/msigdb/human/download_geneset.jsp?geneSetName="
 URL_postfix="&fileType=TSV"
-lists="HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION HALLMARK_WNT_BETA_CATENIN_SIGNALING HALLMARK_ANGIOGENESIS KEGG_MELANOMA REACTOME_NEURONAL_SYSTEM"
+lists="HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION HALLMARK_WNT_BETA_CATENIN_SIGNALING HALLMARK_ANGIOGENESIS KEGG_MELANOMA REACTOME_NEURONAL_SYSTEM Nico_Analysis_DN_20250508 Nico_Analysis_TA_20250508 Nico_Analysis_TAandDN_20250508"
 for list in $lists; do
     echo "$list"
-    URL="$URL_prefix$list$URL_postfix"
-    echo "$URL"
 
     fname="$ofolder/$list.tsv"
     if [ -f "$fname" ]; then
         echo "I: $fname already exists - skipping download"
     else
+        URL="$URL_prefix$list$URL_postfix"
+        echo "$URL"
         echo "I: Downloading $list to $fname"
         wget -O "$fname" "$URL"
     fi
