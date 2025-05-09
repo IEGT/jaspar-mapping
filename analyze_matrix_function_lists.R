@@ -50,6 +50,11 @@ read.data.table.for.chromosome <- function(chromosome=22) {
 
     filename <- paste("TP73_datatable_",chromosome,".bed.gz",sep="")
 
+    if (!file.exists(filename)) {
+        cat("E: File ",filename," not found - skipping\n",sep="")
+        return(NULL)
+    }
+
     # Import of multi-GB large compressed data file
     m <- fread(filename, fill=FALSE, showProgress=TRUE)
 
@@ -428,6 +433,8 @@ create.lists.for.chromosome <- function(m, reportdir="Reports",offset=0.01) {
     tail(pretty.table(ratio.DNb.quantile.99))
     head(pretty.table(ratio.GFP.quantile.99))
     tail(pretty.table(ratio.GFP.quantile.99))
+    tail(pretty.table(ratio.GFP.quantile.95))
+    tail(pretty.table(ratio.GFP.quantile.75))
 
     write.table(file=paste(reportdir,paste("report_ratio_TAa_vs_empty_chr_",chromosome,"_quantile_",50,".tsv",sep=""),sep="/"),x=pretty.table(ratio.TAa.quantile.50),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
     write.table(file=paste(reportdir,paste("report_ratio_TAa_vs_empty_chr_",chromosome,"_quantile_",75,".tsv",sep=""),sep="/"),x=pretty.table(ratio.TAa.quantile.75),sep="\t",col.names=TRUE,row.names=FALSE,append=FALSE,quote=FALSE)
