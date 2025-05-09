@@ -11,8 +11,12 @@ readPromoterBedFiles <- function() {
 
     # Read each BED file into a data table
     bedDataTables <- lapply(bedFiles, function(file) {
-        fread(file, colClasses = c("Chr"="character", "From"="integer", "To"="integer",
-                                   "Gene"="character", "Score"="integer", "Strand"="integer"))
+        dt <- fread(file)  # Read without specifying colClasses
+        setnames(dt, c("Chr", "From", "To", "Gene", "Score", "Strand"))  # Rename columns
+        dt[, `:=`(Chr = as.character(Chr), From = as.integer(From), To = as.integer(To),
+                  Gene = as.character(Gene), Score = as.integer(Score),
+                  Strand=as.character(Strand)) ]  # Ensure correct types
+       return(dt)
     })
 
     # Assign file names as names of the list
