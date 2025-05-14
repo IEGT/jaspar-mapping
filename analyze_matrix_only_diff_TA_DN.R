@@ -26,82 +26,96 @@ chromosomes <- c(as.character(1:22)) #,"X","Y")
 
 keep.all.data <- FALSE
 
-for(i in chromosomes) {
-    
-    cat("I: processing chromosome ",i,"...\n",sep="")
-    m <- read.data.table.for.chromosome(i)
+file.name.save <- "m.minimal.contexts.all.RData"
 
-    if (is.null(m)) {
-        cat("E: No data for chromosome ",i," - skipping\n",sep="")
-        next
-    }
+if (file.exists(file.name.save)) {
+    cat("I: Loading m.findings from file...\n")
+    load(file.name.save)
+} else {
+    cat("I: No file named '",file.name.save,"' with previous compute found - creating new data...\n")
 
-    if ("Feature" %in% colnames(m)) {
-        m.colnames.which <- which(colnames(m)=="Feature")
-        colnames(m)[m.colnames.which] <- "Name"
-    }
+    for(i in chromosomes) {
+        
+        cat("I: processing chromosome ",i,"...\n",sep="")
+        m <- read.data.table.for.chromosome(i)
 
-    promoter.for.gene.groups.500[[i]] <- m.promoters.index <- lapply(promoterBedTables, function(x) {
-        checkBedOverlaps(x,m)
-    })
-
-    if (keep.all.data) {
-        m.contexts[[i]] <- m
-    
-        for (j in names(m.promoters.index)) {
-            cat("  ", j, ": ", length(m.promoters.index[[j]]), "\n", sep = "")
-            print(m[m.promoters.index[[j]],c("Chr","From","To")])
+        if (is.null(m)) {
+            cat("E: No data for chromosome ",i," - skipping\n",sep="")
+            next
         }
-    } else {
-        if (is.null(m.contexts[[i]])) {
-            m.contexts[[i]] <- list()
+
+        if ("Feature" %in% colnames(m)) {
+            m.colnames.which <- which(colnames(m)=="Feature")
+            colnames(m)[m.colnames.which] <- "Name"
         }
-        for (j in names(m.promoters.index)) {
-            if (is.null(m.contexts[[i]][[j]])) {
-                m.contexts[[i]][[j]] <- m[m.promoters.index[[j]],]
-            } else {
-                m.contexts[[i]][[j]] <- rbind(m.contexts[[i]][[j]],m[m.promoters.index[[j]],])
+
+        promoter.for.gene.groups.500[[i]] <- m.promoters.index <- lapply(promoterBedTables, function(x) {
+            checkBedOverlaps(x,m)
+        })
+
+        if (keep.all.data) {
+            m.contexts[[i]] <- m
+        
+            for (j in names(m.promoters.index)) {
+                cat("  ", j, ": ", length(m.promoters.index[[j]]), "\n", sep = "")
+                print(m[m.promoters.index[[j]],c("Chr","From","To")])
+            }
+
+        } else {
+            if (is.null(m.contexts[[i]])) {
+                m.contexts[[i]] <- list()
+            }
+            for (j in names(m.promoters.index)) {
+                if (is.null(m.contexts[[i]][[j]])) {
+                    m.contexts[[i]][[j]] <- m[m.promoters.index[[j]],]
+                } else {
+                    m.contexts[[i]][[j]] <- rbind(m.contexts[[i]][[j]],m[m.promoters.index[[j]],])
+                }
             }
         }
+        gc()
     }
-    gc()
-}
 
+    # concatenate all gene-groups' contexts
+    m.contexts.all <- list()
+    for(i in chromosomes) {
+        #for(groupname in  grep(x=names(promoterBedTables),pattern="^Nico",value=T))
+        for(groupname in  names(promoterBedTables)) {
+            if (is.null(m.contexts.all[[groupname]])) {
+                m.contexts.all[[groupname]] <-list()
+            }
+            if (is.null(m.contexts[[i]][[groupname]]) || nrow(m.contexts[[i]][[groupname]])==0) {
+                #cat("I: No data for ",groupname," in chromosome ",i," - skipping\n",sep="")
+                next
+            }
 
-# concatenate all gene-groups' contexts
-m.contexts.all <- list()
-for(i in chromosomes) {
-    #for(groupname in  grep(x=names(promoterBedTables),pattern="^Nico",value=T))
-    for(groupname in  names(promoterBedTables)) {
-        if (is.null(m.contexts.all[[groupname]])) {
-            m.contexts.all[[groupname]] <-list()
-        }
-        if (is.null(m.contexts[[i]][[groupname]]) || nrow(m.contexts[[i]][[groupname]])==0) {
-            #cat("I: No data for ",groupname," in chromosome ",i," - skipping\n",sep="")
-            next
-        }
+            if ("Feature" %in% colnames(m.contexts[[i]][[groupname]])) {
+                cat("W: Found 'Feature' for chromosome ",i," - renaming to 'Name'\n",sep="")
+                m.colnames.which <- which(colnames(m.contexts[[i]][[groupname]])=="Feature")
+                colnames(m.contexts[[i]][[groupname]])[m.colnames.which] <- "Name"
+            }
 
-        if ("Feature" %in% colnames(m.contexts[[i]][[groupname]])) {
-            cat("W: Found 'Feature' for chromosome ",i," - renaming to 'Name'\n",sep="")
-            m.colnames.which <- which(colnames(m.contexts[[i]][[groupname]])=="Feature")
-            colnames(m.contexts[[i]][[groupname]])[m.colnames.which] <- "Name"
+            if (is.null(m.contexts.all[[groupname]])) {
+                m.contexts.all[[groupname]] <- m.contexts[[i]][[groupname]]
+            }
+            
+            if (! all(colnames(m.contexts[[i]][[groupname]])==colnames(m.contexts.all[[groupname]]))) {
+                cat("E: Column names do not match for ",groupname," in chromosome ",i," - skipping\n",sep="")
+                next
+            }
+            #cat("I: concatenating ",groupname," for chromosome ",i,"...\n",sep="")
+                #cat("I: ",dim(m.contexts.all[[groupname]]),"\n")
+                #cat("I: ",dim(m.contexts[[i]][[groupname]]),"\n")
+                #cat("I: ",dim(rbind(m.contexts.all[[groupname]],m.contexts[[i]][[groupname]])),"\n")
+            cat("I: concatenating ",groupname," for chromosome ",i," - ", nrow(m.contexts[[i]][[groupname]])," rows...\n",sep="")
+            m.contexts.all[[groupname]] <- rbind(m.contexts.all[[groupname]],m.contexts[[i]][[groupname]])
         }
-
-        if (is.null(m.contexts.all[[groupname]])) {
-            m.contexts.all[[groupname]] <- m.contexts[[i]][[groupname]]
-        }
-        
-        if (! all(colnames(m.contexts[[i]][[groupname]])==colnames(m.contexts.all[[groupname]]))) {
-            cat("E: Column names do not match for ",groupname," in chromosome ",i," - skipping\n",sep="")
-            next
-        }
-        #cat("I: concatenating ",groupname," for chromosome ",i,"...\n",sep="")
-            #cat("I: ",dim(m.contexts.all[[groupname]]),"\n")
-            #cat("I: ",dim(m.contexts[[i]][[groupname]]),"\n")
-            #cat("I: ",dim(rbind(m.contexts.all[[groupname]],m.contexts[[i]][[groupname]])),"\n")
-        cat("I: concatenating ",groupname," for chromosome ",i," - ", nrow(m.contexts[[i]][[groupname]])," rows...\n",sep="")
-        m.contexts.all[[groupname]] <- rbind(m.contexts.all[[groupname]],m.contexts[[i]][[groupname]])
     }
+
+    cat("I: concatenated ",length(m.contexts.all)," gene groups\n")
+    save(m.contexts.all, file="m.minimal.contexts.all.RData")
+    cat("I: m.contexts.all saved to file 'm.minimal.contexts.all.RData'\n")
+
 }
 
 #colnames.ref <- colnames(m.contexts.all[["Nico_Analysis_TA_20250508.promoter.bed"]])
