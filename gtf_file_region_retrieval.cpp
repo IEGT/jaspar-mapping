@@ -89,7 +89,7 @@ int main(int argc, char* argv[]) {
     static struct option long_options[] = {
         {"gtf", required_argument, 0, 'g'},   // Path to GTF file
         {"gene", required_argument, 0, 'n'},  // Specify genes of interest
-        {"filter", required_argument, 0, 'f'},  // Specify genes of interest
+        {"filter", required_argument, 0, 'f'},  // Report promoter region instead of coding region
         {"head", required_argument, 0, 'c'}, // Head - show only specified number of first hits
         {"verbose", required_argument, 0, 'v'},  // Instructs to generate help info
         {"help", no_argument, 0, 'h'}, // Instructs to be chatty about what is happening

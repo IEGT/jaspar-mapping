@@ -5,8 +5,10 @@
 #include <sstream>
 #include <unordered_map>
 #include <getopt.h>  // For GNU Getopt
+#include <cassert>
 #include "progress.h" // progress indicator
 #include "gtf_file_region.h"  // GeneRegion struct
+
 
 void storeGeneReference(std::unordered_map<std::string, GeneRegion>& geneRegions,
     const std::string& geneId,
@@ -216,6 +218,7 @@ std::unordered_map<std::string, GeneRegion> parseGTFFile(const std::string& gtfF
 
 // Return a new GeneRegion object that represents the region upstream of the current region
 GeneRegion GeneRegion::relative_upstream(size_t minDist=1, size_t maxDist=500) const {
+    assert(end>start);
     if (minDist > maxDist) {
         std::cerr << "E GeneRegion::relative_upstream: minDist > maxDist" << std::endl;
         abort();
