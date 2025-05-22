@@ -56,24 +56,24 @@ genome: $(GENOME)
 genomegz: $(GENOMEGZ)
 
 # Define the pattern rule for generating .bed files
-$(OUTPUTDIR)/output_Chr$(CHR)/%_negative_$(CHR).bed $(OUTPUTDIR)/output_Chr$(CHR)/%_positive_$(CHR).bed:
+$(OUTPUTDIR)/$(CHR)/%_negative_$(CHR).bed $(OUTPUTDIR)/$(CHR)/%_positive_$(CHR).bed:
 	echo $*
 	NAME=$(shell echo $* | sed -e 's/_MA.*$$//') ; \
 	ACC=$(shell echo $* | tr "_" "\n" |grep -E "^MA[0-9][0-9][0-9][0-9]" |head -n 1) ; \
 	echo "NAME=$$NAME ACC=$$ACC" ; \
-	if [ ! -f $(OUTPUTDIR)/output_Chr$(CHR)/$${NAME}_$${ACC}_positive_$(CHR).bed ] ; then \
-	    echo "Missing: $(OUTPUTDIR)/output_Chr$(CHR)/$${NAME}_$${ACC}_positive_$(CHR).bed" ; \
-	    ./pssm_scan --outdir $(OUTPUTDIR)/output_Chr$(CHR) --genome $(GENOME) -l 0 -m $$ACC --chr $(CHR) ; \
-	elif [ ! -f $(OUTPUTDIR)/output_Chr$(CHR)/$${NAME}_$${ACC}_negative_$(CHR).bed ]; then \
+	if [ ! -f $(OUTPUTDIR)/$(CHR)/$${NAME}_$${ACC}_positive_$(CHR).bed ] ; then \
+	    echo "Missing: $(OUTPUTDIR)/$(CHR)/$${NAME}_$${ACC}_positive_$(CHR).bed" ; \
+	    ./pssm_scan --outdir $(OUTPUTDIR)/$(CHR) --genome $(GENOME) -l 0 -m $$ACC --chr $(CHR) ; \
+	elif [ ! -f $(OUTPUTDIR)/$(CHR)/$${NAME}_$${ACC}_negative_$(CHR).bed ]; then \
 	    echo "Missing: sort -k 1,1 -k2,2n" ; \
-	   ./pssm_scan --outdir $(OUTPUTDIR)/output_Chr$(CHR) --genome $(GENOME) -l 0 -m $$ACC --chr $(CHR) ; \
+	   ./pssm_scan --outdir $(OUTPUTDIR)/$(CHR) --genome $(GENOME) -l 0 -m $$ACC --chr $(CHR) ; \
 	fi
 
 #$(OUTPUTDIR)/%_bidirect_$(CHR).bed.gz: $(OUTPUTDIR)/%_negative_$(CHR).bed.gz $(OUTPUTDIR)/%_positive_$(CHR).bed.gz
-#	zcat $^ | sort -S 2G -k 1,1 -k2,2n | gzip -n -c > $@
+#	zcat $^ | sort -S 2G -k 1,1 -k2,2n | gzip -9 -n -c > $@
 
 %.bed.gz: %.bed
-	gzip -n $<
+	gzip -9 -n $<
 
 # Generate the list of targets
 SHELL=bash
@@ -91,7 +91,7 @@ $(shell basename $(GENOME) .fasta )_bottom500000.fasta: $(GENOME)
 
 genome_testdata: $(shell basename $(GENOME) .fasta )_bottom500000.fasta $(shell basename $(GENOME) .fasta )_top500000.fasta
 genome_testdata_gz: genome_testdata
-	gzip -n -k $(shell basename $(GENOME) .fasta )_bottom500000.fasta $(shell basename $(GENOME) .fasta )_top500000.fasta
+	gzip -9 -n -k $(shell basename $(GENOME) .fasta )_bottom500000.fasta $(shell basename $(GENOME) .fasta )_top500000.fasta
 
 testGTF: gtf_file_region_retrieval
 	echo "TP73" |  ./gtf_file_region_retrieval
@@ -105,10 +105,11 @@ test: pssm_scan Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta Homo_sa
 	#./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_bottom500000.fasta -l -500 --verbose -o output_bottom --chr 44 --from 100000 --to 103000
 	#./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_bottom500000.fasta -l -500 --verbose -o output_bottom --from 100000 --to 103000
 
-.PHONY: test all output_Chr$(CHR) jaspar genome genomegz genome_testdata count datatables files_cutandrun_clean TP73_datatable
+.PHONY: test all $(OUTPUTDIR)/$(CHR) jaspar genome genomegz genome_testdata count datatables files_cutandrun_clean TP73_datatable
 .PRECIOUS: $(GENOME) $(GENOMEGZ)
 
-PATH_CUTNRUN=cutandrun_20240313_nodupes
+#PATH_CUTNRUN=cutandrun_20240313_nodupes
+PATH_CUTNRUN=cutandrun_20250516_withDuplicates
 FILES_CUTNRUN= $(PATH_CUTNRUN)/pos_saos2_DN_R1.clipped.clean.bed \
 	$(PATH_CUTNRUN)/pos_saos2_GFP_R1.clipped.clean.bed \
 	$(PATH_CUTNRUN)/pos_saos2_TA_R1.clipped.clean.bed \
@@ -125,26 +126,38 @@ FILES_CUTNRUN= $(PATH_CUTNRUN)/pos_saos2_DN_R1.clipped.clean.bed \
 # Derives .bed files from the bedGraphs
 files_cutandrun_clean: $(FILES_CUTNRUN)
 
-#test2: $(OUTPUTDIR)/output_Chr$(CHR)/TP73_MA0861.1_bidirect_$(CHR).combined.bed.gz
-#$(OUTPUTDIR)/output_Chr$(CHR)/TP73_MA0861.1_bidirect_$(CHR).combined.bed.gz: $(OUTPUTDIR)/output_Chr$(CHR)/TP73_MA0861.1_bidirect_$(CHR).bed.gz
-#	ls $(OUTPUTDIR)/output_Chr$(CHR)/TP73_MA0861.1_bidirect_$(CHR).bed.gz
+#test2: $(OUTPUTDIR)/$(CHR)/TP73_MA0861.1_bidirect_$(CHR).combined.bed.gz
+#$(OUTPUTDIR)/$(CHR)/TP73_MA0861.1_bidirect_$(CHR).combined.bed.gz: $(OUTPUTDIR)/$(CHR)/TP73_MA0861.1_bidirect_$(CHR).bed.gz
+#	ls $(OUTPUTDIR)/$(CHR)/TP73_MA0861.1_bidirect_$(CHR).bed.gz
 
-%_$(CHR).combined.bed: $(OUTPUTDIR)/output_Chr$(CHR)/TP73_MA0861.1_bidirect_$(CHR).bed.gz $(FILES_CUTNRUN)
+%_$(CHR).combined.bed: $(OUTPUTDIR)/$(CHR)/TP73_MA0861.1_bidirect_$(CHR).bed.gz $(FILES_CUTNRUN)
 	if ! which bedtools; then echo "E: Need bedtools in path."; exit 1; fi
 
-	#echo -n "Chr\tFrom\tTo\tName\tScore\tStrand" > "$$outputfile"
+	#echo -n "Chr\tFrom\tTo\tName\tScore\tStrand" > "$$a_tmp"
+	#cp $$i $$i_tmp
+
 	a_tmp=$(shell mktemp -p . -u --suffix="_a_tmp_Chr_$(CHR).bed") ; \
 	b_tmp=$(shell mktemp -p . -u --suffix="_b_tmp_Chr_$(CHR).bed") ; \
-	TP73_refgz="$(OUTPUTDIR)/output_Chr$(CHR)/TP73_MA0861.1_bidirect_$(CHR).bed.gz" ; \
-	zcat "$$TP73_refgz" > "$$a_tmp" ; \
+	i_tmp=$(shell mktemp -p . -u --suffix="_i_tmp_Chr_$(CHR).bed") ; \
+	TP73_refgz="$(OUTPUTDIR)/$(CHR)/TP73_MA0861.1_bidirect_$(CHR).bed.gz" ; \
+	zcat "$$TP73_refgz" | grep -vi ^Chr >> "$$a_tmp" ; \
 	outputfile="TP73_MA0861.1_bidirect_$(CHR).combined.bed" ; \
+	echo -e -n "Chr\tFrom\tTo\tName\tScore\tStrand" > "$$outputfile" ; \
 	\
 	for i in $(FILES_CUTNRUN); do \
-		echo "I: Working on '$$i'" ; \
-		echo -n "\t" >> "$$outputfile" ; \
+		echo "I: Working on '$$i' for '$$outputfile'" ; \
+		echo -n "	" >> "$$outputfile" ; \
+		echo "I:    Cleaned scientific notations" ; \
 		echo -n "$$i" | sed -e 's/_R1.clipped.clean.bed$$//' >> "$$outputfile" ; \
 		if [ -f "$$a_tmp" ]; then \
-			bedtools map -null 0 -a "$$a_tmp" -b "$$i" > "$$b_tmp" || echo "bedtools failed" ; \
+			if ! awk 'BEGIN {OFS="\t"} {for (i=1; i<=NF; i++) if ($$i ~ /^[0-9.eE+-]+$$/) $$i = sprintf("%.0f", $$i); print}' < $$i > "$$i_tmp" ; then \
+				echo "awk failed" ; \
+				exit 1 ; \
+			fi ; \
+			if ! bedtools map -null 0 -a "$$a_tmp" -b "$$i_tmp" > "$$b_tmp" ; then \
+				echo "bedtools failed" ; \
+				exit 1 ; \
+			fi ; \
 			mv "$$b_tmp" "$$a_tmp" ; \
 		else \
 	        echo "E: File '$$a_tmp' should be existing" ; \
@@ -154,7 +167,7 @@ files_cutandrun_clean: $(FILES_CUTNRUN)
 	echo >> "$$outputfile" ; \
 	\
 	cat "$$a_tmp" >> "$$outputfile" ; \
-	rm "$$a_tmp"
+	rm "$$a_tmp" "$$i_tmp"
 
 # Rule to generate clean.bed files from bedGraph files in PATH_CUTNRUN
 $(PATH_CUTNRUN)/%.clean.bed: $(PATH_CUTNRUN)/%.bedGraph
@@ -162,8 +175,8 @@ $(PATH_CUTNRUN)/%.clean.bed: $(PATH_CUTNRUN)/%.bedGraph
 	grep -v hromosome $< | sed -e 's%^chr%%' | awk '{print $$1"\t"$$2"\t"$$3"\tcnr\t"$$4}' > $@
 
 
-#output_Chr$(CHR): $(addprefix output_Chr$(CHR)/,$(BED_FILES))
-$(OUTPUTDIR)/output_Chr$(CHR): $(addprefix $(OUTPUTDIR)/output_Chr$(CHR)/,$(BIDIRECT_FILES))
+#$(CHR): $(addprefix $(CHR)/,$(BED_FILES))
+$(OUTPUTDIR)/$(CHR): $(addprefix $(OUTPUTDIR)/$(CHR)/,$(BIDIRECT_FILES))
 
 datatables: context
 	#for chr in 2; do
@@ -174,16 +187,15 @@ datatables: context
 
 TP73_datatable.bed.gz: TP73_datatable_$(CHR).bed.gz
 
-
 TP73_datatable_$(CHR).bed.gz: TP73_MA0861.1_bidirect_$(CHR).combined.bed.gz
-	./context $< $(OUTPUTDIR)/output_Chr$(CHR)/*bidirect*.bed.gz | gzip -n -c > $@ || echo "I: Check ulimit -n 3000 if failing to open files"
+	./context $< $(OUTPUTDIR)/$(CHR)/*bidirect*.bed.gz | gzip -9 -n -c > $@ || echo "I: Check ulimit -n 3000 if failing to open files"
 
 
 count:
 	@if [ -z "$(CHR)" ] || [ "unset" = "$(CHR)" ]; then \
 	    echo "E: Define CHR to be on of 1 .. 22 X Y" ; \
 	else \
-	    find $(OUTPUTDIR)/output_Chr$(CHR) -name "*_bidirect_*.bed.gz" | wc -l ; \
+	    find $(OUTPUTDIR)/$(CHR) -name "*_bidirect_*.bed.gz" | wc -l ; \
 	fi
 
 #depend: .depend
@@ -193,3 +205,4 @@ count:
 #	$(CC) $(CFLAGS) -MM $^ -MF "$@"
 
 #include .depend
+
