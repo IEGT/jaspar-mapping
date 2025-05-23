@@ -16,9 +16,12 @@ source("analyze_matrix_function_distances.R")
 source("analyze_matrix_function_promoters.R")
 
 
-m.findings <- list()
-m.contexts <- list()
 chromosomes <- c(as.character(1:22) ) # ,"X","Y")
+
+m.findings <- vector("list", length(chromosomes))
+m.contexts <- vector("list", length(chromosomes))
+names(m.findings) <- names(m.contexts) <- chromosomes
+
 for(i in chromosomes) {
     cat("I: processing chromosome ",i,"...\n",sep="")
     m <- read.data.table.for.chromosome(i)
@@ -34,18 +37,15 @@ for(i in chromosomes) {
         colnames(m)[m.colnames.which] <- "Name"
     }
 
+    # Store context
     m.contexts[[i]] <- m
-    m.promoters.index <- lapply(promoterBedTables, function(x) {
-        checkBedOverlaps(x,m)
-    })
 
-    for (j in names(m.promoters.index)) {
-        cat("  ", j, ": ", length(m.promoters.index[[j]]), "\n", sep = "")
-        print(m[m.promoters.index[[j]], c("Chr","From","To")])
-    }
+
 
     m <- create.lists.for.chromosome(m)
     m.findings[[i]] <- attributes(m)
+
+    # Clean up
     rm(m)
     gc()
 }
@@ -56,6 +56,113 @@ save(m.contexts, file="m.contexts.RData")
 cat("I: ... saved contexts, now saving findings...\n")
 save(m.findings, file="m.findings.RData")
 cat("I: ... saved findings successfully.\n")
+
+
+expressionData.dir <- "."
+# Load the expression data
+expressionData <- fread(file.path(expressionData.dir,"SkMel29_GFP_TAa_DNb_2x3x2_ohne_Filter_20.05.2025.tsv"), sep="\t", header=TRUE, stringsAsFactors=FALSE)
+expressionData.symbols <- expressionData$"Gene Symbol"
+
+# Iteratate over genes in expression data to retrieve promoter locations and find max binding
+list.of.all.promoters <- promoterBedTables[["all.promoter.bed"]]
+max.binding.for.gene <- as.data.frame(matrix(NA, nrow=length(expressionData.symbols), ncol=19))
+colnames(max.binding.for.gene) <- c(colnames(m.contexts[[chr]])[1:18],"PromoterOfWhichGene")
+colnames(max.binding.for.gene)[4] <- "TF"
+colnames(max.binding.for.gene)[5] <- "TF.Score"
+colnames(max.binding.for.gene)[6] <- "TF.Strand"
+
+for(ed.rowno in 1:nrow(expressionData)) {
+    max.binding.for.gene[ed.rowno,"PromoterOfWhichGene"] <- gene <- expressionData.symbols[ed.rowno]
+    cat(ed.nrowno,": ", gene, "\n",sep="")
+    
+    cat("I: processing gene ",gene,"...\n",sep="")
+    # Check if promoter region of gene is known in promoters
+    gene.in.promoter.rows <- (gene == list.of.all.promoters$"Gene")
+    if (0 == sum(gene.in.promoter.rows)) {
+        cat("E: Gene ",gene," not found in promoter data\n",sep="")
+        next
+    }
+    # Get the promoter location
+    gene.promoter.location <- list.of.all.promoters[gene.in.promoter.rows,c("Chr","From","To","Gene","Strand"),drop=F]
+    print(gene.promoter.location)
+
+    chr <- unique(gene.promoter.location$Chr)
+    if (length(chr) != 1) {
+        cat("E: Found ",length(chr)," chromosomes for gene ",gene," - skipping\n",sep="")
+        next
+    }
+
+    if (is.null(m.contexts[[chr]])) {
+        cat("W: No data for chromosome ",chr," - skipping\n",sep="")
+        next
+    }
+
+    cat("Chromosome: ",chr,"\n",sep="")
+    overlap.index.of.m.chr <- checkBedOverlaps(gene.promoter.location[,1:3],m.contexts[[chr]][,1:3])
+
+    if (0 < length(overlap.index.of.m.chr)) {
+
+        cat("I: Found ",length(overlap.index.of.m.chr)," overlaps for gene ",gene," in chromosome ",chr,"\n",sep="")
+        # Get the promoter location
+        gene.promoter.location <- m.contexts[[chr]][overlap.index.of.m.chr,1:18]
+        print(gene.promoter.location)
+        val <- gene.promoter.location$"tp73_skmel29_2_DN" + gene.promoter.location$"tp73_skmel29_2_TA"
+        val.max <- max(val)
+        which.max.val <- which(val==val.max)
+        select.line <- which.max.val
+        if (length(select.line) > 1) {
+            val.pos <- gene.promoter.location$"pos_skmel29_2_DN" + gene.promoter.location$"pos_skmel29_2_TA"
+            val.pos[val != val.max] <- NA
+            val.pos.max <- max(val.pos, na.rm=TRUE)
+            select.line <- which(val.pos==val.pos.max)
+            if (length(select.line) > 1) {
+                val.score <- gene.promoter.location$Score
+                val.score[val.pos != val.pos.max] <- NA
+                val.score[val != val.max] <- NA
+                val.score.max <- max(val.score, na.rm=TRUE)
+                select.line <- which.max(val.score)
+            }
+        }
+
+        cat("I: Found max binding for gene ",gene," in chromosome ",chr," at line ",select.line," with value ",val.max,".\n",sep="")
+        max.binding.for.gene[ed.rowno,] <- c(gene.promoter.location[select.line,],gene)
+        #break;
+    } else {
+        max.binding.for.gene[ed.rowno,] <- c(chr,rep(NA,17),gene)
+        cat("E: No overlaps found for gene ",gene," in chromosome ",chr,"\n",sep="")
+    }
+}
+
+save(max.binding.for.gene, file="max.binding.for.gene.RData")
+
+# Check the dimensions of the max.binding.for.gene
+if(!all(max.binding.for.gene$"Gene" == expressionData.symbols)) {
+    cat("E: Found ",sum(max.binding.for.gene$"Gene" != expressionData.symbols)," mismatches in gene names\n",sep="")
+    print(max.binding.for.gene[max.binding.for.gene$"Gene" != expressionData.symbols,])
+} else {
+    cat("I: Found all ",length(expressionData.symbols)," genes in max.binding.for.gene\n",sep="")
+}
+
+combined.expression.data <- cbind(max.binding.for.gene,expressionData)
+save(combined.expression.data, file="combined.expression.data.RData")
+require(openxlsx)
+write.xlsx(combined.expression.data, file="combined.expression.data.xlsx", rowNames=FALSE)
+
+
+# Load the promoter data
+
+
+for(i in names(m.contexts)) {
+    # Process overlaps
+    m.promoters.index <- lapply(promoterBedTables, function(x) {
+        checkBedOverlaps(x,m.contexts[[i]])
+    })
+
+    for (j in names(m.promoters.index)) {
+        cat("  ", j, ": ", length(m.promoters.index[[j]]), "\n", sep = "")
+        print(m.contexts[[i]][m.promoters.index[[j]], c("Chr","From","To")])
+    }
+}
 
 # Load the findings if needed
 # load("m.findings.RData")

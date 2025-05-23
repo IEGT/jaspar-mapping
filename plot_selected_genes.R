@@ -62,7 +62,7 @@ transcription.factor.selection <- c("TP73", "HEY1", "RORA_MA0071.1", "E2F1", "SP
 
 # Example input: List of genes and transcription start sites
 genes <- data.frame(
-    Gene = c("NFKBIA", "IL10RA", "IL4R", "LIMA1"),
+    Gene = c("NFKBIA", "IL10RA", "IL4R", "LIMA1", "CDKN1A", "CDKN2A", "BBC3", "BAX", "FOXJ1", "RFX2", "MDM2", "WWOX", "FHIT"),
     Chr = c("14",     "11",     "16",    "12"),
     TSS = c(35405249 , 117985941, 27313426, 50283520),
     strand = c("-", "+", "+","-")
