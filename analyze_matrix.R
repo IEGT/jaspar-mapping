@@ -58,111 +58,396 @@ save(m.findings, file="m.findings.RData")
 cat("I: ... saved findings successfully.\n")
 
 
-expressionData.dir <- "."
-# Load the expression data
-expressionData <- fread(file.path(expressionData.dir,"SkMel29_GFP_TAa_DNb_2x3x2_ohne_Filter_20.05.2025.tsv"), sep="\t", header=TRUE, stringsAsFactors=FALSE)
-expressionData.symbols <- expressionData$"Gene Symbol"
+if (file.exists("combined.expression.data.RData")) {
 
-# Iteratate over genes in expression data to retrieve promoter locations and find max binding
-list.of.all.promoters <- promoterBedTables[["all.promoter.bed"]]
-max.binding.for.gene <- as.data.frame(matrix(NA, nrow=length(expressionData.symbols), ncol=19))
-colnames(max.binding.for.gene) <- c(colnames(m.contexts[[chr]])[1:18],"PromoterOfWhichGene")
-colnames(max.binding.for.gene)[4] <- "TF"
-colnames(max.binding.for.gene)[5] <- "TF.Score"
-colnames(max.binding.for.gene)[6] <- "TF.Strand"
-
-for(ed.rowno in 1:nrow(expressionData)) {
-    max.binding.for.gene[ed.rowno,"PromoterOfWhichGene"] <- gene <- expressionData.symbols[ed.rowno]
-    cat(ed.nrowno,": ", gene, "\n",sep="")
+    cat("I: Loading existing combined expression data from 'combined.expression.data.RData'...\n")
+    load("combined.expression.data.RData")
+    if (!exists("combined.expression.data")) {
+        stop("E: 'combined.expression.data' not found in 'combined.expression.data.RData'.")
+    }
+    cat("I: Found ",nrow(combined.expression.data)," rows in combined expression data.\n",sep="")
+    print(head(combined.expression.data))
     
-    cat("I: processing gene ",gene,"...\n",sep="")
-    # Check if promoter region of gene is known in promoters
-    gene.in.promoter.rows <- (gene == list.of.all.promoters$"Gene")
-    if (0 == sum(gene.in.promoter.rows)) {
-        cat("E: Gene ",gene," not found in promoter data\n",sep="")
-        next
-    }
-    # Get the promoter location
-    gene.promoter.location <- list.of.all.promoters[gene.in.promoter.rows,c("Chr","From","To","Gene","Strand"),drop=F]
-    print(gene.promoter.location)
-
-    chr <- unique(gene.promoter.location$Chr)
-    if (length(chr) != 1) {
-        cat("E: Found ",length(chr)," chromosomes for gene ",gene," - skipping\n",sep="")
-        next
+    # Check if max.binding.for.gene is available
+    if (exists("max.binding.for.gene")) {
+        cat("I: Found max.binding.for.gene with ",nrow(max.binding.for.gene)," rows.\n",sep="")
+        print(head(max.binding.for.gene))
+    } else {
+        cat("W: max.binding.for.gene not found in 'combined.expression.data.RData'.\n")
     }
 
-    if (is.null(m.contexts[[chr]])) {
-        cat("W: No data for chromosome ",chr," - skipping\n",sep="")
-        next
-    }
+} else {
 
-    cat("Chromosome: ",chr,"\n",sep="")
-    overlap.index.of.m.chr <- checkBedOverlaps(gene.promoter.location[,1:3],m.contexts[[chr]][,1:3])
+    expressionData.dir <- "."
+    # Load the expression data
+    expressionData <- fread(file.path(expressionData.dir,"SkMel29_GFP_TAa_DNb_2x3x2_ohne_Filter_20.05.2025.tsv"), sep="\t", header=TRUE, stringsAsFactors=FALSE)
+    expressionData.symbols <- expressionData$"Gene Symbol"
 
-    if (0 < length(overlap.index.of.m.chr)) {
+    # Iteratate over genes in expression data to retrieve promoter locations and find max binding
+    list.of.all.promoters <- promoterBedTables[["all.promoter.bed"]]
+    max.binding.for.gene <- as.data.frame(matrix(NA, nrow=length(expressionData.symbols), ncol=19))
+    colnames(max.binding.for.gene) <- c(colnames(m.contexts[[chr]])[1:18],"PromoterOfWhichGene")
+    colnames(max.binding.for.gene)[4] <- "TF"
+    colnames(max.binding.for.gene)[5] <- "TF.Score"
+    colnames(max.binding.for.gene)[6] <- "TF.Strand"
 
-        cat("I: Found ",length(overlap.index.of.m.chr)," overlaps for gene ",gene," in chromosome ",chr,"\n",sep="")
+    for(ed.rowno in 1:nrow(expressionData)) {
+        gene <- expressionData.symbols[ed.rowno]
+        cat(ed.nrowno,": ", gene, "\n",sep="")
+        
+        cat("I: processing gene ",gene,"...\n",sep="")
+        # Check if promoter region of gene is known in promoters
+        gene.in.promoter.rows <- (gene == list.of.all.promoters$"Gene")
+        if (0 == sum(gene.in.promoter.rows)) {
+            cat("E: Gene ",gene," not found in promoter data\n",sep="")
+            next
+        }
         # Get the promoter location
-        gene.promoter.location <- m.contexts[[chr]][overlap.index.of.m.chr,1:18]
+        gene.promoter.location <- list.of.all.promoters[gene.in.promoter.rows,c("Chr","From","To","Gene","Strand"),drop=F]
         print(gene.promoter.location)
-        val <- gene.promoter.location$"tp73_skmel29_2_DN" + gene.promoter.location$"tp73_skmel29_2_TA"
-        val.max <- max(val)
-        which.max.val <- which(val==val.max)
-        select.line <- which.max.val
-        if (length(select.line) > 1) {
-            val.pos <- gene.promoter.location$"pos_skmel29_2_DN" + gene.promoter.location$"pos_skmel29_2_TA"
-            val.pos[val != val.max] <- NA
-            val.pos.max <- max(val.pos, na.rm=TRUE)
-            select.line <- which(val.pos==val.pos.max)
-            if (length(select.line) > 1) {
-                val.score <- gene.promoter.location$Score
-                val.score[val.pos != val.pos.max] <- NA
-                val.score[val != val.max] <- NA
-                val.score.max <- max(val.score, na.rm=TRUE)
-                select.line <- which.max(val.score)
-            }
+
+        chr <- unique(gene.promoter.location$Chr)
+        if (length(chr) != 1) {
+            cat("E: Found ",length(chr)," chromosomes for gene ",gene," - skipping\n",sep="")
+            next
         }
 
-        cat("I: Found max binding for gene ",gene," in chromosome ",chr," at line ",select.line," with value ",val.max,".\n",sep="")
-        max.binding.for.gene[ed.rowno,] <- c(gene.promoter.location[select.line,],gene)
-        #break;
+        if (is.null(m.contexts[[chr]])) {
+            cat("W: No data for chromosome ",chr," - skipping\n",sep="")
+            next
+        }
+
+        cat("Chromosome: ",chr,"\n",sep="")
+        overlap.index.of.m.chr <- checkBedOverlaps(gene.promoter.location[,1:3],m.contexts[[chr]][,1:3])
+
+        if (0 < length(overlap.index.of.m.chr)) {
+
+            cat("I: Found ",length(overlap.index.of.m.chr)," overlaps for gene ",gene," in chromosome ",chr,"\n",sep="")
+            # Get the promoter location
+            gene.promoter.location <- m.contexts[[chr]][overlap.index.of.m.chr,1:18]
+            print(gene.promoter.location)
+            val <- gene.promoter.location$"tp73_skmel29_2_DN" + gene.promoter.location$"tp73_skmel29_2_TA"
+            val.max <- max(val)
+            which.max.val <- which(val==val.max)
+            select.line <- which.max.val
+            if (length(select.line) > 1) {
+                val.pos <- gene.promoter.location$"pos_skmel29_2_DN" + gene.promoter.location$"pos_skmel29_2_TA"
+                val.pos[val != val.max] <- NA
+                val.pos.max <- max(val.pos, na.rm=TRUE)
+                select.line <- which(val.pos==val.pos.max)
+                if (length(select.line) > 1) {
+                    val.score <- gene.promoter.location$Score
+                    val.score[val.pos != val.pos.max] <- NA
+                    val.score[val != val.max] <- NA
+                    val.score.max <- max(val.score, na.rm=TRUE)
+                    select.line <- which.max(val.score)
+                }
+            }
+
+            cat("I: Found max binding for gene ",gene," in chromosome ",chr," at line ",select.line," with value ",val.max,".\n",sep="")
+            max.binding.for.gene[ed.rowno,] <- c(gene.promoter.location[select.line,],gene)
+            #break;
+        } else {
+            max.binding.for.gene[ed.rowno,] <- c(chr,rep(NA,17),gene)
+            cat("E: No overlaps found for gene ",gene," in chromosome ",chr,"\n",sep="")
+        }
+    }
+
+    save(max.binding.for.gene, file="max.binding.for.gene.RData")
+
+
+    # Check the dimensions of the max.binding.for.gene
+    if(!all(max.binding.for.gene$"Gene" == expressionData.symbols)) {
+        cat("E: Found ",sum(max.binding.for.gene$"Gene" != expressionData.symbols)," mismatches in gene names\n",sep="")
+        print(max.binding.for.gene[max.binding.for.gene$"Gene" != expressionData.symbols,])
     } else {
-        max.binding.for.gene[ed.rowno,] <- c(chr,rep(NA,17),gene)
-        cat("E: No overlaps found for gene ",gene," in chromosome ",chr,"\n",sep="")
+        cat("I: Found all ",length(expressionData.symbols)," genes in max.binding.for.gene\n",sep="")
     }
+
+    combined.expression.data <- cbind(max.binding.for.gene,expressionData)
+    save(combined.expression.data, file="combined.expression.data.RData")
+    require(openxlsx)
+    write.xlsx(combined.expression.data, file="combined.expression.data.xlsx", rowNames=FALSE)
+    cat("I: Saved combined expression data to 'combined.expression.data.RData' and 'combined.expression.data.xlsx'.\n")
 }
 
-save(max.binding.for.gene, file="max.binding.for.gene.RData")
 
-# Check the dimensions of the max.binding.for.gene
-if(!all(max.binding.for.gene$"Gene" == expressionData.symbols)) {
-    cat("E: Found ",sum(max.binding.for.gene$"Gene" != expressionData.symbols)," mismatches in gene names\n",sep="")
-    print(max.binding.for.gene[max.binding.for.gene$"Gene" != expressionData.symbols,])
+# Classify all TFBS in m.contexts for being in promoter regions
+cat("I: Classifying TFBS in promoter regions...\n")
+
+if (file.exists("tfbs.in.promoter.list.RData")) {
+    cat("I: Loading existing TFBS in promoter regions from 'tfbs.in.promoter.list.RData'...\n")
+    load("tfbs.in.promoter.list.RData")
+    if (!exists("tfbs.in.promoter.list")) {
+        stop("E: 'tfbs.in.promoter.list' not found in 'tfbs.in.promoter.list.RData'.")
+    }
+    cat("I: Found ",length(tfbs.in.promoter.list)," chromosomes in tfbs.in.promoter.list.\n",sep="")
 } else {
-    cat("I: Found all ",length(expressionData.symbols)," genes in max.binding.for.gene\n",sep="")
-}
+ 
+    tfbs.in.promoter.list <- lapply(names(m.contexts), function(i) {
+        cat("I: processing chromosome ",i,"...\n",sep="")
+        if (is.null(m.contexts[[i]])) {
+            cat("E: No data for chromosome ",i," - skipping\n",sep="")
+            return(NULL)
+        }
+        # Process overlaps
+        
+        m.promoters.index <- lapply(promoterBedTables, function(x) {
+            checkBedOverlaps(x,m.contexts[[i]])
+        })
 
-combined.expression.data <- cbind(max.binding.for.gene,expressionData)
-save(combined.expression.data, file="combined.expression.data.RData")
-require(openxlsx)
-write.xlsx(combined.expression.data, file="combined.expression.data.xlsx", rowNames=FALSE)
 
+        tfbs.is.in.promoter.list<-lapply(names(m.promoters.index),function(x) {
+            cat("Analyzing TFBS in promoter regions for ",x," in chromosome ",i,"...\n",sep="")
+            tfbs.in.promoter <- rep(FALSE, nrow(m.contexts[[i]]))
+            for(j in m.promoters.index[[x]]) {
+                if (is.na(j) || j < 1 || j > nrow(m.contexts[[i]])) {
+                    stop("E: Invalid index ",j," for chromosome ",i," - skipping\n",sep="")
+                }
+                tfbs.in.promoter[j] <- TRUE
+            }
+            cat("I: Found ",sum(tfbs.in.promoter)," TFBS in promoter regions for ",x," in chromosome ",i,".\n",sep="")
+            return(tfbs.in.promoter)
+        })
+        names(tfbs.is.in.promoter.list) <- names(m.promoters.index)
 
-# Load the promoter data
-
-
-for(i in names(m.contexts)) {
-    # Process overlaps
-    m.promoters.index <- lapply(promoterBedTables, function(x) {
-        checkBedOverlaps(x,m.contexts[[i]])
+        cat("I: Found ",sum(m.contexts[[i]]$InPromoter)," TFBS in promoter regions for chromosome ",i,".\n",sep="")
+        return(tfbs.is.in.promoter.list)
     })
+    names(tfbs.in.promoter.list) <- names(m.contexts)
 
-    for (j in names(m.promoters.index)) {
-        cat("  ", j, ": ", length(m.promoters.index[[j]]), "\n", sep = "")
-        print(m.contexts[[i]][m.promoters.index[[j]], c("Chr","From","To")])
-    }
+    save(tfbs.in.promoter.list, file="tfbs.in.promoter.list.RData")
 }
+
+
+# Assigning the promoter classification to m.contexts
+
+for (i in names(m.contexts)) {
+    cat("I: processing chromosome ",i,"...\n",sep="")
+    if (is.null(m.contexts[[i]])) {
+        cat("E: No data for chromosome ",i," - skipping\n",sep="")
+        next
+    }
+    if (!"InPromoter" %in% colnames(m.contexts[[i]])) {
+        m.contexts[[i]]$InPromoter <- NA
+    }
+    if (is.null(tfbs.in.promoter.list[[i]])) {
+        cat("E: No TFBS in promoter regions found for chromosome ",i," - skipping\n",sep="")
+        next
+    }
+    if(is.null(tfbs.in.promoter.list[[i]][["all.promoter.bed"]])) {
+        cat("E: List of all promoter regions not found for chromosome ",i," - skipping\n",sep="")
+        next
+    }
+    m.contexts[[i]]$InPromoter <- tfbs.in.promoter.list[[i]][["all.promoter.bed"]]
+}
+
+
+# Series of analyses across chromosomes on absolute and relative abundances of TFBS with/without CUT&RUN data confirmation
+
+analyze.context.for.chromosome <- function(m.context.i, chromosome) {
+    cat("I: Analyzing context for chromosome ",chromosome,"...\n",sep="")
+    
+    # Check if m.context is NULL
+    if (is.null(m.context.i)) {
+        cat("E: No data for chromosome ",chromosome," - skipping\n",sep="")
+        return(NULL)
+    }
+
+    # Calculate the number of TFBS in each context
+    num.TAa <- sum(m.context.i$"tp73_skmel29_2_TA", na.rm=TRUE)
+    num.DNb <- sum(m.context.i$"tp73_skmel29_2_DN", na.rm=TRUE)
+    num.GFP <- sum(m.context.i$"tp73_skmel29_2_GFP", na.rm=TRUE)
+
+    # Calculate the ratio of TAa to DNb
+    ratio.TAa.to.DNb <- num.TAa / num.DNb
+
+    # Calculate the quantiles for TAa and DNb
+    quantile.TAa <- quantile(m.context.i$"tp73_skmel29_2_TA", probs=c(0, 0.5, 0.75, 0.9, 0.95, 0.99, 1), na.rm=TRUE)
+    quantile.DNb <- quantile(m.context.i$"tp73_skmel29_2_DN", probs=c(0, 0.5, 0.75, 0.9, 0.95, 0.99, 1), na.rm=TRUE)
+    quantile.GFP <- quantile(m.context.i$"tp73_skmel29_2_GFP", probs=c(0, 0.5, 0.75, 0.9, 0.95, 0.99, 1), na.rm=TRUE)
+
+    quantile.TAa.promoter <- quantile(m.context.i$"tp73_skmel29_2_TA"[m.context.i$InPromoter], probs=c(0, 0.5, 0.75, 0.9, 0.95, 0.99, 1), na.rm=TRUE)
+    quantile.DNb.promoter <- quantile(m.context.i$"tp73_skmel29_2_DN"[m.context.i$InPromoter], probs=c(0, 0.5, 0.75, 0.9, 0.95, 0.99, 1), na.rm=TRUE)
+    quantile.GFP.promoter <- quantile(m.context.i$"tp73_skmel29_2_GFP"[m.context.i$InPromoter], probs=c(0, 0.5, 0.75, 0.9, 0.95, 0.99, 1), na.rm=TRUE)
+
+    p73.bs.confirmed.TAa.percent <- sum(m.context.i$"tp73_skmel29_2_TA" > 0) / nrow(m.context.i) * 100
+    p73.bs.confirmed.DNb.percent <- sum(m.context.i$"tp73_skmel29_2_DN" > 0) / nrow(m.context.i) * 100
+    p73.bs.confirmed.GFP.percent <- sum(m.context.i$"tp73_skmel29_2_GFP" > 0) / nrow(m.context.i) * 100
+
+    p73.bs.confirmed.TAa.promoter.percent <- sum(m.context.i$"tp73_skmel29_2_TA"[m.context.i$InPromoter] > 0) / sum(m.context.i$InPromoter) * 100
+    p73.bs.confirmed.DNb.promoter.percent <- sum(m.context.i$"tp73_skmel29_2_DN"[m.context.i$InPromoter] > 0) / sum(m.context.i$InPromoter) * 100
+    p73.bs.confirmed.GFP.promoter.percent <- sum(m.context.i$"tp73_skmel29_2_GFP"[m.context.i$InPromoter] > 0) / sum(m.context.i$InPromoter) * 100
+
+    p73.bs.with.methylation.TAa.percent <- sum(m.context.i$"pos_skmel29_2_TA" > 0) / nrow(m.context.i) * 100
+    p73.bs.with.methylation.DNb.percent <- sum(m.context.i$"pos_skmel29_2_DN" > 0) / nrow(m.context.i) * 100
+    p73.bs.with.methylation.GFP.percent <- sum(m.context.i$"pos_skmel29_2_GFP" > 0) / nrow(m.context.i) * 100
+
+    p73.bs.with.methylation.TAa.promoter.percent <- sum(m.context.i$"pos_skmel29_2_TA"[m.context.i$InPromoter] > 0) / sum(m.context.i$InPromoter) * 100
+    p73.bs.with.methylation.DNb.promoter.percent <- sum(m.context.i$"pos_skmel29_2_DN"[m.context.i$InPromoter] > 0) / sum(m.context.i$InPromoter) * 100
+    p73.bs.with.methylation.GFP.promoter.percent <- sum(m.context.i$"pos_skmel29_2_GFP"[m.context.i$InPromoter] > 0) / sum(m.context.i$InPromoter) * 100
+
+    p73.bs.confirmed.TAa.with.methylation.TAa.percent <- sum(m.context.i$"tp73_skmel29_2_TA" > 0 & m.context.i$"pos_skmel29_2_TA" > 0) / nrow(m.context.i) * 100
+    p73.bs.confirmed.DNb.with.methylation.DNb.percent <- sum(m.context.i$"tp73_skmel29_2_DN" > 0 & m.context.i$"pos_skmel29_2_DN" > 0) / nrow(m.context.i) * 100
+    p73.bs.confirmed.GFP.with.methylation.GFP.percent <- sum(m.context.i$"tp73_skmel29_2_GFP" > 0 & m.context.i$"pos_skmel29_2_GFP" > 0) / nrow(m.context.i) * 100
+
+    p73.bs.confirmed.TAa.with.methylation.TAa.promoter.percent <- sum(m.context.i$"tp73_skmel29_2_TA" > 0 & m.context.i$"pos_skmel29_2_TA">0 &m.context.i$InPromoter > 0) / sum(m.context.i$InPromoter) * 100
+    p73.bs.confirmed.DNb.with.methylation.DNb.promoter.percent <- sum(m.context.i$"tp73_skmel29_2_DN" > 0 & m.context.i$"pos_skmel29_2_DN">0 & m.context.i$InPromoter > 0) / sum(m.context.i$InPromoter) * 100
+    p73.bs.confirmed.GFP.with.methylation.GFP.promoter.percent <- sum(m.context.i$"tp73_skmel29_2_GFP" > 0 & m.context.i$"pos_skmel29_2_GFP">0 & m.context.i$InPromoter > 0) / sum(m.context.i$InPromoter) * 100
+
+    p73.bs.with.methylation.TAa.if.confirmed.TAa.promoter.percent <-
+       sum(m.context.i$"pos_skmel29_2_TA"[m.context.i$"tp73_skmel29_2_TA">0 & m.context.i$InPromoter]>0 ) / sum(m.context.i$InPromoter & m.context.i$"tp73_skmel29_2_TA">0) * 100
+    p73.bs.with.methylation.DNb.if.confirmed.DNb.promoter.percent <-
+       sum(m.context.i$"pos_skmel29_2_DN"[m.context.i$"tp73_skmel29_2_DN">0 & m.context.i$InPromoter]>0 ) / sum(m.context.i$InPromoter & m.context.i$"tp73_skmel29_2_DN">0) * 100
+    p73.bs.with.methylation.GFP.if.confirmed.GFP.promoter.percent <-
+       sum(m.context.i$"pos_skmel29_2_GFP"[m.context.i$"tp73_skmel29_2_GFP">0 & m.context.i$InPromoter]>0 ) / sum(m.context.i$InPromoter & m.context.i$"tp73_skmel29_2_GFP">0) * 100
+
+    # Determine the number of TFBS that are confirmed by TA but not by DN
+    p73.bs.with.confirmation.TAa.only.percent <- sum(m.context.i$"tp73_skmel29_2_TA" > 0 & m.context.i$"tp73_skmel29_2_DN" == 0)/nrow(m.context.i) * 100
+    p73.bs.with.confirmation.DNb.only.percent <- sum(m.context.i$"tp73_skmel29_2_DN" > 0 & m.context.i$"tp73_skmel29_2_TA" == 0)/nrow(m.context.i) * 100
+    p73.bs.with.confirmation.GFP.only.percent <- sum(m.context.i$"tp73_skmel29_2_TA" == 0 & m.context.i$"tp73_skmel29_2_DN" == 0 & m.context.i$"tp73_skmel29_2_GFP" > 0)/nrow(m.context.i) * 100
+    p73.bs.with.confirmation.TAa.only.promoter.percent <-
+       sum(m.context.i$"tp73_skmel29_2_TA" > 0 & m.context.i$"tp73_skmel29_2_DN" == 0 & m.context.i$InPromoter)/sum(m.context.i$InPromoter) * 100
+    p73.bs.with.confirmation.DNb.only.promoter.percent <-
+       sum(m.context.i$"tp73_skmel29_2_DN" > 0 & m.context.i$"tp73_skmel29_2_TA" == 0 & m.context.i$InPromoter)/sum(m.context.i$InPromoter) * 100
+    p73.bs.with.confirmation.GFP.only.promoter.percent <-
+       sum(m.context.i$"tp73_skmel29_2_TA" == 0 & m.context.i$"tp73_skmel29_2_DN" == 0 & m.context.i$"tp73_skmel29_2_GFP">0 & m.context.i$InPromoter)/sum(m.context.i$InPromoter) * 100
+    
+    p73.bs.with.methylation.TAa.only.confirmed.TAa.promoter.percent <-
+       sum(m.context.i$"tp73_skmel29_2_TA">0 & m.context.i$"pos_skmel29_2_TA" > 0 & m.context.i$"pos_skmel29_2_DN" & m.context.i$InPromoter)/sum(m.context.i$InPromoter) * 100
+    p73.bs.with.methylation.DNb.only.confirmed.DNb.promoter.percent <-
+       sum(m.context.i$"tp73_skmel29_2_DN">0 & m.context.i$"pos_skmel29_2_DN" > 0 & m.context.i$"pos_skmel29_2_TA" & m.context.i$InPromoter)/sum(m.context.i$InPromoter) * 100
+    p73.bs.with.methylation.GFP.only.confirmed.GFP.promoter.percent <-
+       sum(m.context.i$"tp73_skmel29_2_GFP">0 & m.context.i$"pos_skmel29_2_TA" == 0 & m.context.i$"pos_skmel29_2_DN" == 0 & m.context.i$"pos_skmel29_2_GFP" > 0 & m.context.i$InPromoter)/sum(m.context.i$InPromoter) * 100
+    
+       #Num.TAa = num.TAa,
+        #Num.DNb = num.DNb,
+        #Num.GFP = num.GFP,
+
+    # Create a summary table
+    summary.table <- data.frame(
+        Chromosome = chromosome,
+        Num.p73bs = nrow(m.context.i),
+        Num.p73bs.InPromoter.percent = sum(m.context.i$InPromoter, na.rm=TRUE)/nrow(m.context.i) * 100,
+        Ratio.TAa.to.DNb = round(ratio.TAa.to.DNb,2),
+        p73.bs.confirmed.TAa.percent = round(p73.bs.confirmed.TAa.percent,2),
+        p73.bs.confirmed.DNb.percent = round(p73.bs.confirmed.DNb.percent,2),
+        p73.bs.confirmed.GFP.percent = round(p73.bs.confirmed.GFP.percent,2),
+        p73.bs.confirmed.TAa.promoter.percent = round(p73.bs.confirmed.TAa.promoter.percent,2),
+        p73.bs.confirmed.DNb.promoter.percent = round(p73.bs.confirmed.DNb.promoter.percent,2),
+        p73.bs.confirmed.GFP.promoter.percent = round(p73.bs.confirmed.GFP.promoter.percent,2),
+        p73.bs.with.methylation.TAa.percent = round(p73.bs.with.methylation.TAa.percent,2),
+        p73.bs.with.methylation.DNb.percent = round(p73.bs.with.methylation.DNb.percent,2),
+        p73.bs.with.methylation.GFP.percent = round(p73.bs.with.methylation.GFP.percent,2),
+        p73.bs.with.methylation.TAa.promoter.percent = round(p73.bs.with.methylation.TAa.promoter.percent,2),
+        p73.bs.with.methylation.DNb.promoter.percent = round(p73.bs.with.methylation.DNb.promoter.percent,2),
+        p73.bs.with.methylation.GFP.promoter.percent = round(p73.bs.with.methylation.GFP.promoter.percent,2),
+        p73.bs.confirmed.TAa.with.methylation.TAa.percent = round(p73.bs.confirmed.TAa.with.methylation.TAa.percent,2),
+        p73.bs.confirmed.DNb.with.methylation.DNb.percent = round(p73.bs.confirmed.DNb.with.methylation.DNb.percent,2),
+        p73.bs.confirmed.GFP.with.methylation.GFP.percent = round(p73.bs.confirmed.GFP.with.methylation.GFP.percent,2),
+        p73.bs.confirmed.TAa.with.methylation.TAa.promoter.percent = round(p73.bs.confirmed.TAa.with.methylation.TAa.promoter.percent,2),
+        p73.bs.confirmed.DNb.with.methylation.DNb.promoter.percent = round(p73.bs.confirmed.DNb.with.methylation.DNb.promoter.percent,2),
+        p73.bs.confirmed.GFP.with.methylation.GFP.promoter.percent = round(p73.bs.confirmed.GFP.with.methylation.GFP.promoter.percent,2),
+        p73.bs.with.methylation.TAa.if.confirmed.TAa.promoter.percent = round(p73.bs.with.methylation.TAa.if.confirmed.TAa.promoter.percent,2),
+        p73.bs.with.methylation.DNb.if.confirmed.DNb.promoter.percent = round(p73.bs.with.methylation.DNb.if.confirmed.DNb.promoter.percent,2),
+        p73.bs.with.methylation.GFP.if.confirmed.GFP.promoter.percent = round(p73.bs.with.methylation.GFP.if.confirmed.GFP.promoter.percent,2),
+        p73.bs.with.confirmation.TAa.only.percent = round(p73.bs.with.confirmation.TAa.only.percent,2),
+        p73.bs.with.confirmation.DNb.only.percent = round(p73.bs.with.confirmation.DNb.only.percent,2),
+        p73.bs.with.confirmation.GFP.only.percent = round(p73.bs.with.confirmation.GFP.only.percent,2),
+        p73.bs.with.confirmation.TAa.only.promoter.percent = round(p73.bs.with.confirmation.TAa.only.promoter.percent,2),
+        p73.bs.with.confirmation.DNb.only.promoter.percent = round(p73.bs.with.confirmation.DNb.only.promoter.percent,2),
+        p73.bs.with.confirmation.GFP.only.promoter.percent = round(p73.bs.with.confirmation.GFP.only.promoter.percent,2),
+        p73.bs.with.methylation.TAa.only.confirmed.TAa.promoter.percent = round(p73.bs.with.methylation.TAa.only.confirmed.TAa.promoter.percent,2),
+        p73.bs.with.methylation.DNb.only.confirmed.DNb.promoter.percent = round(p73.bs.with.methylation.DNb.only.confirmed.DNb.promoter.percent,2),
+        p73.bs.with.methylation.GFP.only.confirmed.GFP.promoter.percent = round(p73.bs.with.methylation.GFP.only.confirmed.GFP.promoter.percent,2),
+
+        Quantile.TAa.0   = quantile.TAa[1],
+        Quantile.TAa.50  = quantile.TAa[2],
+        Quantile.TAa.75  = quantile.TAa[3],
+        Quantile.TAa.90  = quantile.TAa[4],
+        Quantile.TAa.95  = quantile.TAa[5],
+        Quantile.TAa.99  = quantile.TAa[6],
+        Quantile.TAa.100 = quantile.TAa[7],
+        Quantile.TAa.95.promoter  = quantile.TAa.promoter[5],
+        Quantile.TAa.99.promoter  = quantile.TAa.promoter[6],
+        Quantile.TAa.100.promoter = quantile.TAa.promoter[7],
+        Quantile.DNb.0   = quantile.DNb[1],
+        Quantile.DNb.50  = quantile.DNb[2],
+        Quantile.DNb.75  = quantile.DNb[3],
+        Quantile.DNb.90  = quantile.DNb[4],
+        Quantile.DNb.95  = quantile.DNb[5],
+        Quantile.DNb.99  = quantile.DNb[6],
+        Quantile.DNb.100 = quantile.DNb[7],
+        Quantile.DNb.90.promoter  = quantile.DNb.promoter[4],
+        Quantile.DNb.95.promoter  = quantile.DNb.promoter[5],
+        Quantile.DNb.99.promoter  = quantile.DNb.promoter[6],
+        Quantile.DNb.100.promoter = quantile.DNb.promoter[7]
+    )
+
+    return(summary.table)
+}
+
+distribution.result.table <- sapply(names(m.contexts), function(i) {
+    cat("I: processing chromosome ", i, "...\n", sep = "")
+    if (is.null(m.contexts[[i]])) {
+        cat("E: No data for chromosome ", i, " - skipping\n", sep = "")
+        return(NULL)
+    }
+    # Analyze the context for this chromosome and return properties
+    analyze.context.for.chromosome(m.contexts[[i]], i)
+})
+
+distribution.result.table.summary <- (t(apply(distribution.result.table, 1, function(x) {
+    round(c(summary(as.numeric(x)),sd=sd(as.numeric(x))),1)
+})))
+
+save(distribution.result.table, distribution.result.table.summary, file="distribution.result.table.RData")
+
+
+# All chromosomal results taken together, what fraction of TFBS are confirmed by CUT&RUN data in dependency of the score of the TFBS binding site?
+cat("I: Analyzing all chromosomes for TFBS confirmation by CUT&RUN data...\n")
+
+m.contexts.all.OneTo18 <- do.call(rbind, lapply(m.contexts, function(x) x[, 1:18, drop = FALSE]))
+# Calculate the fraction of entries with value > 0 for "tp73_skmel29_2_DN" and "tp73_skmel29_2_TA" based on "Score"
+bin.size <- 3
+score_bins <- seq(0, max(m.contexts.all.OneTo18$Score, na.rm = TRUE), by = bin.size)
+fractions <- data.frame(
+    ScoreBin = score_bins[-length(score_bins)],
+    Fraction_DN = sapply(1:(length(score_bins) - 1), function(i) {
+        bin <- m.contexts.all.OneTo18$Score >= score_bins[i] & m.contexts.all.OneTo18$Score < score_bins[i + 1]
+        sum(m.contexts.all.OneTo18$"tp73_skmel29_2_DN"[bin] > 0, na.rm = TRUE) / sum(bin, na.rm = TRUE)
+    }),
+    Fraction_TA = sapply(1:(length(score_bins) - 1), function(i) {
+        bin <- m.contexts.all.OneTo18$Score >= score_bins[i] & m.contexts.all.OneTo18$Score < score_bins[i + 1]
+        sum(m.contexts.all.OneTo18$"tp73_skmel29_2_TA"[bin] > 0, na.rm = TRUE) / sum(bin, na.rm = TRUE)
+    }),
+      # Add bars to indicate the number of TFBS within each bin
+    TFBS_Count = sapply(1:(length(score_bins) - 1), function(i) {
+        bin <- m.contexts.all.OneTo18$Score >= score_bins[i] & m.contexts.all.OneTo18$Score < score_bins[i + 1]
+        sum(bin, na.rm = TRUE)
+    })
+)
+
+require(ggplot2)
+
+png("fractions_by_score.png", width=800, height=400)
+# Plot the fractions
+ggplot(fractions, aes(x = ScoreBin+bin.size/2)) +
+    geom_bar(aes(y = TFBS_Count / max(TFBS_Count), fill = "p73 BS Count"), stat = "identity", alpha = 0.5) +
+    geom_line(aes(y = Fraction_DN, color = "DN"), linewidth = 1) +
+    geom_line(aes(y = Fraction_TA, color = "TA"), linewidth = 1) +
+    scale_y_continuous(
+        name = "Fraction confirmed by CUT&RUN",
+        sec.axis = sec_axis(~ . * max(fractions$TFBS_Count), name = "TFBS Count")
+    ) +
+    labs(
+        title = "Fraction of Entries with Value > 0 by Score and TFBS Count",
+        x = "Score",
+        color = "Legend",
+        fill = "Legend"
+    ) +
+    theme_minimal()
+dev.off()
 
 # Load the findings if needed
 # load("m.findings.RData")
