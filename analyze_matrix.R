@@ -10,6 +10,8 @@ rm(list=grep(ls(),pattern="^ratio.*",value=T))
 rm(list=grep(ls(),pattern="^quantiles.*",value=T))
 rm(list=grep(ls(),pattern="^mean.NumInWindow*",value=T))
 
+jaspar.human <- read.delim("jaspar_homo.tsv",row.names=1,col.names=FALSE)
+
 # Import function to read and interpret the matrix for individual chromosomes
 source("analyze_matrix_function_lists.R")  
 source("analyze_matrix_function_distances.R")  
@@ -476,6 +478,10 @@ cat("I: Retrieving context data for DN.enriched.valid and TA.enriched.valid rows
 retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=NULL,TA.or.DN=NULL) {
     context_data <- NULL
     cutandrun_data <- NULL
+    coordinates <- NULL
+    downstream_genes <- NULL
+    context_matches <- c()
+
     if (length(setdiff(confirmation,c("none","tp73","pos","promoter")))>0) {
         stop("I: No method for confirmation specified: (",
                 paste(setdiff(confirmation,c("none","tp73","pos","promoter")),collapse=",",sep=""),
@@ -503,7 +509,10 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
 
         context_data_chromosome <- NULL
         cutandrun_data_chromosome <- NULL
+        coordinates_chromosome <- NULL
+        downstream_genes_chromosome <- NULL
         context_matches_chromosome <- c()
+    
 
         if (is.null(m.contexts[[chromosome]])) {
             cat("E: No data for chromosome ", chromosome, " - skipping\n", sep = "")
@@ -556,6 +565,7 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
         if (is.null(enriched_rows)) {
 
             context_matches_chromosome <- which(m.context.extra.check)
+            downstream_genes_chromosome <- rep(NA, length(context_matches_chromosome))
             cat("I: No enriched rows specified, using all rows for chromosome ", chromosome, ", found ",length(context_matches_chromosome)," hits.\n", sep = "")
 
         } else {
@@ -570,6 +580,7 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
 
                 start_pos <- combined.expression.data[row_idx, 2]
                 end_pos <- combined.expression.data[row_idx, 3]
+                gene <- combined.expression.data[row_idx, "Gene Symbol"]
 
                 m.context.row.check <- m.context.extra.check & m.contexts[[chromosome]][, 2] == start_pos &
                                     m.contexts[[chromosome]][, 3] == end_pos
@@ -582,11 +593,15 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
                 }
 
                 context_matches_chromosome <-  c(context_matches_chromosome, match_idx)
+                downstream_genes_chromosome <- c(downstream_genes_chromosome, gene) 
             }
         }
         
         context_data_chromosome <- m.contexts[[chromosome]][context_matches_chromosome, ..cols.NumInWindow]
         cutandrun_data_chromosome <- m.contexts[[chromosome]][context_matches_chromosome, 7:18, drop = FALSE]
+        coordinates_chromosome <- m.contexts[[chromosome]][context_matches_chromosome, 1:6, drop = FALSE]
+        
+
         cat("I: Retrieved context for ", nrow(context_data_chromosome), " binding sites on chromosome: ", chromosome, "\n", sep = "")
 
 
@@ -596,7 +611,10 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
         }
         else {
             context_data <- rbind(context_data, context_data_chromosome)
+            context_matches <- c(context_matches, context_matches_chromosome)
             cutandrun_data <- rbind(cutandrun_data, cutandrun_data_chromosome)
+            coordinates <- rbind(coordinates, coordinates_chromosome)
+            downstream_genes <- c(downstream_genes, downstream_genes_chromosome)
             col_sums_by_chromosome[chromosome,] <- colSums(context_data_chromosome, na.rm = TRUE)
             num_matches_by_chromosome[chromosome] <- nrow(context_data_chromosome)
             mean_by_chromosome[chromosome,] <- colMeans(context_data_chromosome, na.rm = TRUE)
@@ -606,7 +624,10 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
     col_sums_total = colSums(col_sums_by_chromosome)
     return(list(
         context_data = context_data,
+        context_matches = context_matches,
+        downstream_genes = downstream_genes,
         cutandrun_data = cutandrun_data,
+        coordinates = coordinates,
         col_sums_by_chromosome = col_sums_by_chromosome,
         col_sums_total = col_sums_total,
         num_matches_by_chromosome = num_matches_by_chromosome,
@@ -733,16 +754,46 @@ if (FALSE) {
     tf.patterns.of.interest <- NULL
 }
 
+is.human.jaspar.id <- function(id) {
+    if (0 == length(id)) {
+        return(FALSE)
+    }
+    else if (length(id) == 1) {
+        if ("" == id) {
+            return(FALSE)
+        }
+        if (is.character(id) && length(id) == 0) {
+            return(FALSE)
+        }
+        strsplit.id <- strsplit(id, split="[ _()]")[[1]]
+        if (length(strsplit.id) == 1) {
+            #cat("Found single ID: ", strsplit.id, "\n", sep="")
+            return(strsplit.id %in% rownames(jaspar.human) || strsplit.id %in% jaspar.human)
+        } else if (length(strsplit.id) == 2) {
+            return(is.human.jaspar.id(strsplit.id[1]) || is.human.jaspar.id(strsplit.id[2]))
+        } else if (length(strsplit.id) == 3) {
+            return(is.human.jaspar.id(strsplit.id[1]) || is.human.jaspar.id(strsplit.id[2]) || is.human.jaspar.id(strsplit.id[3]))
+        } else {
+            stop("E: Unexpected ID format with ",length(id)," parts: ", id, "\n")
+        }
+    } else {
+        return(sapply(id, is.human.jaspar.id))  
+    }
+}
 
-plot.series.of.ratio.matrices <- function(list.of.sorted.matrices.to.display=NULL,num.from.extrema=10,tf.patterns.of.interest=NULL) {
+#is.human.jaspar.id("(MA1466.1")
+
+plot.series.of.ratio.matrices <- function(list.of.sorted.matrices.to.display=NULL,num.from.extrema=rep(10,length(list.of.sorted.matrices.to.display)),tf.patterns.of.interest=NULL,human.only=TRUE) {
 
     if (is.null(tf.patterns.of.interest)) {
         #tf.patterns.of.interest <- "^(jun|sp1|rest|yap1|yy1|e2f1|e2f7|tp53|tp63|tp73|plag1|rara|odd|irf2|bpc5|irf2|nr2f6|pdr3|pax1|rarg|esr1|odd|elt-3|nfkb1|rela|rora|erf6) "
         tf.patterns.of.interest <- paste0(
-            "^(jun|sp1|rest|yap1|yy1|e2f1|nfkb1|tp53|tp63|tp73|",
-            "BZIP43|IRF2|RXRA--VDR|pan|HAP1|Nr2F6|RORA|E2F3|E2F7|THI2|SPL15|TGIF1|MYB52|ZBED1|NAC083", #  paste(sapply(strsplit(rownames(head(ta_vs_effects_tp73Confirm_posConfirm.sorted,15)),split=" "),function(X) X[1]),collapse="|")
-            "NR3C1|TP63|RREB1|ATHB-9|GLIS1|PLAG1|E2FC|MYB15|DYT1|bZIP911|odd|RARA|BZIP42|BPC5|TCP14", # paste(sapply(strsplit(rownames(tail(ta_vs_effects_tp73Confirm_posConfirm.sorted[!is.na(ta_vs_effects_tp73Confirm_posConfirm.sorted[,"ratio"]),],15)),split=" "),function(X) X[1]),collapse="|")
-                        ") ")
+            #"^(jun|sp1|rest|yap1|yy1|e2f1|nfkb1|tp53|tp63|tp73|",
+            #"BZIP43|IRF2|RXRA--VDR|pan|HAP1|Nr2F6|RORA|E2F3|E2F7|THI2|SPL15|TGIF1|MYB52|ZBED1|NAC083", #  paste(sapply(strsplit(rownames(head(ta_vs_effects_tp73Confirm_posConfirm.sorted,15)),split=" "),function(X) X[1]),collapse="|")
+            #"NR3C1|TP63|RREB1|ATHB-9|GLIS1|PLAG1|E2FC|MYB15|DYT1|bZIP911|odd|RARA|BZIP42|BPC5|TCP14", # paste(sapply(strsplit(rownames(tail(ta_vs_effects_tp73Confirm_posConfirm.sorted[!is.na(ta_vs_effects_tp73Confirm_posConfirm.sorted[,"ratio"]),],15)),split=" "),function(X) X[1]),collapse="|")
+            "RARA|GLIS1|PLAG1|RREB1|TP63|NR3C1|SRF|NR3C2|EWSR1-FLI1|THRB|TFAP2E|GLIS3|TFAP2C|RXRB|KLF14|",
+            "IRF2|RXRA|RORA|E2F7|E2F3|TGIF1|ZBED1|IRF4|RFX3|MEF2D|STAT1|MEF2B|NFIC|IRF8|CREB3L1",
+        ") ")
     }   
 
     if (is.null(list.of.sorted.matrices.to.display)) {
@@ -787,6 +838,9 @@ plot.series.of.ratio.matrices <- function(list.of.sorted.matrices.to.display=NUL
         }
 
         sorted.matrix.to.display <- list.of.sorted.matrices.to.display[[sorted.matrix.to.display.tag]]
+        print(dim(sorted.matrix.to.display))
+        sorted.matrix.to.display <- sorted.matrix.to.display[which(is.human.jaspar.id(rownames(sorted.matrix.to.display))),,drop=FALSE]
+        print(dim(sorted.matrix.to.display))
 
         sorted.matrix.to.display <- sorted.matrix.to.display[order(sorted.matrix.to.display[, "ratio"],decreasing=TRUE), , drop=FALSE]
 
@@ -798,8 +852,8 @@ plot.series.of.ratio.matrices <- function(list.of.sorted.matrices.to.display=NUL
         sorted.matrix.to.display.valid <- rowSums(sorted.matrix.to.display[, c("mean.TA","mean.DN")])>0.0005
 
         # Get top and bottom
-        top5 <- head(sorted.matrix.to.display[sorted.matrix.to.display.valid,], num.from.extrema)
-        bottom5 <- tail(sorted.matrix.to.display[sorted.matrix.to.display.valid,], num.from.extrema)
+        top5 <- head(sorted.matrix.to.display[sorted.matrix.to.display.valid,], num.from.extrema[i])
+        bottom5 <- tail(sorted.matrix.to.display[sorted.matrix.to.display.valid,], num.from.extrema[i])
 
         # Genes of interest (tf.of.interest) that are not in top5/bottom5
         tf_interest_names <- grep(rownames(ta_vs_dn_nonMethylated.sorted),pattern=tf.patterns.of.interest,ignore.case=T,value=T)
@@ -848,9 +902,9 @@ plot.series.of.ratio.matrices <- function(list.of.sorted.matrices.to.display=NUL
         y_max <- 1
 
         # Allocate space
-        top_space <- 0.2
-        bottom_space <- 0.2
-        interest_space <- 0.6
+        top_space <- num.from.extrema[i]/50
+        bottom_space <- num.from.extrema[i]/50
+        interest_space <- 1-top_space-bottom_space
 
         # Calculate y positions for each group
         if (n_top > 1) {
@@ -924,7 +978,8 @@ list.of.matrices <- list(
 )
 
 plot.series.of.ratio.matrices(
-    list.of.sorted.matrices.to.display=list.of.matrices
+    list.of.sorted.matrices.to.display=list.of.matrices,
+    num.from.extrema=c(10,10,10,15,15), # Adjusted to match the number of matrices
 )
 
 
@@ -935,40 +990,95 @@ plot.series.of.ratio.matrices(
 
 #gene.selection <- promoterBedTables$HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION.promoter.bed$Gene
 gene.selection <- gene.selection.EMT.TAorDN
-
 combined.expression.data.selected <- combined.expression.data[,"Gene Symbol"] %in% gene.selection
-
-gene.setlection_tp73ConfirmAny <- retrieve_context_data_by_chromosome(combined.expression.data.selected, confirmation=c("tp73"),TA.or.DN="any")
+gene.selection_tp73ConfirmAny <- retrieve_context_data_by_chromosome(combined.expression.data.selected, confirmation=c("tp73"),TA.or.DN="any")
 all_inPromoter_tp73ConfirmAny <- retrieve_context_data_by_chromosome(NULL, confirmation=c("tp73","promoter"),TA.or.DN="any")
 
 
 cat("I: Distribution of number of matches by chromosome:\n")
-print(gene.setlection_tp73ConfirmAny$num_matches_by_chromosome)
-cat("I: Total number of matches across all chromosomes: ",sum(gene.setlection_tp73ConfirmAny$num_matches_by_chromosome),"\n",sep="")
+print(gene.selection_tp73ConfirmAny$num_matches_by_chromosome)
+cat("I: Total number of matches across all chromosomes: ",sum(gene.selection_tp73ConfirmAny$num_matches_by_chromosome),"\n",sep="")
 
-gene.setlection_tp73ConfirmAny.colSums <- colSums(gene.setlection_tp73ConfirmAny$context_data,na.rm=T)
+gene.selection_tp73ConfirmAny.colSums <- colSums(gene.selection_tp73ConfirmAny$context_data,na.rm=T)
 all_inPromoter_tp73ConfirmAny.colSums <- colSums(all_inPromoter_tp73ConfirmAny$context_data,na.rm=T)
 
+print(gene.selection_tp73ConfirmAny.colSums)
+
 gene.vs.all_inPromoter_tp73ConfirmAny <- cbind(
-    mean.EMT=gene.setlection_tp73ConfirmAny$mean_total,
+    mean.EMT=gene.selection_tp73ConfirmAny$mean_total,
     mean.background=all_inPromoter_tp73ConfirmAny$mean_total,
-    ratio=gene.setlection_tp73ConfirmAny$mean_total / all_inPromoter_tp73ConfirmAny$mean_total
+    ratio=gene.selection_tp73ConfirmAny$mean_total / all_inPromoter_tp73ConfirmAny$mean_total
 )
 
 tf.patterns.of.interest <- paste0(
-            "^(jun|sp1|rest|yap1|yy1|e2f1|nfkb1|tp53|tp63|tp73|",
-            "BZIP43|IRF2|RXRA--VDR|pan|HAP1|Nr2F6|RORA|E2F3|E2F7|THI2|SPL15|TGIF1|MYB52|ZBED1|NAC083", #  paste(sapply(strsplit(rownames(head(ta_vs_effects_tp73Confirm_posConfirm.sorted,15)),split=" "),function(X) X[1]),collapse="|")
-            "NR3C1|TP63|RREB1|ATHB-9|GLIS1|PLAG1|E2FC|MYB15|DYT1|bZIP911|odd|RARA|BZIP42|BPC5|TCP14", # paste(sapply(strsplit(rownames(tail(ta_vs_effects_tp73Confirm_posConfirm.sorted[!is.na(ta_vs_effects_tp73Confirm_posConfirm.sorted[,"ratio"]),],15)),split=" "),function(X) X[1]),collapse="|")
-                        ") ")
+            #"^(jun|sp1|rest|yap1|yy1|e2f1|nfkb1|tp53|tp63|tp73|",
+            #"BZIP43|IRF2|RXRA--VDR|pan|HAP1|Nr2F6|RORA|E2F3|E2F7|THI2|SPL15|TGIF1|MYB52|ZBED1|NAC083", #  paste(sapply(strsplit(rownames(head(ta_vs_effects_tp73Confirm_posConfirm.sorted,15)),split=" "),function(X) X[1]),collapse="|")
+            #"NR3C1|TP63|RREB1|ATHB-9|GLIS1|PLAG1|E2FC|MYB15|DYT1|bZIP911|odd|RARA|BZIP42|BPC5|TCP14", # paste(sapply(strsplit(rownames(tail(ta_vs_effects_tp73Confirm_posConfirm.sorted[!is.na(ta_vs_effects_tp73Confirm_posConfirm.sorted[,"ratio"]),],15)),split=" "),function(X) X[1]),collapse="|")
+            "RARA|GLIS1|PLAG1|RREB1|TP63|NR3C1|SRF|NR3C2|EWSR1-FLI1|THRB|TFAP2E|GLIS3|TFAP2C|RXRB|KLF14|",
+            "IRF2|RXRA|RORA|E2F7|E2F3|TFIF1|ZBED1|IRF4|RFX3|MEF2D|STAT1|MEF2B|NFIC|IRF8|CREB3L1",
+        ") ")
 
 gene.vs.all_inPromoter_tp73ConfirmAny.sorted <- gene.vs.all_inPromoter_tp73ConfirmAny[order(gene.vs.all_inPromoter_tp73ConfirmAny[, "ratio"],decreasing=T), ]
 rownames(gene.vs.all_inPromoter_tp73ConfirmAny.sorted) <- prettyIdentifierJaspar(rownames(gene.vs.all_inPromoter_tp73ConfirmAny.sorted))
-gene.vs.all_inPromoter_tp73ConfirmAny.rownames.interest <- c(rownames(gene.vs.all_inPromoter_tp73ConfirmAny.sorted)[1:50],
+gene.vs.all_inPromoter_tp73ConfirmAny.rownames.interest <- c(rownames(gene.vs.all_inPromoter_tp73ConfirmAny.sorted)[is.human.jaspar.id(rownames(gene.vs.all_inPromoter_tp73ConfirmAny.sorted))][1:50],
     grep(x=prettyIdentifierJaspar(rownames(gene.vs.all_inPromoter_tp73ConfirmAny.sorted)),pattern=tf.patterns.of.interest,ignore.case=T,value=T)
     )
 gene.vs.all_inPromoter_tp73ConfirmAny.rownames.interest <- unique(gene.vs.all_inPromoter_tp73ConfirmAny.rownames.interest)
     
 combined.expression.data.reduced <- combined.expression.data[combined.expression.data.selected,]
+
+nrow(gene.selection_tp73ConfirmAny$context_data)
+
+# Print all possible six combinations of "pos"/"tp73" with "skmel29_2" and "TA"/"DN"/"GFP"
+combinations <- sort(as.vector(outer(c("pos", "tp73"), c("TA", "DN", "GFP"), function(x, y) paste(x, "skmel29_2", y, sep = "_"))))
+print(combinations)
+
+gene.selection_tp73ConfirmAny_context <- gene.selection_tp73ConfirmAny$context_data
+colnames(gene.selection_tp73ConfirmAny_context) <- prettyIdentifierJaspar(colnames(gene.selection_tp73ConfirmAny_context))
+gene.selection_tp73ConfirmAny_context_interest <- gene.selection_tp73ConfirmAny_context[, ..gene.vs.all_inPromoter_tp73ConfirmAny.rownames.interest, drop = FALSE]
+gene.selection_tp73ConfirmAny_context_interest.colsums <- colSums(gene.selection_tp73ConfirmAny_context_interest)
+gene.selection_tp73ConfirmAny_context_interest.informativeColumNames <- colnames(gene.selection_tp73ConfirmAny_context_interest)[gene.selection_tp73ConfirmAny_context_interest.colsums > 0]
+gene.selection_tp73ConfirmAny_context_interest.informative <- gene.selection_tp73ConfirmAny_context_interest[,..gene.selection_tp73ConfirmAny_context_interest.informativeColumNames, drop = FALSE]
+
+gene.selection_tp73ConfirmAny_context_interest_heatmap_input <- cbind(Gene=gene.selection_tp73ConfirmAny$downstream_genes,
+    #ene.selection_tp73ConfirmAny$coordinates[,c(5)],
+      #gene.selection_tp73ConfirmAny$cutandrun_data[,..combinations],
+      gene.selection_tp73ConfirmAny_context_interest.informative
+)
+gene.selection_tp73ConfirmAny_context_interest_heatmap_input_nonRedundant <- gene.selection_tp73ConfirmAny_context_interest_heatmap_input[!duplicated(gene.selection_tp73ConfirmAny_context_interest_heatmap_input[,"Gene"]),]
+
+rownames(gene.selection_tp73ConfirmAny_context_interest_heatmap_input_nonRedundant) <- gene.selection_tp73ConfirmAny_context_interest_heatmap_input_nonRedundant$Gene
+
+require(gplots)
+
+pdf("heatmap_gene_selection_tp73ConfirmAny.pdf", width=18, height=8)
+n <- gene.selection_tp73ConfirmAny_context_interest_heatmap_input_nonRedundant$Gene
+heatmap.2(as.matrix(gene.selection_tp73ConfirmAny_context_interest_heatmap_input_nonRedundant[,-c(1)]),
+          trace="none",
+          col = colorRampPalette(c("white", "gray50", "black"))(100),
+          scale="none", margins=c(10,10),
+          key.title="Expression", key.xlab="scaled CUT&RUN and JASPAR binding scores", key.ylab="",
+          dendrogram="none", Rowv=FALSE, Colv=FALSE,
+          main="Heatmap of Gene Selection for EMT in TP73 Confirmed Contexts",
+          labRow=n,
+          labCol=colnames(gene.selection_tp73ConfirmAny_context_interest_heatmap_input_nonRedundant)[-c(1)],
+          cexRow=0.75, cexCol=0.75
+)
+dev.off()
+
+# Plot correlation matrix of all transcription factors (columns) against each other
+
+require(corrplot)
+
+# Use the context data for all promoters with TP73 confirmation as the matrix
+cor_matrix <- cor(gene.selection_tp73ConfirmAny_context_interest_heatmap_input_nonRedundant[,-1], use="pairwise.complete.obs", method="pearson")
+
+pdf("correlation_matrix_TFBS.pdf", width=12, height=10)
+corrplot(cor_matrix, method="color", type="upper", order="hclust",
+         tl.col="black", tl.cex=0.7, addCoef.col="black", number.cex=0.5,
+         title="Correlation Matrix of TFBS (all promoters, TP73 confirmed)", mar=c(0,0,2,0))
+dev.off()
+cat("I: Correlation matrix plot saved to 'correlation_matrix_TFBS.pdf'.\n")
 
 #
 # OUTDATED (?) BELOW
