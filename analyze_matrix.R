@@ -449,6 +449,491 @@ ggplot(fractions, aes(x = ScoreBin+bin.size/2)) +
     theme_minimal()
 dev.off()
 
+
+#
+# Determine genes 1.5fold change upon DN-overexpression but not for TA-overexpression
+
+#              TA                                  DN
+DN.enriched <- combined.expression.data[,23]<=1.25 & combined.expression.data[,28]>=1.5
+#              TA                                  DN
+TA.enriched <- combined.expression.data[,23]>=1.5 & combined.expression.data[,28]<=1.25
+
+combined.expression.data.valid <- !is.na(combined.expression.data$From) & !is.na(combined.expression.data$To) & !is.na(combined.expression.data$Gene)
+
+print(paste0("I: Found ",sum(DN.enriched)," genes enriched in DN-overexpression but not in TA-overexpression."))
+print(paste0("I: Found ",sum(TA.enriched)," genes enriched in TA-overexpression but not in DA-overexpression."))
+
+DN.enriched.valid <- DN.enriched & combined.expression.data.valid
+TA.enriched.valid <- TA.enriched & combined.expression.data.valid   
+
+print(paste0("I: Found ",sum(DN.enriched.valid)," genes enriched in DN-overexpression but not in TA-overexpression (valid genes)."))
+print(paste0("I: Found ",sum(TA.enriched.valid)," genes enriched in TA-overexpression but not in DN-overexpression (valid genes)."))    
+
+
+# Iterate over chromosomes and retrieve context data for DN.enriched.valid and TA.enriched.valid rows
+cat("I: Retrieving context data for DN.enriched.valid and TA.enriched.valid rows by iterating over chromosomes...\n")
+
+retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=NULL,TA.or.DN=NULL) {
+    context_data <- NULL
+    if (length(setdiff(confirmation,c("none","tp73","pos","promoter")))>0) {
+        stop("I: No method for confirmation specified: (",
+                paste(setdiff(confirmation,c("none","tp73","pos","promoter")),collapse=",",sep=""),
+                "), make it none, tp73, pos or c(tp73,pos).\n")
+    } else {
+        cat("I: Using method ", confirmation, ".\n", sep = "")
+    }
+
+    if (is.null(TA.or.DN) || ! TA.or.DN %in% c("TA","DN","any")) {
+        stop("I: No enricment for TA or DN specified, make it TA or DN or any.\n")
+    } else {
+        cat("I: Using enrichment ", TA.or.DN, ".\n", sep = "")
+    }
+
+    # Create a matrix to store column sums for each chromosome
+    mean_by_chromosome <- col_sums_by_chromosome <- matrix(
+        NA,
+        nrow = length(m.contexts),
+        ncol = sum(cols.NumInWindow),
+        dimnames = list(names(m.contexts), colnames(m.contexts[[1]][,..cols.NumInWindow]))
+    )
+    num_matches_by_chromosome <- setNames(vector("numeric", length(m.contexts)), names(m.contexts))
+
+    for (chromosome in names(m.contexts)) {
+
+        context_data_chromosome <- NULL
+        context_matches_chromosome <- c()
+
+        if (is.null(m.contexts[[chromosome]])) {
+            cat("E: No data for chromosome ", chromosome, " - skipping\n", sep = "")
+            next
+        }
+
+        m.context.extra.check <- rep(TRUE, nrow(m.contexts[[chromosome]]))
+
+        if ("promoter" %in% confirmation) {
+            m.context.extra.check <- m.context.extra.check & m.contexts[[chromosome]][, "InPromoter"]
+        }
+
+        if ("tp73" %in% confirmation) {
+            
+            if (TA.or.DN == "TA") {
+                m.context.extra.check <- m.context.extra.check & m.contexts[[chromosome]][, "tp73_skmel29_2_TA"] > 0
+            } else if (TA.or.DN == "DN") {
+                m.context.extra.check <- m.context.extra.check & m.contexts[[chromosome]][, "tp73_skmel29_2_DN"] > 0
+            } else if (TA.or.DN == "any") {
+                m.context.extra.check <- m.context.extra.check & (
+                    m.contexts[[chromosome]][, "tp73_skmel29_2_TA"] > 0 |
+                    m.contexts[[chromosome]][, "tp73_skmel29_2_DN"] > 0 |
+                    m.contexts[[chromosome]][, "tp73_skmel29_2_GFP"] > 0
+                )
+            } else if (TA.or.DN == "none") {
+                # doing nothing, as we want to check all rows
+            } else {
+                stop("E: Invalid TA.or.DN method specified.\n")
+            }
+        }
+
+        if ("pos" %in% confirmation) {
+            if (TA.or.DN == "TA") {
+                m.context.extra.check <- m.context.extra.check & m.contexts[[chromosome]][, "pos_skmel29_2_TA"] > 0
+            } else if (TA.or.DN == "DN") {
+                m.context.extra.check <- m.context.extra.check & m.contexts[[chromosome]][, "pos_skmel29_2_DN"] > 0
+            } else if (TA.or.DN == "any") { 
+                m.context.extra.check <- m.context.extra.check & (
+                    m.contexts[[chromosome]][, "pos_skmel29_2_DN"] > 0 |
+                    m.contexts[[chromosome]][, "pos_skmel29_2_TA"] > 0 |
+                    m.contexts[[chromosome]][, "pos_skmel29_2_GFP"] > 0
+                    )
+            } else if (TA.or.DN == "none") {
+                # doing nothing, as we want to check all rows
+            } else {
+                stop("E: Invalid TA.or.DN method specified.\n")
+            }                
+        }
+
+        if (is.null(enriched_rows)) {
+
+            context_matches_chromosome <- which(m.context.extra.check)
+            cat("I: No enriched rows specified, using all rows for chromosome ", chromosome, ", found ",length(context_matches_chromosome)," hits.\n", sep = "")
+
+        } else {
+
+            rows_in_chromosome <- which(enriched_rows & combined.expression.data[, 1] == chromosome)
+            if (length(rows_in_chromosome) == 0) {
+                cat("E: No enriched rows found for chromosome ", chromosome, " - skipping\n", sep = "")
+                next
+            }
+ 
+            for (row_idx in rows_in_chromosome) {
+
+                start_pos <- combined.expression.data[row_idx, 2]
+                end_pos <- combined.expression.data[row_idx, 3]
+
+                m.context.row.check <- m.context.extra.check & m.contexts[[chromosome]][, 2] == start_pos &
+                                    m.contexts[[chromosome]][, 3] == end_pos
+
+                match_idx <- which(m.context.row.check)
+            
+                if (length(match_idx) == 0) {
+                    cat("E: No matching context found for row ", row_idx, " (chromosome: ", chromosome, ", start: ", start_pos, ", end: ", end_pos, ")\n", sep = "")
+                    next
+                }
+
+                context_matches_chromosome <-  c(context_matches_chromosome, match_idx)
+            }
+        }
+        
+        context_data_chromosome <- m.contexts[[chromosome]][context_matches_chromosome, ..cols.NumInWindow]
+        cat("I: Retrieved context for ", nrow(context_data_chromosome), " binding sites on chromosome: ", chromosome, "\n", sep = "")
+
+
+        if (nrow(context_data_chromosome) == 0) {
+            cat("E: No context data found for chromosome ", chromosome, " - skipping\n", sep = "")
+            next
+        }
+        else {
+            context_data <- rbind(context_data, context_data_chromosome)
+            col_sums_by_chromosome[chromosome,] <- colSums(context_data_chromosome, na.rm = TRUE)
+            num_matches_by_chromosome[chromosome] <- nrow(context_data_chromosome)
+            mean_by_chromosome[chromosome,] <- colMeans(context_data_chromosome, na.rm = TRUE)
+            cat("I: Calculated colSums, number of matches, and mean for chromosome ", chromosome, "\n", sep = "")
+        }
+    }
+    col_sums_total = colSums(col_sums_by_chromosome)
+    return(list(
+        context_data = context_data,
+        col_sums_by_chromosome = col_sums_by_chromosome,
+        col_sums_total = col_sums_total,
+        num_matches_by_chromosome = num_matches_by_chromosome,
+        num_matches_total = sum(num_matches_by_chromosome),
+        mean_by_chromosome = mean_by_chromosome,
+        mean_total = colMeans(context_data, na.rm = TRUE)
+    ))
+}
+
+tp73_noConfirmationWhatsoever <- retrieve_context_data_by_chromosome(NULL,confirmation="none",TA.or.DN="any")
+
+tp73_tp73ConfirmTA <- retrieve_context_data_by_chromosome(NULL,confirmation="tp73",TA.or.DN="TA")
+tp73_tp73ConfirmDN <- retrieve_context_data_by_chromosome(NULL,confirmation="tp73",TA.or.DN="DN")
+
+ta_vs_dn_tp73Confirm <- cbind(mean.TA=tp73_tp73ConfirmTA$mean_total,
+                              mean.DN=tp73_tp73ConfirmDN$mean_total,
+                              ratio=tp73_tp73ConfirmTA$mean_total / tp73_tp73ConfirmDN$mean_total)
+ta_vs_dn_tp73Confirm.sorted <- ta_vs_dn_tp73Confirm[order(ta_vs_dn_tp73Confirm[, "ratio"]), ]
+rownames(ta_vs_dn_tp73Confirm.sorted) <- prettyIdentifierJaspar(rownames(ta_vs_dn_tp73Confirm.sorted))
+
+tp73_tp73ConfirmTA_inPromoter <- retrieve_context_data_by_chromosome(NULL,confirmation=c("tp73","promoter"),TA.or.DN="TA")
+tp73_tp73ConfirmDN_inPromoter <- retrieve_context_data_by_chromosome(NULL,confirmation=c("tp73","promoter"),TA.or.DN="DN")
+ta_vs_dn_tp73Confirm_inPromoter <- cbind(mean.TA=tp73_tp73ConfirmTA_inPromoter$mean_total,
+                                         mean.DN=tp73_tp73ConfirmDN_inPromoter$mean_total,
+                                         ratio=tp73_tp73ConfirmTA_inPromoter$mean_total / tp73_tp73ConfirmDN_inPromoter$mean_total)
+ta_vs_dn_tp73Confirm_inPromoter.sorted <- ta_vs_dn_tp73Confirm_inPromoter[order(ta_vs_dn_tp73Confirm_inPromoter[, "ratio"]), ]
+rownames(ta_vs_dn_tp73Confirm_inPromoter.sorted) <- prettyIdentifierJaspar(rownames(ta_vs_dn_tp73Confirm_inPromoter.sorted))
+
+
+tp73_tp73ConfirmTA_inPromoter_posConfirmTA <- retrieve_context_data_by_chromosome(NULL,confirmation=c("tp73","pos","promoter"),TA.or.DN="TA")
+tp73_tp73ConfirmDN_inPromoter_posConfirmDN <- retrieve_context_data_by_chromosome(NULL,confirmation=c("tp73","pos","promoter"),TA.or.DN="DN")
+ta_vs_dn_tp73Confirm_inPromoter_posConfirm <- cbind(
+                                        mean.TA=tp73_tp73ConfirmTA_inPromoter_posConfirmTA$mean_total,
+                                        mean.DN=tp73_tp73ConfirmDN_inPromoter_posConfirmDN$mean_total,
+                                        ratio=tp73_tp73ConfirmTA_inPromoter_posConfirmTA$mean_total / tp73_tp73ConfirmDN_inPromoter_posConfirmDN$mean_total)
+ta_vs_dn_tp73Confirm_inPromoter_posConfirm.sorted <- ta_vs_dn_tp73Confirm_inPromoter_posConfirm[order(ta_vs_dn_tp73Confirm_inPromoter_posConfirm[, "ratio"]), ]
+rownames(ta_vs_dn_tp73Confirm_inPromoter_posConfirm.sorted) <- prettyIdentifierJaspar(rownames(ta_vs_dn_tp73Confirm_inPromoter_posConfirm.sorted))
+
+
+dn_results_tp73ConfirmAny <- retrieve_context_data_by_chromosome(DN.enriched.valid,confirmation="tp73",TA.or.DN="any")
+ta_results_tp73ConfirmAny <- retrieve_context_data_by_chromosome(TA.enriched.valid,confirmation="tp73",TA.or.DN="any")
+#all(dn_results_tp73ConfirmAny$mean_by_chromosome == dn_results$mean_by_chromosome)
+
+#dn_results <- retrieve_context_data_by_chromosome(DN.enriched.valid)
+#ta_results <- retrieve_context_data_by_chromosome(TA.enriched.valid)
+
+ta_effects_tp73ConfirmTA_posConfirmTA <- retrieve_context_data_by_chromosome(TA.enriched.valid,confirmation=c("tp73","pos"),TA.or.DN="TA")
+dn_effects_tp73ConfirmDN_posConfirmDN <- retrieve_context_data_by_chromosome(DN.enriched.valid,confirmation=c("tp73","pos"),TA.or.DN="DN")
+ta_vs_effects_tp73Confirm_posConfirm <- cbind(
+    mean.TA=ta_effects_tp73ConfirmTA_posConfirmTA$mean_total,
+    mean.DN=dn_effects_tp73ConfirmDN_posConfirmDN$mean_total,
+    ratio=ta_effects_tp73ConfirmTA_posConfirmTA$mean_total / dn_effects_tp73ConfirmDN_posConfirmDN$mean_total
+)
+ta_vs_effects_tp73Confirm_posConfirm.sorted <- ta_vs_effects_tp73Confirm_posConfirm[order(ta_vs_effects_tp73Confirm_posConfirm[, "ratio"]), ]
+rownames(ta_vs_effects_tp73Confirm_posConfirm.sorted) <- prettyIdentifierJaspar(rownames(ta_vs_effects_tp73Confirm_posConfirm.sorted))  
+
+cat("I: Retrieved context data, calculated colSums, number of matches, and mean for DN.enriched.valid and TA.enriched.valid rows successfully.\n")
+
+combined.expression.in.promoters.of.HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION <- combined.expression.data[,"Gene Symbol"] %in% promoterBedTables$HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION.promoter.bed$Gene
+
+genesetEMT_tp73ConfirmTA <- retrieve_context_data_by_chromosome(combined.expression.in.promoters.of.HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION,
+                                                                             confirmation=c("tp73"),TA.or.DN="TA")
+genesetEMT_tp73ConfirmDN <- retrieve_context_data_by_chromosome(combined.expression.in.promoters.of.HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION,
+                                                                             confirmation=c("tp73"),TA.or.DN="DN")
+ta_vs_dn_genesetEMT_tp73Confirm <- cbind(
+    mean.TA=genesetEMT_tp73ConfirmTA$mean_total,
+    mean.DN=genesetEMT_tp73ConfirmDN$mean_total,
+    ratio=genesetEMT_tp73ConfirmTA$mean_total / genesetEMT_tp73ConfirmDN$mean_total
+)
+ta_vs_dn_genesetEMT_tp73Confirm.sorted <- ta_vs_dn_genesetEMT_tp73Confirm[order(ta_vs_dn_genesetEMT_tp73Confirm[, "ratio"]), ]
+rownames(ta_vs_dn_genesetEMT_tp73Confirm.sorted) <- prettyIdentifierJaspar(rownames(ta_vs_dn_genesetEMT_tp73Confirm.sorted))
+
+
+
+genesetEMT_tp73ConfirmTA_posConfirmTA <- retrieve_context_data_by_chromosome(combined.expression.in.promoters.of.HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION,
+                                                                             confirmation=c("tp73","pos"),TA.or.DN="TA")
+genesetEMT_tp73ConfirmDN_posConfirmDN <- retrieve_context_data_by_chromosome(combined.expression.in.promoters.of.HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION,
+                                                                             confirmation=c("tp73","pos"),TA.or.DN="DN")
+ta_vs_dn_genesetEMT_tp73Confirm_posConfirm <- cbind(
+    mean.TA=genesetEMT_tp73ConfirmTA_posConfirmTA$mean_total,
+    mean.DN=genesetEMT_tp73ConfirmDN_posConfirmDN$mean_total,
+    ratio=genesetEMT_tp73ConfirmTA_posConfirmTA$mean_total / genesetEMT_tp73ConfirmDN_posConfirmDN$mean_total
+)
+ta_vs_dn_genesetEMT_tp73Confirm_posConfirm.sorted <- ta_vs_dn_genesetEMT_tp73Confirm_posConfirm[order(ta_vs_dn_genesetEMT_tp73Confirm_posConfirm[, "ratio"]), ]
+rownames(ta_vs_dn_genesetEMT_tp73Confirm_posConfirm.sorted) <- prettyIdentifierJaspar(rownames(ta_vs_dn_genesetEMT_tp73Confirm_posConfirm.sorted))
+
+if (FALSE) {
+
+    ta_vs_dn_nonMethylated<-cbind(mean.TA=ta_results$mean_total, mean.DN=dn_results$mean_total, ratio=ta_results$mean_total / dn_results$mean_total)
+    ta_vs_dn_nonMethylated.sorted <- ta_vs_dn_nonMethylated[order(ta_vs_dn_nonMethylated[, "ratio"]), ]
+    rownames(ta_vs_dn_nonMethylated.sorted) <- prettyIdentifierJaspar(rownames(ta_vs_dn_nonMethylated.sorted))
+    tf.of.interest <- grep(rownames(ta_vs_dn_nonMethylated.sorted),pattern="^(jun|sp1|rest|yap1|yy1|e2f1|tp53|tp63|tp73) ",ignore.case=T,value=T)
+
+
+    head(round(ta_vs_dn_nonMethylated.sorted,2), 30)
+    print(cbind(qantile=round(which(rownames(ta_vs_dn_nonMethylated.sorted)%in%tf.of.interest)/nrow(ta_vs_dn_nonMethylated.sorted)*100),
+                round(ta_vs_dn_nonMethylated.sorted[tf.of.interest, ],2)))
+    tail(round(ta_vs_dn_nonMethylated.sorted, 2), 30)
+
+    dn_results_tp73ConfirmAny_posConfirmAny <- retrieve_context_data_by_chromosome(DN.enriched.valid,confirmation=c("tp73","pos"),TA.or.DN="any")
+    ta_results_tp73ConfirmAny_posConfirmAny <- retrieve_context_data_by_chromosome(TA.enriched.valid,confirmation=c("tp73","pos"),TA.or.DN="any")
+
+
+    #dn_results_w_methylation <- retrieve_context_data_by_chromosome(DN.enriched.valid)
+    #ta_results_w_methylation <- retrieve_context_data_by_chromosome(TA.enriched.valid)
+
+
+    ta_vs_dn_w_methylation<-cbind(mean.TA=ta_results_w_methylation$mean_total,
+                                mean.DN=dn_results_w_methylation$mean_total,
+                                ratio=ta_results_w_methylation$mean_total / dn_results_w_methylation$mean_total)
+    ta_vs_dn_w_methylation.sorted <- ta_vs_dn_w_methylation[order(ta_vs_dn_w_methylation[, "ratio"]), ]
+    rownames(ta_vs_dn_w_methylation.sorted) <- prettyIdentifierJaspar(rownames(ta_vs_dn_w_methylation.sorted))
+    tf.of.interest <- grep(rownames(ta_vs_dn_w_methylation.sorted),pattern="^(jun|sp1|rest|yap1|yy1|e2f1|tp53|tp63|tp73) ",ignore.case=T,value=T)
+
+    head(round(ta_vs_dn_w_methylation.sorted,2), 30)
+    print(cbind(qantile=round(which(rownames(ta_vs_dn_w_methylation.sorted)%in%tf.of.interest)/nrow(ta_vs_dn_w_methylation.sorted)*100),
+                round(ta_vs_dn_w_methylation.sorted[tf.of.interest, ],2)))
+    tail(round(ta_vs_dn_w_methylation.sorted, 2), 30)
+
+}
+
+
+
+# Prepare data for vertical plot: top 5, bottom 5, and genes of interest
+require(ggplot2)
+
+
+if (FALSE) {
+    # To help with debugging, we can set these variables to NULL
+    sorted.matrix.to.display=NULL
+    num.from.extrema <- 10
+    tf.patterns.of.interest <- NULL
+}
+
+
+plot.series.of.ratio.matrices <- function(list.of.sorted.matrices.to.display=NULL,num.from.extrema=10,tf.patterns.of.interest=NULL) {
+
+    if (is.null(tf.patterns.of.interest)) {
+        tf.patterns.of.interest <- "^(jun|sp1|rest|yap1|yy1|e2f1|e2f7|tp53|tp63|tp73|plag1|rara|odd|irf2|bpc5|irf2|nr2f6|pdr3|pax1|rarg|esr1|odd) "
+    }   
+
+    if (is.null(list.of.sorted.matrices.to.display)) {
+        cat("I: No sorted matrix provided, using default sorted matrices.\n")
+        list.of.sorted.matrices.to.display <- list(
+                effect_nonmethylated=ta_vs_dn_nonMethylated.sorted,
+                effect_methylated=ta_vs_dn_w_methylation.sorted
+        )
+    } else if (!is.list(list.of.sorted.matrices.to.display)) {
+        if (is.matrix(list.of.sorted.matrices.to.display) || is.data.frame(sorted.matrix.to.display)) {
+            list.of.sorted.matrices.to.display <- list(unnamed=sorted.matrix.to.display)
+        } else {
+            cat("E: Invalid input for sorted.matrix.to.display, expected a matrix, data frame, or list.\n")
+            stop("Exiting due to invalid input.")
+        }
+        cat("I: Using provided sorted matrix list.\n")
+    } 
+
+    if (0 == length(list.of.sorted.matrices.to.display)) {
+        cat("E: No sorted matrices to display, exiting.\n")
+        stop("Exiting due to no sorted matrices to display.")
+    } else {
+           cat("I: Found ", length(list.of.sorted.matrices.to.display), " sorted matrices to display:\n", sep="")
+           cat("  ", paste(names(list.of.sorted.matrices.to.display), collapse=", "), "\n", sep="")
+    }   
+
+    pdf("vertical_plot.pdf", width=3*length(list.of.sorted.matrices.to.display), height=8)
+
+    for(i in 1:length(list.of.sorted.matrices.to.display)) {
+
+        sorted.matrix.to.display.tag <- names(list.of.sorted.matrices.to.display)[i]
+        add.to.existing.graph <- ( i > 1 )
+
+        cat("I: Processing sorted matrix for tag: ", sorted.matrix.to.display.tag, "\n", sep="")
+
+        print_legend <- (i == length(list.of.sorted.matrices.to.display))
+
+        if (add.to.existing.graph) {
+            cat("I: Adding to existing graph for tag: ", sorted.matrix.to.display.tag, "\n", sep="")
+        } else {
+            cat("I: Creating new graph for tag: ", sorted.matrix.to.display.tag, "\n", sep="")
+        }
+
+        sorted.matrix.to.display <- list.of.sorted.matrices.to.display[[sorted.matrix.to.display.tag]]
+        if (is.null(sorted.matrix.to.display)) {
+            cat("E: No data for tag ", sorted.matrix.to.display.tag, " - skipping\n", sep="")
+            next
+        }
+
+        sorted.matrix.to.display.valid <- rowSums(sorted.matrix.to.display[, c("mean.TA","mean.DN")])>0.0005
+
+        # Get top and bottom
+        top5 <- head(sorted.matrix.to.display[sorted.matrix.to.display.valid,], num.from.extrema)
+        bottom5 <- tail(sorted.matrix.to.display[sorted.matrix.to.display.valid,], num.from.extrema)
+
+        # Genes of interest (tf.of.interest) that are not in top5/bottom5
+        tf_interest_names <- grep(rownames(ta_vs_dn_nonMethylated.sorted),pattern=tf.patterns.of.interest,ignore.case=T,value=T)
+        print(tf_interest_names)
+
+        tf_interest_set <- setdiff(tf_interest_names, c(rownames(top5), rownames(bottom5)))
+        tf_interest <- sorted.matrix.to.display[rownames(sorted.matrix.to.display) %in% tf_interest_set, , drop=FALSE] # extra complicated to preserve order
+
+        # Assign y positions: top5 (1:5), gap, tf_interest (by their rank), gap, bottom5 (last 5)
+        n_top <- nrow(top5)
+        n_bottom <- nrow(bottom5)
+        gap_size <- 2
+
+        # Get the ranks of tf_interest in the full sorted table
+        tf_interest_ranks <- match(rownames(tf_interest), rownames(sorted.matrix.to.display))
+        
+
+        # Compose plotting data
+        plot_data <- rbind(
+            data.frame(Name=rownames(top5), mean.TA=top5[,1], mean.DN=top5[,2], ratio=top5[,3], group="Top", y=seq(1,n_top)),
+            data.frame(Name=rownames(tf_interest), mean.TA=tf_interest[,1], mean.DN=tf_interest[,2], ratio=tf_interest[,3], group="Interest", y=tf_interest_ranks),
+            data.frame(Name=rownames(bottom5), mean.TA=bottom5[,1], mean.DN=bottom5[,2], ratio=bottom5[,3], group="Bottom",
+                        y=seq(sum(sorted.matrix.to.display.valid)-n_bottom+1,sum(sorted.matrix.to.display.valid)))
+        )
+
+        # Assign y for genes of interest: scale to fit in the gap
+        gap_start <- 0
+        gap_end <- -gap_size
+        if(nrow(tf_interest)>0) {
+            # Scale ranks to fit in the gap
+            plot_data$y[plot_data$group=="Interest"] <- gap_start - (tf_interest_ranks - min(tf_interest_ranks)) / 
+                (max(tf_interest_ranks)-min(tf_interest_ranks)+1) * gap_size
+        }
+
+        # Add a column for circle size (sum of means)
+        plot_data$circle_size <- plot_data$mean.TA + plot_data$mean.DN
+
+        # Assign y positions with reserved space: 20% for top5, 20% for bottom5, 60% for interest
+        n_total <- sum(sorted.matrix.to.display.valid)
+        n_top <- nrow(top5)
+        n_bottom <- nrow(bottom5)
+        n_interest <- nrow(tf_interest)
+
+        # Define y-axis range
+        y_min <- 0
+        y_max <- 1
+
+        # Allocate space
+        top_space <- 0.2
+        bottom_space <- 0.2
+        interest_space <- 0.6
+
+        # Calculate y positions for each group
+        if (n_top > 1) {
+            y_top <- seq(y_max, y_max - top_space, length.out = n_top + 1)[-1]
+        } else {
+            y_top <- y_max - top_space / 2
+        }
+        if (n_bottom > 1) {
+            y_bottom <- seq(y_min + bottom_space, y_min , length.out = n_bottom+1)[-1]
+        } else {
+            y_bottom <- y_min + bottom_space / 2
+        }
+        if (n_interest > 0) {
+            y_interest <- seq(y_max - top_space, y_min + bottom_space, length.out = n_interest + 2)[-c(1, n_interest + 2)]
+        } else {
+            y_interest <- numeric(0)
+        }
+
+        # Assign y to plot_data
+        plot_data$y <- NA
+        plot_data$y[plot_data$group == "Top"] <- y_top
+        plot_data$y[plot_data$group == "Bottom"] <- y_bottom
+        plot_data$y[plot_data$group == "Interest"] <- y_interest
+        
+        # Plot
+        # Filter out rows with NA y values to avoid warnings and missing labels
+        plot_data_valid <- plot_data[!is.na(plot_data$y), ]
+
+        # Instead of using labs(title=...), add the tag as a text annotation at the correct x/y position
+        # Place the label at the center top of the current column (x = (i-1)*2, y = max y + offset)
+        p <- ggplot(plot_data_valid, aes(x=(i-1)*1.5, y=y)) +
+            geom_point(aes(size=circle_size, fill=group), shape=21, color="black", alpha=0.8) +
+            geom_text(aes(label=Name), hjust=0, nudge_x=0.12, size=2) +
+            geom_text(aes(label=round(log2(ratio),1)), hjust=1, vjust=0.5, size=2, nudge_x=-0.12, fontface="bold") +
+            scale_size_continuous(breaks = c(0.05,0.2,1,5), labels = c("0.05","0.2","1","5")) +
+            scale_fill_manual(values=c("Top"="#1b9e77", "Interest"="#d95f02", "Bottom"="#7570b3")) +
+            theme_minimal() +
+            labs(size="Frequency", fill="Group") +
+            theme(axis.text.x=element_blank(), axis.ticks.x=element_blank(), axis.title.x=element_blank(),
+            panel.grid=element_blank(), axis.title.y=element_blank(), axis.ticks.y=element_blank(),
+            legend.position=if (exists("print_legend") && print_legend) "right" else "none") +
+            xlim(c(-0.75, (length(list.of.sorted.matrices.to.display)-1)*1.5+0.75)) +
+            ylim(min(plot_data_valid$y, na.rm=TRUE), max(plot_data_valid$y, na.rm=TRUE)+0.2) +
+            annotate("text", x=0.5+(i-1)*1.5, y=max(plot_data_valid$y, na.rm=TRUE)+0.1, na.rm=TRUE,
+                 label=sorted.matrix.to.display.tag, fontface="bold", size=4, hjust=0.5, vjust=0)
+ 
+        if (add.to.existing.graph) {
+            print(p, newpage=FALSE)
+        } else {
+            print(p)
+        }
+        add.to.existing.graph <- TRUE
+
+    }
+
+    dev.off()
+    cat("I: Vertical plot saved to 'vertical_plot.pdf'.\n")
+}
+
+
+list.of.matrices <- list(
+    "p73 binding"=ta_vs_dn_tp73Confirm.sorted,
+    "in promoter"= ta_vs_dn_tp73Confirm_inPromoter.sorted,
+    "also methylated"=ta_vs_dn_tp73Confirm_inPromoter_posConfirm.sorted,
+    # "effect nonmethylated"=ta_vs_dn_nonMethylated.sorted,
+    #"effects expression"=ta_vs_dn_w_methylation.sorted
+    "effects expression"=ta_vs_effects_tp73Confirm_posConfirm.sorted,
+    "geneset EMT"=ta_vs_dn_genesetEMT_tp73Confirm_posConfirm.sorted
+)
+
+plot.series.of.ratio.matrices(
+    list.of.sorted.matrices.to.display=list.of.matrices
+)
+
+plot.series.of.ratio.matrices(
+    list.of.sorted.matrices.to.display=ta_vs_dn_w_methylation.sorted
+)
+
+plot.series.of.ratio.matrices()
+
+
+
+#
+# OUTDATED (?) BELOW
+#
+
+
+
 # Load the findings if needed
 # load("m.findings.RData")
 # Check the structure of the findings
@@ -546,3 +1031,4 @@ for (l.name in names(l)) {
         cat("\n")
     }
 }
+
