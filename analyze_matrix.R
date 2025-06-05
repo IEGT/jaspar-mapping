@@ -475,6 +475,7 @@ cat("I: Retrieving context data for DN.enriched.valid and TA.enriched.valid rows
 
 retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=NULL,TA.or.DN=NULL) {
     context_data <- NULL
+    cutandrun_data <- NULL
     if (length(setdiff(confirmation,c("none","tp73","pos","promoter")))>0) {
         stop("I: No method for confirmation specified: (",
                 paste(setdiff(confirmation,c("none","tp73","pos","promoter")),collapse=",",sep=""),
@@ -501,6 +502,7 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
     for (chromosome in names(m.contexts)) {
 
         context_data_chromosome <- NULL
+        cutandrun_data_chromosome <- NULL
         context_matches_chromosome <- c()
 
         if (is.null(m.contexts[[chromosome]])) {
@@ -584,6 +586,7 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
         }
         
         context_data_chromosome <- m.contexts[[chromosome]][context_matches_chromosome, ..cols.NumInWindow]
+        cutandrun_data_chromosome <- m.contexts[[chromosome]][context_matches_chromosome, 7:18, drop = FALSE]
         cat("I: Retrieved context for ", nrow(context_data_chromosome), " binding sites on chromosome: ", chromosome, "\n", sep = "")
 
 
@@ -593,6 +596,7 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
         }
         else {
             context_data <- rbind(context_data, context_data_chromosome)
+            cutandrun_data <- rbind(cutandrun_data, cutandrun_data_chromosome)
             col_sums_by_chromosome[chromosome,] <- colSums(context_data_chromosome, na.rm = TRUE)
             num_matches_by_chromosome[chromosome] <- nrow(context_data_chromosome)
             mean_by_chromosome[chromosome,] <- colMeans(context_data_chromosome, na.rm = TRUE)
@@ -602,6 +606,7 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
     col_sums_total = colSums(col_sums_by_chromosome)
     return(list(
         context_data = context_data,
+        cutandrun_data = cutandrun_data,
         col_sums_by_chromosome = col_sums_by_chromosome,
         col_sums_total = col_sums_total,
         num_matches_by_chromosome = num_matches_by_chromosome,
@@ -661,11 +666,8 @@ rownames(ta_vs_effects_tp73Confirm_posConfirm.sorted) <- prettyIdentifierJaspar(
 cat("I: Retrieved context data, calculated colSums, number of matches, and mean for DN.enriched.valid and TA.enriched.valid rows successfully.\n")
 
 combined.expression.in.promoters.of.HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION <- combined.expression.data[,"Gene Symbol"] %in% promoterBedTables$HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION.promoter.bed$Gene
-
-genesetEMT_tp73ConfirmTA <- retrieve_context_data_by_chromosome(combined.expression.in.promoters.of.HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION,
-                                                                             confirmation=c("tp73"),TA.or.DN="TA")
-genesetEMT_tp73ConfirmDN <- retrieve_context_data_by_chromosome(combined.expression.in.promoters.of.HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION,
-                                                                             confirmation=c("tp73"),TA.or.DN="DN")
+genesetEMT_tp73ConfirmTA <- retrieve_context_data_by_chromosome(combined.expression.in.promoters.of.HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION,confirmation=c("tp73"),TA.or.DN="TA")
+genesetEMT_tp73ConfirmDN <- retrieve_context_data_by_chromosome(combined.expression.in.promoters.of.HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION,confirmation=c("tp73"),TA.or.DN="DN")
 ta_vs_dn_genesetEMT_tp73Confirm <- cbind(
     mean.TA=genesetEMT_tp73ConfirmTA$mean_total,
     mean.DN=genesetEMT_tp73ConfirmDN$mean_total,
@@ -675,11 +677,22 @@ ta_vs_dn_genesetEMT_tp73Confirm.sorted <- ta_vs_dn_genesetEMT_tp73Confirm[order(
 rownames(ta_vs_dn_genesetEMT_tp73Confirm.sorted) <- prettyIdentifierJaspar(rownames(ta_vs_dn_genesetEMT_tp73Confirm.sorted))
 
 
+combined.expression.in.promoters.of.EMT_TA_induced <- combined.expression.data[,"Gene Symbol"] %in% promoterBedTables$Nico_Analysis_TA_20250508.promoter.bed$Gene
+genesetEMT.TA_tp73ConfirmTA_posConfirmTA <- retrieve_context_data_by_chromosome(combined.expression.in.promoters.of.EMT_TA_induced,confirmation=c("tp73","pos"),TA.or.DN="TA")
+genesetEMT.TA_tp73ConfirmDN_posConfirmDN <- retrieve_context_data_by_chromosome(combined.expression.in.promoters.of.EMT_TA_induced,confirmation=c("tp73","pos"),TA.or.DN="DN")
+print(rbind(genesetEMT.TA_tp73ConfirmTA_posConfirmTA$num_matches_by_chromosome, genesetEMT.TA_tp73ConfirmDN_posConfirmDN$num_matches_by_chromosome))
+ta_vs_dn_genesetEMT.TA_tp73Confirm_posConfirm <- cbind(
+    mean.TA=genesetEMT.TA_tp73ConfirmTA_posConfirmTA$mean_total,
+    mean.DN=genesetEMT.TA_tp73ConfirmDN_posConfirmDN$mean_total,
+    ratio=genesetEMT.TA_tp73ConfirmTA_posConfirmTA$mean_total / genesetEMT.TA_tp73ConfirmDN_posConfirmDN$mean_total
+)
+ta_vs_dn_genesetEMT.TA_tp73Confirm_posConfirm.sorted <- ta_vs_dn_genesetEMT.TA_tp73Confirm_posConfirm[order(ta_vs_dn_genesetEMT.TA_tp73Confirm_posConfirm[, "ratio"]), ]
+rownames(ta_vs_dn_genesetEMT.TA_tp73Confirm_posConfirm.sorted) <- prettyIdentifierJaspar(rownames(ta_vs_dn_genesetEMT.TA_tp73Confirm_posConfirm.sorted))
 
-genesetEMT_tp73ConfirmTA_posConfirmTA <- retrieve_context_data_by_chromosome(combined.expression.in.promoters.of.HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION,
-                                                                             confirmation=c("tp73","pos"),TA.or.DN="TA")
-genesetEMT_tp73ConfirmDN_posConfirmDN <- retrieve_context_data_by_chromosome(combined.expression.in.promoters.of.HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION,
-                                                                             confirmation=c("tp73","pos"),TA.or.DN="DN")
+
+# Not used - external EMT gene list
+genesetEMT_tp73ConfirmTA_posConfirmTA <- retrieve_context_data_by_chromosome(combined.expression.in.promoters.of.HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION,confirmation=c("tp73","pos"),TA.or.DN="TA")
+genesetEMT_tp73ConfirmDN_posConfirmDN <- retrieve_context_data_by_chromosome(combined.expression.in.promoters.of.HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION,confirmation=c("tp73","pos"),TA.or.DN="DN")
 ta_vs_dn_genesetEMT_tp73Confirm_posConfirm <- cbind(
     mean.TA=genesetEMT_tp73ConfirmTA_posConfirmTA$mean_total,
     mean.DN=genesetEMT_tp73ConfirmDN_posConfirmDN$mean_total,
@@ -688,41 +701,25 @@ ta_vs_dn_genesetEMT_tp73Confirm_posConfirm <- cbind(
 ta_vs_dn_genesetEMT_tp73Confirm_posConfirm.sorted <- ta_vs_dn_genesetEMT_tp73Confirm_posConfirm[order(ta_vs_dn_genesetEMT_tp73Confirm_posConfirm[, "ratio"]), ]
 rownames(ta_vs_dn_genesetEMT_tp73Confirm_posConfirm.sorted) <- prettyIdentifierJaspar(rownames(ta_vs_dn_genesetEMT_tp73Confirm_posConfirm.sorted))
 
-if (FALSE) {
 
-    ta_vs_dn_nonMethylated<-cbind(mean.TA=ta_results$mean_total, mean.DN=dn_results$mean_total, ratio=ta_results$mean_total / dn_results$mean_total)
-    ta_vs_dn_nonMethylated.sorted <- ta_vs_dn_nonMethylated[order(ta_vs_dn_nonMethylated[, "ratio"]), ]
-    rownames(ta_vs_dn_nonMethylated.sorted) <- prettyIdentifierJaspar(rownames(ta_vs_dn_nonMethylated.sorted))
-    tf.of.interest <- grep(rownames(ta_vs_dn_nonMethylated.sorted),pattern="^(jun|sp1|rest|yap1|yy1|e2f1|tp53|tp63|tp73) ",ignore.case=T,value=T)
+# TA-/DN-specific gene selection for EMT
 
+gene.selection.EMT.TAonly <- c("EDIL3","MMP2","LRRC15","LAMA3","BGN","FBLN2","ACTA2","TGFBR3","TNFRSF12A","VCAN","MYLK","SERPINH1","TPM1","COL8A2","CRLF1","LGALS1","COL5A2","SLIT2","MATN2")
+gene.selection.EMT.DNonly <- c("LAMA1","CDH11","SPARC","EMP3","DAB2","FN1","THBS1","DKK1","COLGALT1","PCOLCE","VIM","SNAI2","MCM7","ITGAV","PMP22","PLOD1")
+gene.selection.EMT.TAandDN <- c("CD44","PMEPA1","SFRP1","GADD45B","CADM1","SLC6A8","ID2","SDC1")
+gene.selection.EMT.TAorDN <- c(gene.selection.EMT.TAonly, gene.selection.EMT.DNonly, gene.selection.EMT.TAandDN)
+gene.selection.EMT.TA <- c(gene.selection.EMT.TAonly, gene.selection.EMT.TAandDN)
+gene.selection.EMT.DN <- c(gene.selection.EMT.DNonly, gene.selection.EMT.TAandDN)
 
-    head(round(ta_vs_dn_nonMethylated.sorted,2), 30)
-    print(cbind(qantile=round(which(rownames(ta_vs_dn_nonMethylated.sorted)%in%tf.of.interest)/nrow(ta_vs_dn_nonMethylated.sorted)*100),
-                round(ta_vs_dn_nonMethylated.sorted[tf.of.interest, ],2)))
-    tail(round(ta_vs_dn_nonMethylated.sorted, 2), 30)
-
-    dn_results_tp73ConfirmAny_posConfirmAny <- retrieve_context_data_by_chromosome(DN.enriched.valid,confirmation=c("tp73","pos"),TA.or.DN="any")
-    ta_results_tp73ConfirmAny_posConfirmAny <- retrieve_context_data_by_chromosome(TA.enriched.valid,confirmation=c("tp73","pos"),TA.or.DN="any")
-
-
-    #dn_results_w_methylation <- retrieve_context_data_by_chromosome(DN.enriched.valid)
-    #ta_results_w_methylation <- retrieve_context_data_by_chromosome(TA.enriched.valid)
-
-
-    ta_vs_dn_w_methylation<-cbind(mean.TA=ta_results_w_methylation$mean_total,
-                                mean.DN=dn_results_w_methylation$mean_total,
-                                ratio=ta_results_w_methylation$mean_total / dn_results_w_methylation$mean_total)
-    ta_vs_dn_w_methylation.sorted <- ta_vs_dn_w_methylation[order(ta_vs_dn_w_methylation[, "ratio"]), ]
-    rownames(ta_vs_dn_w_methylation.sorted) <- prettyIdentifierJaspar(rownames(ta_vs_dn_w_methylation.sorted))
-    tf.of.interest <- grep(rownames(ta_vs_dn_w_methylation.sorted),pattern="^(jun|sp1|rest|yap1|yy1|e2f1|tp53|tp63|tp73) ",ignore.case=T,value=T)
-
-    head(round(ta_vs_dn_w_methylation.sorted,2), 30)
-    print(cbind(qantile=round(which(rownames(ta_vs_dn_w_methylation.sorted)%in%tf.of.interest)/nrow(ta_vs_dn_w_methylation.sorted)*100),
-                round(ta_vs_dn_w_methylation.sorted[tf.of.interest, ],2)))
-    tail(round(ta_vs_dn_w_methylation.sorted, 2), 30)
-
-}
-
+genesetEMT.TA_tp73ConfirmTA_posConfirmTA <- retrieve_context_data_by_chromosome(combined.expression.data[,"Gene Symbol"] %in% gene.selection.EMT.TA, confirmation=c("tp73","pos"),TA.or.DN="TA")
+genesetEMT.DN_tp73ConfirmDN_posConfirmDN <- retrieve_context_data_by_chromosome(combined.expression.data[,"Gene Symbol"] %in%gene.selection.EMT.DN, confirmation=c("tp73","pos"),TA.or.DN="DN")
+ta_vs_dn_genesetEMT.TA.DN_tp73Confirm_posConfirm <- cbind(
+    mean.TA=genesetEMT.TA_tp73ConfirmTA_posConfirmTA$mean_total,
+    mean.DN=genesetEMT.DN_tp73ConfirmDN_posConfirmDN$mean_total,
+    ratio=genesetEMT.TA_tp73ConfirmTA_posConfirmTA$mean_total / genesetEMT.DN_tp73ConfirmDN_posConfirmDN$mean_total
+)
+ta_vs_dn_genesetEMT.TA.DN_tp73Confirm_posConfirm.sorted <- ta_vs_dn_genesetEMT.TA.DN_tp73Confirm_posConfirm[order(ta_vs_dn_genesetEMT.TA.DN_tp73Confirm_posConfirm[, "ratio"]), ]
+rownames(ta_vs_dn_genesetEMT.TA.DN_tp73Confirm_posConfirm.sorted) <- prettyIdentifierJaspar(rownames(ta_vs_dn_genesetEMT.TA.DN_tp73Confirm_posConfirm.sorted))
 
 
 # Prepare data for vertical plot: top 5, bottom 5, and genes of interest
@@ -740,7 +737,12 @@ if (FALSE) {
 plot.series.of.ratio.matrices <- function(list.of.sorted.matrices.to.display=NULL,num.from.extrema=10,tf.patterns.of.interest=NULL) {
 
     if (is.null(tf.patterns.of.interest)) {
-        tf.patterns.of.interest <- "^(jun|sp1|rest|yap1|yy1|e2f1|e2f7|tp53|tp63|tp73|plag1|rara|odd|irf2|bpc5|irf2|nr2f6|pdr3|pax1|rarg|esr1|odd) "
+        #tf.patterns.of.interest <- "^(jun|sp1|rest|yap1|yy1|e2f1|e2f7|tp53|tp63|tp73|plag1|rara|odd|irf2|bpc5|irf2|nr2f6|pdr3|pax1|rarg|esr1|odd|elt-3|nfkb1|rela|rora|erf6) "
+        tf.patterns.of.interest <- paste0(
+            "^(jun|sp1|rest|yap1|yy1|e2f1|nfkb1|tp53|tp63|tp73|",
+            "BZIP43|IRF2|RXRA--VDR|pan|HAP1|Nr2F6|RORA|E2F3|E2F7|THI2|SPL15|TGIF1|MYB52|ZBED1|NAC083", #  paste(sapply(strsplit(rownames(head(ta_vs_effects_tp73Confirm_posConfirm.sorted,15)),split=" "),function(X) X[1]),collapse="|")
+            "NR3C1|TP63|RREB1|ATHB-9|GLIS1|PLAG1|E2FC|MYB15|DYT1|bZIP911|odd|RARA|BZIP42|BPC5|TCP14", # paste(sapply(strsplit(rownames(tail(ta_vs_effects_tp73Confirm_posConfirm.sorted[!is.na(ta_vs_effects_tp73Confirm_posConfirm.sorted[,"ratio"]),],15)),split=" "),function(X) X[1]),collapse="|")
+                        ") ")
     }   
 
     if (is.null(list.of.sorted.matrices.to.display)) {
@@ -767,7 +769,7 @@ plot.series.of.ratio.matrices <- function(list.of.sorted.matrices.to.display=NUL
            cat("  ", paste(names(list.of.sorted.matrices.to.display), collapse=", "), "\n", sep="")
     }   
 
-    pdf("vertical_plot.pdf", width=3*length(list.of.sorted.matrices.to.display), height=8)
+    pdf("vertical_plot.pdf", width=3*length(list.of.sorted.matrices.to.display)+1, height=8)
 
     for(i in 1:length(list.of.sorted.matrices.to.display)) {
 
@@ -785,6 +787,9 @@ plot.series.of.ratio.matrices <- function(list.of.sorted.matrices.to.display=NUL
         }
 
         sorted.matrix.to.display <- list.of.sorted.matrices.to.display[[sorted.matrix.to.display.tag]]
+
+        sorted.matrix.to.display <- sorted.matrix.to.display[order(sorted.matrix.to.display[, "ratio"],decreasing=TRUE), , drop=FALSE]
+
         if (is.null(sorted.matrix.to.display)) {
             cat("E: No data for tag ", sorted.matrix.to.display.tag, " - skipping\n", sep="")
             next
@@ -825,7 +830,7 @@ plot.series.of.ratio.matrices <- function(list.of.sorted.matrices.to.display=NUL
         gap_end <- -gap_size
         if(nrow(tf_interest)>0) {
             # Scale ranks to fit in the gap
-            plot_data$y[plot_data$group=="Interest"] <- gap_start - (tf_interest_ranks - min(tf_interest_ranks)) / 
+            plot_data$y[plot_data$group=="Expression/Literature"] <- gap_start - (tf_interest_ranks - min(tf_interest_ranks)) / 
                 (max(tf_interest_ranks)-min(tf_interest_ranks)+1) * gap_size
         }
 
@@ -879,7 +884,7 @@ plot.series.of.ratio.matrices <- function(list.of.sorted.matrices.to.display=NUL
         p <- ggplot(plot_data_valid, aes(x=(i-1)*1.5, y=y)) +
             geom_point(aes(size=circle_size, fill=group), shape=21, color="black", alpha=0.8) +
             geom_text(aes(label=Name), hjust=0, nudge_x=0.12, size=2) +
-            geom_text(aes(label=round(log2(ratio),1)), hjust=1, vjust=0.5, size=2, nudge_x=-0.12, fontface="bold") +
+            geom_text(aes(label=round(log2(ratio),2)), hjust=1, vjust=0.5, size=2, nudge_x=-0.12, fontface="bold") +
             scale_size_continuous(breaks = c(0.05,0.2,1,5), labels = c("0.05","0.2","1","5")) +
             scale_fill_manual(values=c("Top"="#1b9e77", "Interest"="#d95f02", "Bottom"="#7570b3")) +
             theme_minimal() +
@@ -906,6 +911,7 @@ plot.series.of.ratio.matrices <- function(list.of.sorted.matrices.to.display=NUL
 }
 
 
+
 list.of.matrices <- list(
     "p73 binding"=ta_vs_dn_tp73Confirm.sorted,
     "in promoter"= ta_vs_dn_tp73Confirm_inPromoter.sorted,
@@ -913,26 +919,60 @@ list.of.matrices <- list(
     # "effect nonmethylated"=ta_vs_dn_nonMethylated.sorted,
     #"effects expression"=ta_vs_dn_w_methylation.sorted
     "effects expression"=ta_vs_effects_tp73Confirm_posConfirm.sorted,
-    "geneset EMT"=ta_vs_dn_genesetEMT_tp73Confirm_posConfirm.sorted
+    #"geneset EMT"=ta_vs_dn_genesetEMT_tp73Confirm_posConfirm.sorted
+    "TA/DN-induced EMT"=ta_vs_dn_genesetEMT.TA.DN_tp73Confirm_posConfirm.sorted
 )
 
 plot.series.of.ratio.matrices(
     list.of.sorted.matrices.to.display=list.of.matrices
 )
 
-plot.series.of.ratio.matrices(
-    list.of.sorted.matrices.to.display=ta_vs_dn_w_methylation.sorted
+
+#
+# Heatmap for gene selection
+#
+
+
+#gene.selection <- promoterBedTables$HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION.promoter.bed$Gene
+gene.selection <- gene.selection.EMT.TAorDN
+
+combined.expression.data.selected <- combined.expression.data[,"Gene Symbol"] %in% gene.selection
+
+gene.setlection_tp73ConfirmAny <- retrieve_context_data_by_chromosome(combined.expression.data.selected, confirmation=c("tp73"),TA.or.DN="any")
+all_inPromoter_tp73ConfirmAny <- retrieve_context_data_by_chromosome(NULL, confirmation=c("tp73","promoter"),TA.or.DN="any")
+
+
+cat("I: Distribution of number of matches by chromosome:\n")
+print(gene.setlection_tp73ConfirmAny$num_matches_by_chromosome)
+cat("I: Total number of matches across all chromosomes: ",sum(gene.setlection_tp73ConfirmAny$num_matches_by_chromosome),"\n",sep="")
+
+gene.setlection_tp73ConfirmAny.colSums <- colSums(gene.setlection_tp73ConfirmAny$context_data,na.rm=T)
+all_inPromoter_tp73ConfirmAny.colSums <- colSums(all_inPromoter_tp73ConfirmAny$context_data,na.rm=T)
+
+gene.vs.all_inPromoter_tp73ConfirmAny <- cbind(
+    mean.EMT=gene.setlection_tp73ConfirmAny$mean_total,
+    mean.background=all_inPromoter_tp73ConfirmAny$mean_total,
+    ratio=gene.setlection_tp73ConfirmAny$mean_total / all_inPromoter_tp73ConfirmAny$mean_total
 )
 
-plot.series.of.ratio.matrices()
+tf.patterns.of.interest <- paste0(
+            "^(jun|sp1|rest|yap1|yy1|e2f1|nfkb1|tp53|tp63|tp73|",
+            "BZIP43|IRF2|RXRA--VDR|pan|HAP1|Nr2F6|RORA|E2F3|E2F7|THI2|SPL15|TGIF1|MYB52|ZBED1|NAC083", #  paste(sapply(strsplit(rownames(head(ta_vs_effects_tp73Confirm_posConfirm.sorted,15)),split=" "),function(X) X[1]),collapse="|")
+            "NR3C1|TP63|RREB1|ATHB-9|GLIS1|PLAG1|E2FC|MYB15|DYT1|bZIP911|odd|RARA|BZIP42|BPC5|TCP14", # paste(sapply(strsplit(rownames(tail(ta_vs_effects_tp73Confirm_posConfirm.sorted[!is.na(ta_vs_effects_tp73Confirm_posConfirm.sorted[,"ratio"]),],15)),split=" "),function(X) X[1]),collapse="|")
+                        ") ")
 
-
+gene.vs.all_inPromoter_tp73ConfirmAny.sorted <- gene.vs.all_inPromoter_tp73ConfirmAny[order(gene.vs.all_inPromoter_tp73ConfirmAny[, "ratio"],decreasing=T), ]
+rownames(gene.vs.all_inPromoter_tp73ConfirmAny.sorted) <- prettyIdentifierJaspar(rownames(gene.vs.all_inPromoter_tp73ConfirmAny.sorted))
+gene.vs.all_inPromoter_tp73ConfirmAny.rownames.interest <- c(rownames(gene.vs.all_inPromoter_tp73ConfirmAny.sorted)[1:50],
+    grep(x=prettyIdentifierJaspar(rownames(gene.vs.all_inPromoter_tp73ConfirmAny.sorted)),pattern=tf.patterns.of.interest,ignore.case=T,value=T)
+    )
+gene.vs.all_inPromoter_tp73ConfirmAny.rownames.interest <- unique(gene.vs.all_inPromoter_tp73ConfirmAny.rownames.interest)
+    
+combined.expression.data.reduced <- combined.expression.data[combined.expression.data.selected,]
 
 #
 # OUTDATED (?) BELOW
 #
-
-
 
 # Load the findings if needed
 # load("m.findings.RData")
