@@ -20,45 +20,56 @@ source("analyze_matrix_function_promoters.R")
 
 chromosomes <- c(as.character(1:22) ) # ,"X","Y")
 
-m.findings <- vector("list", length(chromosomes))
-m.contexts <- vector("list", length(chromosomes))
-names(m.findings) <- names(m.contexts) <- chromosomes
+m.findings.filename <- "m.findings.RData"
+m.context.filename <- "m.contexts.RData"
 
-for(i in chromosomes) {
-    cat("I: processing chromosome ",i,"...\n",sep="")
-    m <- read.data.table.for.chromosome(i)
+if (file.exists(m.context.filename) && file.exists(m.findings.filename)) {
 
-    if (is.null(m)) {
-        cat("E: No data for chromosome ",i," - skipping\n",sep="")
-        next
+    cat("Loading '",m.context.filename,"'\n")
+    load(file=m.context.filename)
+    cat("Loading '",m.findings.filename,"'\n")
+    load(file=m.finding.filename) 
+
+} else {
+
+    m.findings <- vector("list", length(chromosomes))
+    m.contexts <- vector("list", length(chromosomes))
+    names(m.findings) <- names(m.contexts) <- chromosomes
+
+    for(i in chromosomes) {
+        cat("I: processing chromosome ",i,"...\n",sep="")
+        m <- read.data.table.for.chromosome(i)
+
+        if (is.null(m)) {
+            cat("E: No data for chromosome ",i," - skipping\n",sep="")
+            next
+        }
+
+        if ("Feature" %in% colnames(m)) {
+            cat("W: Found 'Feature' for chromosome ",i," - renaming to 'Name'\n",sep="")
+            m.colnames.which <- which(colnames(m)=="Feature")
+            colnames(m)[m.colnames.which] <- "Name"
+        }
+
+        # Store context
+        m.contexts[[i]] <- m
+
+        m <- create.lists.for.chromosome(m)
+        m.findings[[i]] <- attributes(m)
+
+        # Clean up
+        rm(m)
+        gc()
     }
 
-    if ("Feature" %in% colnames(m)) {
-        cat("W: Found 'Feature' for chromosome ",i," - renaming to 'Name'\n",sep="")
-        m.colnames.which <- which(colnames(m)=="Feature")
-        colnames(m)[m.colnames.which] <- "Name"
-    }
+    # Save the findings for each chromosome
+    cat("I: saving p73 contexts for each chromosome...\n")
+    save(m.contexts, file="m.contexts.RData")
+    cat("I: ... saved contexts, now saving findings...\n")
+    save(m.findings, file="m.findings.RData")
+    cat("I: ... saved findings successfully.\n")
 
-    # Store context
-    m.contexts[[i]] <- m
-
-
-
-    m <- create.lists.for.chromosome(m)
-    m.findings[[i]] <- attributes(m)
-
-    # Clean up
-    rm(m)
-    gc()
 }
-
-# Save the findings for each chromosome
-cat("I: saving p73 contexts for each chromosome...\n")
-save(m.contexts, file="m.contexts.RData")
-cat("I: ... saved contexts, now saving findings...\n")
-save(m.findings, file="m.findings.RData")
-cat("I: ... saved findings successfully.\n")
-
 
 if (file.exists("combined.expression.data.RData")) {
 
@@ -389,21 +400,34 @@ analyze.context.for.chromosome <- function(m.context.i, chromosome) {
     return(summary.table)
 }
 
-distribution.result.table <- sapply(names(m.contexts), function(i) {
-    cat("I: processing chromosome ", i, "...\n", sep = "")
-    if (is.null(m.contexts[[i]])) {
-        cat("E: No data for chromosome ", i, " - skipping\n", sep = "")
-        return(NULL)
+distribution.result.table.filename <- "distribution.result.table.RData"
+
+if (file.exists(distribution.result.table.filename)) {
+    cat("I: Loading existing distribution result table from '", distribution.result.table.filename, "'...\n", sep="")
+    load(distribution.result.table.filename)
+    if (!exists("distribution.result.table")) {
+        stop("E: 'distribution.result.table' not found in '", distribution.result.table.filename, "'.")
     }
-    # Analyze the context for this chromosome and return properties
-    analyze.context.for.chromosome(m.contexts[[i]], i)
-})
+    cat("I: Found ", ncol(distribution.result.table), " columns in distribution result table.\n", sep="")
+} else {
+    cat("I: No existing distribution result table found, creating a new one...\n")
 
-distribution.result.table.summary <- (t(apply(distribution.result.table, 1, function(x) {
-    round(c(summary(as.numeric(x)),sd=sd(as.numeric(x))),1)
-})))
+    distribution.result.table <- sapply(names(m.contexts), function(i) {
+        cat("I: processing chromosome ", i, "...\n", sep = "")
+        if (is.null(m.contexts[[i]])) {
+            cat("E: No data for chromosome ", i, " - skipping\n", sep = "")
+            return(NULL)
+        }
+        # Analyze the context for this chromosome and return properties
+        analyze.context.for.chromosome(m.contexts[[i]], i)
+    })
 
-save(distribution.result.table, distribution.result.table.summary, file="distribution.result.table.RData")
+    distribution.result.table.summary <- (t(apply(distribution.result.table, 1, function(x) {
+        round(c(summary(as.numeric(x)),sd=sd(as.numeric(x))),1)
+    })))
+
+    save(distribution.result.table, distribution.result.table.summary, file=distribution.result.table.filename)
+}
 
 
 # All chromosomal results taken together, what fraction of TFBS are confirmed by CUT&RUN data in dependency of the score of the TFBS binding site?

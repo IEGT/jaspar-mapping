@@ -21,7 +21,10 @@ plot.binding.affinity <- function(m) {
 
 prettyIdentifierJaspar <- function(X) {
     A<-strsplit(X,"_")
-    B<-sapply(A,function(X) paste(X[1]," (",X[2],")",sep=""))
+    B<-sapply(A,function(X) {
+        if (2>length(X)) return(X)
+        paste(X[1]," (",X[2],")",sep="")
+    })
     B
 }
 
