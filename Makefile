@@ -1,7 +1,7 @@
 
 CXX=g++
 CXXFLAGS= -std=c++23
-# CXXFKAGS += -I/home/sm718/miniconda3/include
+CXXFLAGS += -I/home/sm718/miniconda3/include
 CXXFLAGS += -g
 CXXFLAGS += -O3
 #LDFLAGS=-lz -lbz2
@@ -109,7 +109,8 @@ test: pssm_scan Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta Homo_sa
 .PRECIOUS: $(GENOME) $(GENOMEGZ)
 
 #PATH_CUTNRUN=cutandrun_20240313_nodupes
-PATH_CUTNRUN=cutandrun_20250516_withDuplicates
+#PATH_CUTNRUN=cutandrun_20250516_withDuplicates
+PATH_CUTNRUN=cutandrun_20250602_noDuplicates
 FILES_CUTNRUN= $(PATH_CUTNRUN)/pos_saos2_DN_R1.clipped.clean.bed \
 	$(PATH_CUTNRUN)/pos_saos2_GFP_R1.clipped.clean.bed \
 	$(PATH_CUTNRUN)/pos_saos2_TA_R1.clipped.clean.bed \
@@ -150,11 +151,11 @@ files_cutandrun_clean: $(FILES_CUTNRUN)
 		echo "I:    Cleaned scientific notations" ; \
 		echo -n "$$i" | sed -e 's/_R1.clipped.clean.bed$$//' >> "$$outputfile" ; \
 		if [ -f "$$a_tmp" ]; then \
-			if ! awk 'BEGIN {OFS="\t"} {for (i=1; i<=NF; i++) if ($$i ~ /^[0-9.eE+-]+$$/) $$i = sprintf("%.0f", $$i); print}' < $$i > "$$i_tmp" ; then \
+			if ! LANG=C awk 'BEGIN {OFS="\t"} {for (i=1; i<=NF; i++) if ($$i ~ /^[0-9.eE+-]+$$/) $$i = sprintf("%.0f", $$i); print}' < $$i > "$$i_tmp" ; then \
 				echo "awk failed" ; \
 				exit 1 ; \
 			fi ; \
-			if ! bedtools map -null 0 -a "$$a_tmp" -b "$$i_tmp" > "$$b_tmp" ; then \
+			if ! LANG=C bedtools map -null 0 -a "$$a_tmp" -b "$$i_tmp" -o min > "$$b_tmp" ; then \
 				echo "bedtools failed" ; \
 				exit 1 ; \
 			fi ; \
