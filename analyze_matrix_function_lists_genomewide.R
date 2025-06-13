@@ -20,6 +20,21 @@ fractions <- data.frame(
     })
 )
 
+genome.wide.quantiles.50 <- array(
+    unlist(lapply(isoforms, function(isoform) {
+        lapply(cell.lines, function(cell.line) {
+            lapply(targets, function(target) {
+                col.name <- paste0(target, "_", cell.line, "_", isoform)
+                if (!col.name %in% names(m.contexts.all.OneTo18)) {
+                    stop(paste("Column", col.name, "not found in m.contexts.all.OneTo18"))
+                }
+                max(quantile(m.contexts.all.OneTo18[[col.name]], probs=0.50, na.rm=TRUE), 0.5)
+            })
+        })
+    })),
+    dim = c(length(targets), length(cell.lines), length(isoforms)),
+    dimnames = list(targets=targets, cell.lines=cell.lines, isoforms=isoforms)
+)
 
 genome.wide.quantiles.90 <- array(
     unlist(lapply(isoforms, function(isoform) {

@@ -72,7 +72,10 @@ read.data.table.for.chromosome <- function(chromosome=22) {
     m.colnames.dirname <- dirname(m.colnames)
     colnames(m) <- m.colnames.basename
 
-    print(colnames(m))
+    cat("I: Column names First 10 ... last 10: ",
+        paste(colnames(m)[1:min(10,length(colnames(m)))], collapse=", "), " ... ",
+        paste(colnames(m)[min(1,(length(colnames(m))-9)):length(colnames(m))], collapse=", "),
+        "of ",length(colnames(m)), " columns\n", sep="")
     cat("I: chromosome: ",chromosome,"\n",sep="")
 
     cols.cutandrun <- c("pos_saos2_DN", "pos_saos2_GFP", "pos_saos2_TA", "pos_skmel29_2_DN",  "pos_skmel29_2_GFP", "pos_skmel29_2_TA",
@@ -118,19 +121,19 @@ create.lists.for.chromosome <- function(m, reportdir="Reports",offset=0.01) {
 
     # Identification of columns of particula type
     ## NumInWIndow - number of binding sites of particular transcription factor
-    cols.NumInWindow <- grepl("_NumInWindow", colnames(m))
+    cols.NumInWindow <- grepl("_NumInWindow$", colnames(m))
     quantiles.NumInWindow <- sapply(m[, ..cols.NumInWindow], quantile, probs = c(0,0.25, 0.5, 0.75, 0.9, 0.95, 0.99, 1))
     sum.NumInWindow <- sapply(m[, ..cols.NumInWindow], sum)
     gc(full=T)
 
     ## Score - computed affinity with which the TF is binding
-    cols.Score <- grepl("_Score", colnames(m))
+    cols.Score <- grepl("_Score$", colnames(m))
     quantiles.Score <- sapply(m[, ..cols.Score], quantile, probs = c(0,0.25, 0.5, 0.75, 0.9, 0.95, 0.99, 1), na.rm=TRUE)
     sum.Score <- sapply(m[, ..cols.Score], sum, na.rm=T)
     gc(full=T)
 
     ## Identification of strand (same/other) at which the motif was found
-    cols.StrandEqual <- grepl("_StrandEqual", colnames(m))
+    cols.StrandEqual <- grepl("_StrandEqual$", colnames(m))
 
     ## Selection of columns representing CUT&RUN data
     ## This results in a data frame with columns representing the CUT&RUN data
@@ -771,21 +774,6 @@ isoforms <- c("TA","DN","GFP")
 cell.lines <- c("saos2","skmel29_2")
 targets <- c("tp73","pos")
 
-genome.wide.quantiles.50 <- array(
-    unlist(lapply(isoforms, function(isoform) {
-        lapply(cell.lines, function(cell.line) {
-            lapply(targets, function(target) {
-                col.name <- paste0(target, "_", cell.line, "_", isoform)
-                if (!col.name %in% names(m.contexts.all.OneTo18)) {
-                    stop(paste("Column", col.name, "not found in m.contexts.all.OneTo18"))
-                }
-                max(quantile(m.contexts.all.OneTo18[[col.name]], probs=0.50, na.rm=TRUE), 0.5)
-            })
-        })
-    })),
-    dim = c(length(targets), length(cell.lines), length(isoforms)),
-    dimnames = list(targets=targets, cell.lines=cell.lines, isoforms=isoforms)
-)
 
 
 
