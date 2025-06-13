@@ -433,27 +433,6 @@ if (file.exists(distribution.result.table.filename)) {
 # All chromosomal results taken together, what fraction of TFBS are confirmed by CUT&RUN data in dependency of the score of the TFBS binding site?
 cat("I: Analyzing all chromosomes for TFBS confirmation by CUT&RUN data...\n")
 
-m.contexts.all.OneTo18 <- do.call(rbind, lapply(m.contexts, function(x) x[, 1:18, drop = FALSE]))
-# Calculate the fraction of entries with value > 0 for "tp73_skmel29_2_DN" and "tp73_skmel29_2_TA" based on "Score"
-bin.size <- 3
-score_bins <- seq(0, max(m.contexts.all.OneTo18$Score, na.rm = TRUE), by = bin.size)
-fractions <- data.frame(
-    ScoreBin = score_bins[-length(score_bins)],
-    Fraction_DN = sapply(1:(length(score_bins) - 1), function(i) {
-        bin <- m.contexts.all.OneTo18$Score >= score_bins[i] & m.contexts.all.OneTo18$Score < score_bins[i + 1]
-        sum(m.contexts.all.OneTo18$"tp73_skmel29_2_DN"[bin] > 0, na.rm = TRUE) / sum(bin, na.rm = TRUE)
-    }),
-    Fraction_TA = sapply(1:(length(score_bins) - 1), function(i) {
-        bin <- m.contexts.all.OneTo18$Score >= score_bins[i] & m.contexts.all.OneTo18$Score < score_bins[i + 1]
-        sum(m.contexts.all.OneTo18$"tp73_skmel29_2_TA"[bin] > 0, na.rm = TRUE) / sum(bin, na.rm = TRUE)
-    }),
-      # Add bars to indicate the number of TFBS within each bin
-    TFBS_Count = sapply(1:(length(score_bins) - 1), function(i) {
-        bin <- m.contexts.all.OneTo18$Score >= score_bins[i] & m.contexts.all.OneTo18$Score < score_bins[i + 1]
-        sum(bin, na.rm = TRUE)
-    })
-)
-
 require(ggplot2)
 
 png("fractions_by_score.png", width=800, height=400)
