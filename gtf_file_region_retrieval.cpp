@@ -53,6 +53,7 @@
 #include <string>
 #include <sstream>
 #include <unordered_map>
+#include <algorithm>
 #include <getopt.h>  // For GNU Getopt
 #include "progress.h" // progress indicator
 #include "gtf_file_region.h"  // GeneRegion struct
