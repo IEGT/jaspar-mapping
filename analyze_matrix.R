@@ -444,6 +444,10 @@ if (!meta.from.scratch && file.exists(distribution.result.table.filename)) {
     save(distribution.result.table, distribution.result.table.summary, file=distribution.result.table.filename)
 }
 
+# 
+# Preparation of Vulcano Plot
+#
+
 #rm(m); m <- m.contexts[[22]]
 m.contexts.num.binary.sum <- sapply(m.contexts, function(m) {
     if (is.null(m)) {
@@ -455,9 +459,137 @@ m.contexts.num.binary.sum <- sapply(m.contexts, function(m) {
     colSums(m[,..cols.Score.index,drop = FALSE]> 0, na.rm = TRUE)
 })
 print(dim(m.contexts.num.binary.sum))
-for(i in 1:length(m.contexts.num.binary.sum)) {
-    cat("I: Found ",sum(m.contexts.num.binary.sum[[i]])," #TFBS in chromosome ",i,length(m.contexts.num.binary.sum[[i]]),"\n",sep="")
-}
+
+m.contexts.num.binary.sum.total <- rowSums(m.contexts.num.binary.sum, na.rm = TRUE)
+m.contexts.num.tfbs <- sapply(m.contexts, nrow)
+m.contexts.num.tfbs.total <- sum(m.contexts.num.tfbs, na.rm = TRUE)
+
+#rm(m); m <- m.contexts[[22]]
+m.contexts.num.binary.confirmed.taOrDn.sum <- sapply(m.contexts, function(m) {
+    if (is.null(m)) {
+        return(NA)
+    }
+    # Sum the number of non-NA entries in columns with "_Score" in their name
+    #cols.Score.name <- grep("_Score", colnames(m), value = TRUE)
+    cols.Score.index <- grep("_NumInWindow$", colnames(m), value = FALSE)
+    m <- m[  m$"tp73_skmel29_2_TA" > 0 |
+             m$"tp73_skmel29_2_DN" > 0 |
+             m$"tp73_skmel29_2_GFP" > 0 , , drop = FALSE
+         ]
+    m <- m[ , ..cols.Score.index, drop = FALSE]
+    colSums(m > 0, na.rm = TRUE)
+})
+print(dim(m.contexts.num.binary.confirmed.taOrDn.sum))
+m.contexts.num.binary.confirmed.taOrDn.sum.total <- rowSums(m.contexts.num.binary.confirmed.taOrDn.sum, na.rm = TRUE)
+m.contexts.num.tfbs.confirmed.taOrDn <- sapply(m.contexts, function(m) {
+    if (is.null(m)) {
+        return(NA)
+    }
+    # Count the number of TFBS that are confirmed by TA or DN
+    sum(m$"tp73_skmel29_2_TA" > 0 | m$"tp73_skmel29_2_DN" > 0 | m$"tp73_skmel29_2_GFP" > 0, na.rm = TRUE)
+})
+m.contexts.num.tfbs.confirmed.taOrDn.total <- sum(m.contexts.num.tfbs.confirmed.taOrDn, na.rm = TRUE)
+
+m.contexts.num.binary.confirmed.ta.sum <- sapply(m.contexts, function(m) {
+    if (is.null(m)) {
+        return(NA)
+    }
+    # Sum the number of non-NA entries in columns with "_Score" in their name
+    #cols.Score.name <- grep("_Score", colnames(m), value = TRUE)
+    cols.Score.index <- grep("_NumInWindow$", colnames(m), value = FALSE)
+    m <- m[  m$"tp73_skmel29_2_TA" > 0 , , drop = FALSE]
+    m <- m[ , ..cols.Score.index, drop = FALSE]
+    colSums(m > 0, na.rm = TRUE)
+})
+print(dim(m.contexts.num.binary.confirmed.ta.sum))
+m.contexts.num.binary.confirmed.ta.sum.total <- rowSums(m.contexts.num.binary.confirmed.ta.sum, na.rm = TRUE)
+m.contexts.num.tfbs.confirmed.ta <- sapply(m.contexts, function(m) {
+    if (is.null(m)) {
+        return(NA)
+    }
+    # Count the number of TFBS that are confirmed by TA or DN
+    sum(m$"tp73_skmel29_2_TA" > 0, na.rm = TRUE)
+})
+m.contexts.num.tfbs.confirmed.ta.total <- sum(m.contexts.num.tfbs.confirmed.ta, na.rm = TRUE)
+
+
+
+m.contexts.num.binary.confirmed.dn.sum <- sapply(m.contexts, function(m) {
+    if (is.null(m)) {
+        return(NA)
+    }
+    # Sum the number of non-NA entries in columns with "_Score" in their name
+    #cols.Score.name <- grep("_Score", colnames(m), value = TRUE)
+    cols.Score.index <- grep("_NumInWindow$", colnames(m), value = FALSE)
+    m <- m[  m$"tp73_skmel29_2_DN" > 0 , , drop = FALSE]
+    m <- m[ , ..cols.Score.index, drop = FALSE]
+    colSums(m > 0, na.rm = TRUE)
+})
+print(dim(m.contexts.num.binary.confirmed.dn.sum))
+m.contexts.num.binary.confirmed.dn.sum.total <- rowSums(m.contexts.num.binary.confirmed.dn.sum, na.rm = TRUE)
+m.contexts.num.tfbs.confirmed.dn <- sapply(m.contexts, function(m) {
+    if (is.null(m)) {
+        return(NA)
+    }
+    # Count the number of TFBS that are confirmed by TA or DN
+    sum(m$"tp73_skmel29_2_DN" > 0, na.rm = TRUE)
+})
+m.contexts.num.tfbs.confirmed.dn.total <- sum(m.contexts.num.tfbs.confirmed.dn, na.rm = TRUE)
+
+frequency.cofactors.taOrDn <- m.contexts.num.binary.confirmed.taOrDn.sum.total/m.contexts.num.tfbs.confirmed.taOrDn.total
+names(frequency.cofactors.taOrDn) <- prettyIdentifierJaspar(names(frequency.cofactors.taOrDn))
+frequency.cofactors.ta <- m.contexts.num.binary.confirmed.ta.sum.total/m.contexts.num.tfbs.confirmed.ta.total
+names(frequency.cofactors.ta) <- prettyIdentifierJaspar(names(frequency.cofactors.ta))
+frequency.cofactors.dn <- m.contexts.num.binary.confirmed.dn.sum.total/m.contexts.num.tfbs.confirmed.dn.total
+names(frequency.cofactors.dn) <- prettyIdentifierJaspar(names(frequency.cofactors.dn))
+log.ratio.confirmed.ta.vs.dn <- log2(frequency.cofactors.ta / frequency.cofactors.dn)
+names(log.ratio.confirmed.ta.vs.dn) <- prettyIdentifierJaspar(names(log.ratio.confirmed.ta.vs.dn))
+log.ratio.confirmed.ta.vs.dn.human <- log.ratio.confirmed.ta.vs.dn[is.human.jaspar.id(names(log.ratio.confirmed.ta.vs.dn))]
+
+frequency.cofactors.initial <- m.contexts.num.binary.sum.total/m.contexts.num.tfbs.total
+
+names(frequency.cofactors.taOrDn) <- prettyIdentifierJaspar(names(frequency.cofactors.taOrDn))
+frequency.cofactors.taOrDn.human <- frequency.cofactors.taOrDn[is.human.jaspar.id(names(frequency.cofactors.taOrDn))]
+
+enrichment.taOrDn <- log2(frequency.cofactors.taOrDn / frequency.cofactors.initial)
+# enrichment.taOrDn <- log2((m.contexts.num.binary.confirmed.taOrDn.sum.total/m.contexts.num.tfbs.confirmed.taOrDn.total) / (m.contexts.num.binary.sum.total/m.contexts.num.tfbs.total))
+names(enrichment.taOrDn) <- prettyIdentifierJaspar(names(enrichment.taOrDn))
+enrichment.taOrDn.human <- enrichment.taOrDn[is.human.jaspar.id(names(enrichment.taOrDn))]
+
+# Volcano-like scatter plot: enrichment.taOrDn (X) vs frequency.cofactors.taOrDn (Y)
+require(ggplot2)
+log.ratio.confirmed.ta.vs.dn.human.ranked <- rank(log.ratio.confirmed.ta.vs.dn.human, ties.method = "first")
+log.ratio.confirmed.ta.vs.dn.human.ranked <- log.ratio.confirmed.ta.vs.dn.human.ranked - mean(log.ratio.confirmed.ta.vs.dn.human.ranked)
+volcano_data <- data.frame(
+    TF = sapply(strsplit(x=names(enrichment.taOrDn.human),split="[_ ]",fixed=FALSE), function(x) x[1]),
+    Enrichment = enrichment.taOrDn.human,
+    Frequency = frequency.cofactors.taOrDn.human,
+    TAvsDN = log.ratio.confirmed.ta.vs.dn.human
+)
+
+require(ggrepel)
+pdf("volcano_plot_enrichment_vs_frequency.pdf", width=14, height=9)
+ggplot(volcano_data, aes(x=Enrichment, y=Frequency, label=TF)) +
+    geom_point(aes(fill=TAvsDN), color="black", size=2, shape=21, alpha=0.8) +
+    scale_fill_gradient2(
+        low = "blue", mid = "white", high = "red",
+        midpoint = 0, name = "log2(TA/DN)"
+    ) +
+    geom_vline(xintercept = c(-0.1, 0.1), linetype = "dashed", color = "red") +
+    geom_hline(yintercept = 0.05, linetype = "dashed", color = "red") +
+    ggrepel::geom_text_repel(
+        data = subset(volcano_data, Enrichment < -0.1 | Enrichment > 0.1 | TF=="TP73"),
+        size = 2.5, max.overlaps = Inf, min.segment.length = 0,
+        box.padding = 0.3, point.padding = 0.2, segment.color = "grey90"
+    ) +
+    labs(
+        title="Volcano Plot: Enrichment vs Frequency (TA, DN or GFP confirmed)",
+        x="log2 Enrichment (TA, DN or GFP confirmed / initial)",
+        y="Frequency (TA, DN or GFP confirmed)"
+    ) +
+    theme_minimal()
+dev.off()
+cat("I: Volcano plot saved to 'volcano_plot_enrichment_vs_frequency.pdf'.\n")
 
 # All chromosomal results taken together, what fraction of TFBS are confirmed by CUT&RUN data in dependency of the score of the TFBS binding site?
 cat("I: Analyzing all chromosomes for TFBS confirmation by CUT&RUN data...\n")
@@ -782,33 +914,6 @@ if (FALSE) {
     sorted.matrix.to.display=NULL
     num.from.extrema <- 10
     tf.patterns.of.interest <- NULL
-}
-
-is.human.jaspar.id <- function(id) {
-    if (0 == length(id)) {
-        return(FALSE)
-    }
-    else if (length(id) == 1) {
-        if ("" == id) {
-            return(FALSE)
-        }
-        if (is.character(id) && length(id) == 0) {
-            return(FALSE)
-        }
-        strsplit.id <- strsplit(id, split="[ _()]")[[1]]
-        if (length(strsplit.id) == 1) {
-            #cat("Found single ID: ", strsplit.id, "\n", sep="")
-            return(strsplit.id %in% rownames(jaspar.human) || strsplit.id %in% jaspar.human)
-        } else if (length(strsplit.id) == 2) {
-            return(is.human.jaspar.id(strsplit.id[1]) || is.human.jaspar.id(strsplit.id[2]))
-        } else if (length(strsplit.id) == 3) {
-            return(is.human.jaspar.id(strsplit.id[1]) || is.human.jaspar.id(strsplit.id[2]) || is.human.jaspar.id(strsplit.id[3]))
-        } else {
-            stop("E: Unexpected ID format with ",length(id)," parts: ", id, "\n")
-        }
-    } else {
-        return(sapply(id, is.human.jaspar.id))
-    }
 }
 
 #is.human.jaspar.id("(MA1466.1")
