@@ -17,7 +17,6 @@ source("analyze_matrix_function_lists.R")
 source("analyze_matrix_function_distances.R")
 source("analyze_matrix_function_promoters.R")
 
-
 chromosomes <- c(as.character(1:22),"X","Y")
 
 m.findings.filename <- "m.findings.RData"
@@ -226,7 +225,6 @@ if (!meta.from.scratch && file.exists("tfbs.in.promoter.list.RData")) {
             checkBedOverlaps(x,m.contexts[[i]])
         })
 
-
         tfbs.is.in.promoter.list<-lapply(names(m.promoters.index),function(x) {
             cat("Analyzing TFBS in promoter regions for ",x," in chromosome ",i,"...\n",sep="")
             tfbs.in.promoter <- rep(FALSE, nrow(m.contexts[[i]]))
@@ -250,7 +248,7 @@ if (!meta.from.scratch && file.exists("tfbs.in.promoter.list.RData")) {
 }
 
 
-# Assigning the promoter classification to m.contexts
+# Assigning the promoter classification to all TFBS in m.contexts
 
 for (i in names(m.contexts)) {
     cat("I: processing chromosome ",i,"...\n",sep="")
@@ -446,6 +444,20 @@ if (!meta.from.scratch && file.exists(distribution.result.table.filename)) {
     save(distribution.result.table, distribution.result.table.summary, file=distribution.result.table.filename)
 }
 
+#rm(m); m <- m.contexts[[22]]
+m.contexts.num.binary.sum <- sapply(m.contexts, function(m) {
+    if (is.null(m)) {
+        return(NA)
+    }
+    # Sum the number of non-NA entries in columns with "_Score" in their name
+    #cols.Score.name <- grep("_Score", colnames(m), value = TRUE)
+    cols.Score.index <- grep("_NumInWindow$", colnames(m), value = FALSE)
+    colSums(m[,..cols.Score.index,drop = FALSE]> 0, na.rm = TRUE)
+})
+print(dim(m.contexts.num.binary.sum))
+for(i in 1:length(m.contexts.num.binary.sum)) {
+    cat("I: Found ",sum(m.contexts.num.binary.sum[[i]])," #TFBS in chromosome ",i,length(m.contexts.num.binary.sum[[i]]),"\n",sep="")
+}
 
 # All chromosomal results taken together, what fraction of TFBS are confirmed by CUT&RUN data in dependency of the score of the TFBS binding site?
 cat("I: Analyzing all chromosomes for TFBS confirmation by CUT&RUN data...\n")
