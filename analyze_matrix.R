@@ -13,22 +13,24 @@ rm(list=grep(ls(),pattern="^mean.NumInWindow*",value=T))
 jaspar.human <- read.delim("jaspar_homo.tsv",row.names=1,col.names=FALSE)
 
 # Import function to read and interpret the matrix for individual chromosomes
-source("analyze_matrix_function_lists.R")  
-source("analyze_matrix_function_distances.R")  
+source("analyze_matrix_function_lists.R")
+source("analyze_matrix_function_distances.R")
 source("analyze_matrix_function_promoters.R")
 
 
-chromosomes <- c(as.character(1:22) ) # ,"X","Y")
+chromosomes <- c(as.character(1:22),"X","Y")
 
 m.findings.filename <- "m.findings.RData"
 m.context.filename <- "m.contexts.RData"
 
-if (file.exists(m.context.filename) && file.exists(m.findings.filename)) {
+meta.from.scratch <- TRUE
+
+if (!meta.from.scratch && file.exists(m.context.filename) && file.exists(m.findings.filename)) {
 
     cat("Loading '",m.context.filename,"'\n")
     load(file=m.context.filename)
     cat("Loading '",m.findings.filename,"'\n")
-    load(file=m.finding.filename) 
+    load(file=m.finding.filename)
 
 } else {
 
@@ -71,7 +73,12 @@ if (file.exists(m.context.filename) && file.exists(m.findings.filename)) {
 
 }
 
-if (file.exists("combined.expression.data.RData")) {
+expressionData.dir <- "."
+expressionData.comparison.filename <- "SkMel29_GFP_TAa_DNb_2x3x2_ohne_Filter_20.05.2025.tsv"
+num.skipped.because.of.gene.name.ambiguity <- 0
+num.skipped.because.of.gene.name.unknown <- 0
+
+if (!meta.from.scratch && file.exists("combined.expression.data.RData")) {
 
     cat("I: Loading existing combined expression data from 'combined.expression.data.RData'...\n")
     load("combined.expression.data.RData")
@@ -80,7 +87,7 @@ if (file.exists("combined.expression.data.RData")) {
     }
     cat("I: Found ",nrow(combined.expression.data)," rows in combined expression data.\n",sep="")
     print(head(combined.expression.data))
-    
+
     # Check if max.binding.for.gene is available
     if (exists("max.binding.for.gene")) {
         cat("I: Found max.binding.for.gene with ",nrow(max.binding.for.gene)," rows.\n",sep="")
@@ -91,30 +98,35 @@ if (file.exists("combined.expression.data.RData")) {
 
 } else {
 
-    expressionData.dir <- "."
+    require(openxlsx) # at the end to write the results to an Excel file
+
     # Load the expression data
-    expressionData <- fread(file.path(expressionData.dir,"SkMel29_GFP_TAa_DNb_2x3x2_ohne_Filter_20.05.2025.tsv"), sep="\t", header=TRUE, stringsAsFactors=FALSE)
+    expressionData <- fread(file.path(expressionData.dir,expressionData.comparison.filename), sep="\t", header=TRUE, stringsAsFactors=FALSE)
     expressionData.symbols <- expressionData$"Gene Symbol"
 
     # Iteratate over genes in expression data to retrieve promoter locations and find max binding
     list.of.all.promoters <- promoterBedTables[["all.promoter.bed"]]
     max.binding.for.gene <- as.data.frame(matrix(NA, nrow=length(expressionData.symbols), ncol=19))
-    colnames(max.binding.for.gene) <- c(colnames(m.contexts[[chr]])[1:18],"PromoterOfWhichGene")
+    colnames(max.binding.for.gene) <- c(colnames(m.contexts[[1]])[1:18],"PromoterOfWhichGene")
     colnames(max.binding.for.gene)[4] <- "TF"
     colnames(max.binding.for.gene)[5] <- "TF.Score"
     colnames(max.binding.for.gene)[6] <- "TF.Strand"
 
     for(ed.rowno in 1:nrow(expressionData)) {
+
         gene <- expressionData.symbols[ed.rowno]
-        cat(ed.nrowno,": ", gene, "\n",sep="")
-        
+        cat(ed.rowno,": ", gene, "\n",sep="")
         cat("I: processing gene ",gene,"...\n",sep="")
         # Check if promoter region of gene is known in promoters
         gene.in.promoter.rows <- (gene == list.of.all.promoters$"Gene")
+
         if (0 == sum(gene.in.promoter.rows)) {
             cat("E: Gene ",gene," not found in promoter data\n",sep="")
+            max.binding.for.gene[ed.rowno,] <- c(NA,rep(NA,17),gene)
+            num.skipped.because.of.gene.name.unknown <- num.skipped.because.of.gene.name.unknown + 1
             next
         }
+
         # Get the promoter location
         gene.promoter.location <- list.of.all.promoters[gene.in.promoter.rows,c("Chr","From","To","Gene","Strand"),drop=F]
         print(gene.promoter.location)
@@ -122,11 +134,15 @@ if (file.exists("combined.expression.data.RData")) {
         chr <- unique(gene.promoter.location$Chr)
         if (length(chr) != 1) {
             cat("E: Found ",length(chr)," chromosomes for gene ",gene," - skipping\n",sep="")
+            max.binding.for.gene[ed.rowno,] <- c(paste(chr,collapse="+",sep=""),rep(NA,17),gene)
+            num.skipped.because.of.gene.name.ambiguity <- num.skipped.because.of.gene.name.ambiguity + 1
             next
         }
 
         if (is.null(m.contexts[[chr]])) {
             cat("W: No data for chromosome ",chr," - skipping\n",sep="")
+            max.binding.for.gene[ed.rowno,] <- c(NA,rep(NA,17),gene)
+            num.skipped.because.of.gene.name.unknown <- num.skipped.because.of.gene.name.unknown + 1
             next
         }
 
@@ -166,8 +182,8 @@ if (file.exists("combined.expression.data.RData")) {
         }
     }
 
-    save(max.binding.for.gene, file="max.binding.for.gene.RData")
-
+    save(max.binding.for.gene, num.skipped.because.of.gene.name.ambiguity, num.skipped.because.of.gene.name.unknown,
+         file="max.binding.for.gene.RData")
 
     # Check the dimensions of the max.binding.for.gene
     if(!all(max.binding.for.gene$"Gene" == expressionData.symbols)) {
@@ -179,7 +195,6 @@ if (file.exists("combined.expression.data.RData")) {
 
     combined.expression.data <- cbind(max.binding.for.gene,expressionData)
     save(combined.expression.data, file="combined.expression.data.RData")
-    require(openxlsx)
     write.xlsx(combined.expression.data, file="combined.expression.data.xlsx", rowNames=FALSE)
     cat("I: Saved combined expression data to 'combined.expression.data.RData' and 'combined.expression.data.xlsx'.\n")
 }
@@ -188,15 +203,17 @@ if (file.exists("combined.expression.data.RData")) {
 # Classify all TFBS in m.contexts for being in promoter regions
 cat("I: Classifying TFBS in promoter regions...\n")
 
-if (file.exists("tfbs.in.promoter.list.RData")) {
+if (!meta.from.scratch && file.exists("tfbs.in.promoter.list.RData")) {
+
     cat("I: Loading existing TFBS in promoter regions from 'tfbs.in.promoter.list.RData'...\n")
     load("tfbs.in.promoter.list.RData")
     if (!exists("tfbs.in.promoter.list")) {
         stop("E: 'tfbs.in.promoter.list' not found in 'tfbs.in.promoter.list.RData'.")
     }
     cat("I: Found ",length(tfbs.in.promoter.list)," chromosomes in tfbs.in.promoter.list.\n",sep="")
+
 } else {
- 
+
     tfbs.in.promoter.list <- lapply(names(m.contexts), function(i) {
         cat("I: processing chromosome ",i,"...\n",sep="")
         if (is.null(m.contexts[[i]])) {
@@ -204,7 +221,7 @@ if (file.exists("tfbs.in.promoter.list.RData")) {
             return(NULL)
         }
         # Process overlaps
-        
+
         m.promoters.index <- lapply(promoterBedTables, function(x) {
             checkBedOverlaps(x,m.contexts[[i]])
         })
@@ -260,7 +277,7 @@ for (i in names(m.contexts)) {
 
 analyze.context.for.chromosome <- function(m.context.i, chromosome) {
     cat("I: Analyzing context for chromosome ",chromosome,"...\n",sep="")
-    
+
     # Check if m.context is NULL
     if (is.null(m.context.i)) {
         cat("E: No data for chromosome ",chromosome," - skipping\n",sep="")
@@ -325,14 +342,14 @@ analyze.context.for.chromosome <- function(m.context.i, chromosome) {
        sum(m.context.i$"tp73_skmel29_2_DN" > 0 & m.context.i$"tp73_skmel29_2_TA" == 0 & m.context.i$InPromoter)/sum(m.context.i$InPromoter) * 100
     p73.bs.with.confirmation.GFP.only.promoter.percent <-
        sum(m.context.i$"tp73_skmel29_2_TA" == 0 & m.context.i$"tp73_skmel29_2_DN" == 0 & m.context.i$"tp73_skmel29_2_GFP">0 & m.context.i$InPromoter)/sum(m.context.i$InPromoter) * 100
-    
+
     p73.bs.with.methylation.TAa.only.confirmed.TAa.promoter.percent <-
        sum(m.context.i$"tp73_skmel29_2_TA">0 & m.context.i$"pos_skmel29_2_TA" > 0 & m.context.i$"pos_skmel29_2_DN" & m.context.i$InPromoter)/sum(m.context.i$InPromoter) * 100
     p73.bs.with.methylation.DNb.only.confirmed.DNb.promoter.percent <-
        sum(m.context.i$"tp73_skmel29_2_DN">0 & m.context.i$"pos_skmel29_2_DN" > 0 & m.context.i$"pos_skmel29_2_TA" & m.context.i$InPromoter)/sum(m.context.i$InPromoter) * 100
     p73.bs.with.methylation.GFP.only.confirmed.GFP.promoter.percent <-
        sum(m.context.i$"tp73_skmel29_2_GFP">0 & m.context.i$"pos_skmel29_2_TA" == 0 & m.context.i$"pos_skmel29_2_DN" == 0 & m.context.i$"pos_skmel29_2_GFP" > 0 & m.context.i$InPromoter)/sum(m.context.i$InPromoter) * 100
-    
+
        #Num.TAa = num.TAa,
         #Num.DNb = num.DNb,
         #Num.GFP = num.GFP,
@@ -402,7 +419,7 @@ analyze.context.for.chromosome <- function(m.context.i, chromosome) {
 
 distribution.result.table.filename <- "distribution.result.table.RData"
 
-if (file.exists(distribution.result.table.filename)) {
+if (!meta.from.scratch && file.exists(distribution.result.table.filename)) {
     cat("I: Loading existing distribution result table from '", distribution.result.table.filename, "'...\n", sep="")
     load(distribution.result.table.filename)
     if (!exists("distribution.result.table")) {
@@ -469,10 +486,10 @@ print(paste0("I: Found ",sum(DN.enriched)," genes enriched in DN-overexpression 
 print(paste0("I: Found ",sum(TA.enriched)," genes enriched in TA-overexpression but not in DA-overexpression."))
 
 DN.enriched.valid <- DN.enriched & combined.expression.data.valid
-TA.enriched.valid <- TA.enriched & combined.expression.data.valid   
+TA.enriched.valid <- TA.enriched & combined.expression.data.valid
 
 print(paste0("I: Found ",sum(DN.enriched.valid)," genes enriched in DN-overexpression but not in TA-overexpression (valid genes)."))
-print(paste0("I: Found ",sum(TA.enriched.valid)," genes enriched in TA-overexpression but not in DN-overexpression (valid genes)."))    
+print(paste0("I: Found ",sum(TA.enriched.valid)," genes enriched in TA-overexpression but not in DN-overexpression (valid genes)."))
 
 
 # Iterate over chromosomes and retrieve context data for DN.enriched.valid and TA.enriched.valid rows
@@ -515,7 +532,6 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
         coordinates_chromosome <- NULL
         downstream_genes_chromosome <- NULL
         context_matches_chromosome <- c()
-    
 
         if (is.null(m.contexts[[chromosome]])) {
             cat("E: No data for chromosome ", chromosome, " - skipping\n", sep = "")
@@ -529,7 +545,7 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
         }
 
         if ("tp73" %in% confirmation) {
-            
+
             if (TA.or.DN == "TA") {
                 m.context.extra.check <- m.context.extra.check & m.contexts[[chromosome]][, "tp73_skmel29_2_TA"] > 0
             } else if (TA.or.DN == "DN") {
@@ -552,7 +568,7 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
                 m.context.extra.check <- m.context.extra.check & m.contexts[[chromosome]][, "pos_skmel29_2_TA"] > 0
             } else if (TA.or.DN == "DN") {
                 m.context.extra.check <- m.context.extra.check & m.contexts[[chromosome]][, "pos_skmel29_2_DN"] > 0
-            } else if (TA.or.DN == "any") { 
+            } else if (TA.or.DN == "any") {
                 m.context.extra.check <- m.context.extra.check & (
                     m.contexts[[chromosome]][, "pos_skmel29_2_DN"] > 0 |
                     m.contexts[[chromosome]][, "pos_skmel29_2_TA"] > 0 |
@@ -562,7 +578,7 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
                 # doing nothing, as we want to check all rows
             } else {
                 stop("E: Invalid TA.or.DN method specified.\n")
-            }                
+            }
         }
 
         if (is.null(enriched_rows)) {
@@ -578,7 +594,7 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
                 cat("E: No enriched rows found for chromosome ", chromosome, " - skipping\n", sep = "")
                 next
             }
- 
+
             for (row_idx in rows_in_chromosome) {
 
                 start_pos <- combined.expression.data[row_idx, 2]
@@ -589,21 +605,20 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
                                     m.contexts[[chromosome]][, 3] == end_pos
 
                 match_idx <- which(m.context.row.check)
-            
+
                 if (length(match_idx) == 0) {
                     cat("E: No matching context found for row ", row_idx, " (chromosome: ", chromosome, ", start: ", start_pos, ", end: ", end_pos, ")\n", sep = "")
                     next
                 }
 
                 context_matches_chromosome <-  c(context_matches_chromosome, match_idx)
-                downstream_genes_chromosome <- c(downstream_genes_chromosome, gene) 
+                downstream_genes_chromosome <- c(downstream_genes_chromosome, gene)
             }
         }
-        
+
         context_data_chromosome <- m.contexts[[chromosome]][context_matches_chromosome, ..cols.NumInWindow]
         cutandrun_data_chromosome <- m.contexts[[chromosome]][context_matches_chromosome, 7:18, drop = FALSE]
         coordinates_chromosome <- m.contexts[[chromosome]][context_matches_chromosome, 1:6, drop = FALSE]
-        
 
         cat("I: Retrieved context for ", nrow(context_data_chromosome), " binding sites on chromosome: ", chromosome, "\n", sep = "")
 
@@ -685,7 +700,7 @@ ta_vs_effects_tp73Confirm_posConfirm <- cbind(
     ratio=ta_effects_tp73ConfirmTA_posConfirmTA$mean_total / dn_effects_tp73ConfirmDN_posConfirmDN$mean_total
 )
 ta_vs_effects_tp73Confirm_posConfirm.sorted <- ta_vs_effects_tp73Confirm_posConfirm[order(ta_vs_effects_tp73Confirm_posConfirm[, "ratio"]), ]
-rownames(ta_vs_effects_tp73Confirm_posConfirm.sorted) <- prettyIdentifierJaspar(rownames(ta_vs_effects_tp73Confirm_posConfirm.sorted))  
+rownames(ta_vs_effects_tp73Confirm_posConfirm.sorted) <- prettyIdentifierJaspar(rownames(ta_vs_effects_tp73Confirm_posConfirm.sorted))
 
 cat("I: Retrieved context data, calculated colSums, number of matches, and mean for DN.enriched.valid and TA.enriched.valid rows successfully.\n")
 
@@ -780,7 +795,7 @@ is.human.jaspar.id <- function(id) {
             stop("E: Unexpected ID format with ",length(id)," parts: ", id, "\n")
         }
     } else {
-        return(sapply(id, is.human.jaspar.id))  
+        return(sapply(id, is.human.jaspar.id))
     }
 }
 
@@ -797,7 +812,7 @@ plot.series.of.ratio.matrices <- function(list.of.sorted.matrices.to.display=NUL
             "RARA|GLIS1|PLAG1|RREB1|TP63|NR3C1|SRF|NR3C2|EWSR1-FLI1|THRB|TFAP2E|GLIS3|TFAP2C|RXRB|KLF14|",
             "IRF2|RXRA|RORA|E2F7|E2F3|TGIF1|ZBED1|IRF4|RFX3|MEF2D|STAT1|MEF2B|NFIC|IRF8|CREB3L1",
         ") ")
-    }   
+    }
 
     if (is.null(list.of.sorted.matrices.to.display)) {
         cat("I: No sorted matrix provided, using default sorted matrices.\n")
@@ -813,7 +828,7 @@ plot.series.of.ratio.matrices <- function(list.of.sorted.matrices.to.display=NUL
             stop("Exiting due to invalid input.")
         }
         cat("I: Using provided sorted matrix list.\n")
-    } 
+    }
 
     if (0 == length(list.of.sorted.matrices.to.display)) {
         cat("E: No sorted matrices to display, exiting.\n")
@@ -821,7 +836,7 @@ plot.series.of.ratio.matrices <- function(list.of.sorted.matrices.to.display=NUL
     } else {
            cat("I: Found ", length(list.of.sorted.matrices.to.display), " sorted matrices to display:\n", sep="")
            cat("  ", paste(names(list.of.sorted.matrices.to.display), collapse=", "), "\n", sep="")
-    }   
+    }
 
     pdf("vertical_plot.pdf", width=3*length(list.of.sorted.matrices.to.display)+1, height=8)
 
@@ -872,7 +887,6 @@ plot.series.of.ratio.matrices <- function(list.of.sorted.matrices.to.display=NUL
 
         # Get the ranks of tf_interest in the full sorted table
         tf_interest_ranks <- match(rownames(tf_interest), rownames(sorted.matrix.to.display))
-        
 
         # Compose plotting data
         plot_data <- rbind(
@@ -887,7 +901,7 @@ plot.series.of.ratio.matrices <- function(list.of.sorted.matrices.to.display=NUL
         gap_end <- -gap_size
         if(nrow(tf_interest)>0) {
             # Scale ranks to fit in the gap
-            plot_data$y[plot_data$group=="Expression/Literature"] <- gap_start - (tf_interest_ranks - min(tf_interest_ranks)) / 
+            plot_data$y[plot_data$group=="Expression/Literature"] <- gap_start - (tf_interest_ranks - min(tf_interest_ranks)) /
                 (max(tf_interest_ranks)-min(tf_interest_ranks)+1) * gap_size
         }
 
@@ -931,7 +945,7 @@ plot.series.of.ratio.matrices <- function(list.of.sorted.matrices.to.display=NUL
         plot_data$y[plot_data$group == "Top"] <- y_top
         plot_data$y[plot_data$group == "Bottom"] <- y_bottom
         plot_data$y[plot_data$group == "Interest"] <- y_interest
-        
+
         # Plot
         # Filter out rows with NA y values to avoid warnings and missing labels
         plot_data_valid <- plot_data[!is.na(plot_data$y), ]
@@ -953,7 +967,7 @@ plot.series.of.ratio.matrices <- function(list.of.sorted.matrices.to.display=NUL
             ylim(min(plot_data_valid$y, na.rm=TRUE), max(plot_data_valid$y, na.rm=TRUE)+0.2) +
             annotate("text", x=0.5+(i-1)*1.5, y=max(plot_data_valid$y, na.rm=TRUE)+0.1, na.rm=TRUE,
                  label=sorted.matrix.to.display.tag, fontface="bold", size=4, hjust=0.5, vjust=0)
- 
+
         if (add.to.existing.graph) {
             print(p, newpage=FALSE)
         } else {
@@ -1027,7 +1041,7 @@ gene.vs.all_inPromoter_tp73ConfirmAny.rownames.interest <- c(rownames(gene.vs.al
     grep(x=prettyIdentifierJaspar(rownames(gene.vs.all_inPromoter_tp73ConfirmAny.sorted)),pattern=tf.patterns.of.interest,ignore.case=T,value=T)
     )
 gene.vs.all_inPromoter_tp73ConfirmAny.rownames.interest <- unique(gene.vs.all_inPromoter_tp73ConfirmAny.rownames.interest)
-    
+
 combined.expression.data.reduced <- combined.expression.data[combined.expression.data.selected,]
 
 nrow(gene.selection_tp73ConfirmAny$context_data)
@@ -1104,7 +1118,7 @@ cat("I: Correlation matrix plot saved to 'correlation_matrix_TFBS.pdf'.\n")
 m.all.findings <- NULL
 #lists <- c("ratio.skmel29_2.TAa.99.vs.ratio.skmel29_2.DNb.90","ratio.saos2.TAa.99.vs.ratio.saos2.DNb.90")
 #lists <- c("ratio.skmel29_2.TAa.99.vs.ratio.skmel29_2.DNb.90","ratio.saos2.TAa.99.vs.ratio.saos2.DNb.90")
-lists <- c("ratio.skmel29_2.TAa.quantile.90.vs.ratio.skmel29_2.DNb.quantile.90","ratio.saos2.TAa.99.vs.ratio.saos2.DNb.99") 
+lists <- c("ratio.skmel29_2.TAa.quantile.90.vs.ratio.skmel29_2.DNb.quantile.90","ratio.saos2.TAa.99.vs.ratio.saos2.DNb.99")
 
 #all(names(m.findings[[1]][["ratio.saos2.TAa.99.vs.ratio.saos2.DNb.90"]])==names(m.findings[[2]][["ratio.saos2.TAa.99.vs.ratio.saos2.DNb.90"]]))
 for (l in lists) {
@@ -1168,13 +1182,13 @@ for(l in lists) {
     cat("\n   motifs of interest - details:\n")
     print(m.all.findings[[l]][prettyIdentifierJaspar(motifs.of.interest),])
 }
-    
+
 # Plot distance of binding sites to CUT&RUN-confirmed p73 binding sites
 
 l <- list("TAa"=sum.cutandrun.tp73.TAa>0, "DNb"=sum.cutandrun.tp73.DNb>0, "GFP"=sum.cutandrun.tp73.GFP>0,
-          "TAa_without_DNb"=sum.cutandrun.tp73.TAa>=sum.cutandrun.tp73.TAa.quantile.90 & 
+          "TAa_without_DNb"=sum.cutandrun.tp73.TAa>=sum.cutandrun.tp73.TAa.quantile.90 &
                             sum.cutandrun.tp73.DNb<=sum.cutandrun.tp73.DNb.quantile.50,
-          "DNb_without_TAa"=sum.cutandrun.tp73.DNb>=sum.cutandrun.tp73.DNb.quantile.90 & 
+          "DNb_without_TAa"=sum.cutandrun.tp73.DNb>=sum.cutandrun.tp73.DNb.quantile.90 &
                             sum.cutandrun.tp73.TAa<=sum.cutandrun.tp73.TAa.quantile.50)
 
 for (l.name in names(l)) {
