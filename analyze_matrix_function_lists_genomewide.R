@@ -222,57 +222,50 @@ summarize_across_chromosomes <- function(ratios.methylated, cell_line_isoform = 
     summary_list
 }
 
-# Generate summary for "skmel29_2_any"
 
-nicer.row.names <- function(X) {
-    X <- strsplit(X, split="_")
-    X <- sapply(X, function(x) {
-        if (length(x) >= 2) {
-            paste0(x[1]," ","(",x[2],")")
-        } else {
-            x
-        }
+
+if (FALSE) {
+
+    # Now addressed with generation of Volcano plots
+
+    tf.of.interest <- grep(rownames(summary_data),pattern="^(jun|sp1|rest|yap1|yy1|hey1) ",ignore.case=T,value=T)
+
+    summary_data <- summarize_across_chromosomes(ratios.methylated, cell_line_isoform = "skmel29_2_any")
+    rownames(summary_data) <- nicer.row.names(rownames(summary_data))
+
+    # ordering by coefficient of variation (mean/SD)
+    #summary_data <- summary_data[order(summary_data[,"Mean"]/summary_data[,"SD"]),] 
+    #summary_data <- summary_data[order(summary_data[,"Mean"]),] 
+    summary_data <- summary_data[order(summary_data[,"Median"]),] 
+
+
+    head(round(summary_data,3), 30)
+    cbind(round(which(rownames(summary_data) %in% tf.of.interest)/nrow(summary_data)*100),round(summary_data[tf.of.interest,],3))
+    tail(round(summary_datam3), 50)
+
+    # Print summary
+    print(summary_data)
+
+    # Derive ratios between isoforms for each chromosome
+    ratio.skmel29_2.TAa.vs.DNb  <- sapply(names(ratios.methylated), function(chromosome) {
+        ratios.methylated[[chromosome]][["skmel29_2_TA"]] / ratios.methylated[[chromosome]][["skmel29_2_DN"]]
     })
+
+    ratio.summary_data <- t(apply(ratio.skmel29_2.TAa.vs.DNb,1,function(X) {
+        c(summary(X),SD=sd(X))
+    }))
+    rownames(ratio.summary_data) <- nicer.row.names(rownames(ratio.summary_data))
+    ratio.summary_data <- ratio.summary_data[order(ratio.summary_data[,"Median"]),] 
+
+
+    ratio.skmel29_2.TAa.vs.DNb.log2 <- log2(ratio.skmel29_2.TAa.vs.DNb)
+    ratio.summary_data.log2 <- t(apply(ratio.skmel29_2.TAa.vs.DNb.log2,1,function(X) {
+        c(summary(X),SD=sd(X))
+    }))
+    rownames(ratio.summary_data.log2) <- nicer.row.names(rownames(ratio.summary_data.log2))
+    ratio.summary_data.log2 <- ratio.summary_data.log2[order(ratio.summary_data.log2[,"Median"]),] 
+    head(round(ratio.summary_data.log2,2), 30)
+    cbind(round(which(rownames(ratio.summary_data.log2) %in% tf.of.interest)/nrow(ratio.summary_data.log2)*100),round(ratio.summary_data.log2[tf.of.interest,],2))
+    tail(round(ratio.summary_data.log2,2), 30)
+
 }
-
-tf.of.interest <- grep(rownames(summary_data),pattern="^(jun|sp1|rest|yap1|yy1|hey1) ",ignore.case=T,value=T)
-
-summary_data <- summarize_across_chromosomes(ratios.methylated, cell_line_isoform = "skmel29_2_any")
-rownames(summary_data) <- nicer.row.names(rownames(summary_data))
-
-# ordering by coefficient of variation (mean/SD)
-#summary_data <- summary_data[order(summary_data[,"Mean"]/summary_data[,"SD"]),] 
-#summary_data <- summary_data[order(summary_data[,"Mean"]),] 
-summary_data <- summary_data[order(summary_data[,"Median"]),] 
-
-
-head(round(summary_data,3), 30)
-cbind(round(which(rownames(summary_data) %in% tf.of.interest)/nrow(summary_data)*100),round(summary_data[tf.of.interest,],3))
-tail(round(summary_datam3), 50)
-
-# Print summary
-print(summary_data)
-
-# Derive ratios between isoforms for each chromosome
-ratio.skmel29_2.TAa.vs.DNb  <- sapply(names(ratios.methylated), function(chromosome) {
-    ratios.methylated[[chromosome]][["skmel29_2_TA"]] / ratios.methylated[[chromosome]][["skmel29_2_DN"]]
-})
-
-ratio.summary_data <- t(apply(ratio.skmel29_2.TAa.vs.DNb,1,function(X) {
-    c(summary(X),SD=sd(X))
-}))
-rownames(ratio.summary_data) <- nicer.row.names(rownames(ratio.summary_data))
-ratio.summary_data <- ratio.summary_data[order(ratio.summary_data[,"Median"]),] 
-
-
-ratio.skmel29_2.TAa.vs.DNb.log2 <- log2(ratio.skmel29_2.TAa.vs.DNb)
-ratio.summary_data.log2 <- t(apply(ratio.skmel29_2.TAa.vs.DNb.log2,1,function(X) {
-    c(summary(X),SD=sd(X))
-}))
-rownames(ratio.summary_data.log2) <- nicer.row.names(rownames(ratio.summary_data.log2))
-ratio.summary_data.log2 <- ratio.summary_data.log2[order(ratio.summary_data.log2[,"Median"]),] 
-head(round(ratio.summary_data.log2,2), 30)
-cbind(round(which(rownames(ratio.summary_data.log2) %in% tf.of.interest)/nrow(ratio.summary_data.log2)*100),round(ratio.summary_data.log2[tf.of.interest,],2))
-tail(round(ratio.summary_data.log2,2), 30)
-
-
