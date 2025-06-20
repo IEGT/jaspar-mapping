@@ -22,14 +22,15 @@ chromosomes <- c(as.character(1:22),"X","Y")
 m.findings.filename <- "m.findings.RData"
 m.context.filename <- "m.contexts.RData"
 
-meta.from.scratch <- TRUE
+#meta.from.scratch <- TRUE
+meta.from.scratch <- FALSE
 
 if (!meta.from.scratch && file.exists(m.context.filename) && file.exists(m.findings.filename)) {
 
     cat("Loading '",m.context.filename,"'\n")
-    load(file=m.context.filename)
+    load(file=m.context.filename, verbose=TRUE)
     cat("Loading '",m.findings.filename,"'\n")
-    load(file=m.finding.filename)
+    load(file=m.findings.filename,verbose=TRUE)
 
 } else {
 
@@ -74,19 +75,21 @@ if (!meta.from.scratch && file.exists(m.context.filename) && file.exists(m.findi
 
 expressionData.dir <- "."
 expressionData.comparison.filename <- "SkMel29_GFP_TAa_DNb_2x3x2_ohne_Filter_20.05.2025.tsv"
-num.skipped.because.of.gene.name.ambiguity <- 0
-num.skipped.because.of.gene.name.unknown <- 0
+num.skipped.because.of.gene.name.ambiguity <- NA
+num.skipped.because.of.gene.name.unknown <- NA
 
 if (!meta.from.scratch && file.exists("combined.expression.data.RData")) {
 
     cat("I: Loading existing combined expression data from 'combined.expression.data.RData'...\n")
-    load("combined.expression.data.RData")
+    load("combined.expression.data.RData", verbose=TRUE)
     if (!exists("combined.expression.data")) {
         stop("E: 'combined.expression.data' not found in 'combined.expression.data.RData'.")
     }
     cat("I: Found ",nrow(combined.expression.data)," rows in combined expression data.\n",sep="")
     print(head(combined.expression.data))
 
+
+    load("max.binding.for.gene.RData", verbose=TRUE)
     # Check if max.binding.for.gene is available
     if (exists("max.binding.for.gene")) {
         cat("I: Found max.binding.for.gene with ",nrow(max.binding.for.gene)," rows.\n",sep="")
@@ -98,6 +101,9 @@ if (!meta.from.scratch && file.exists("combined.expression.data.RData")) {
 } else {
 
     require(openxlsx) # at the end to write the results to an Excel file
+
+    num.skipped.because.of.gene.name.ambiguity <- 0
+    num.skipped.because.of.gene.name.unknown <- 0
 
     # Load the expression data
     expressionData <- fread(file.path(expressionData.dir,expressionData.comparison.filename), sep="\t", header=TRUE, stringsAsFactors=FALSE)
@@ -501,9 +507,11 @@ print(paste0("I: Found ",sum(TA.enriched.valid)," genes enriched in TA-overexpre
 source("analyze_matrix_function_retrieve_context.R")
 
 tp73_noConfirmationWhatsoever <- retrieve_context_data_by_chromosome(NULL,confirmation="none",TA.or.DN="any")
+tp73_inPromoter <- retrieve_context_data_by_chromosome(NULL,confirmation="promoter",TA.or.DN="any")
 
-tp73_tp73ConfirmTA <- retrieve_context_data_by_chromosome(NULL,confirmation="tp73",TA.or.DN="TA")
-tp73_tp73ConfirmDN <- retrieve_context_data_by_chromosome(NULL,confirmation="tp73",TA.or.DN="DN")
+
+tp73_tp73ConfirmTA <- retrieve_context_data_by_chromosome(NULL,confirmation="tp73",TA.or.DN="TA"); gc()
+tp73_tp73ConfirmDN <- retrieve_context_data_by_chromosome(NULL,confirmation="tp73",TA.or.DN="DN"); gc()
 
 ta_vs_dn_tp73Confirm <- cbind(mean.TA=tp73_tp73ConfirmTA$mean_total,
                               mean.DN=tp73_tp73ConfirmDN$mean_total,
@@ -513,9 +521,9 @@ rownames(ta_vs_dn_tp73Confirm.sorted) <- prettyIdentifierJaspar(rownames(ta_vs_d
 
 tp73_tp73ConfirmTA_inPromoter <- retrieve_context_data_by_chromosome(NULL,confirmation=c("tp73","promoter"),TA.or.DN="TA")
 tp73_tp73ConfirmDN_inPromoter <- retrieve_context_data_by_chromosome(NULL,confirmation=c("tp73","promoter"),TA.or.DN="DN")
-ta_vs_dn_tp73Confirm_inPromoter <- cbind(mean.TA=tp73_tp73ConfirmTA_inPromoter$mean_total,
-                                         mean.DN=tp73_tp73ConfirmDN_inPromoter$mean_total,
-                                         ratio=tp73_tp73ConfirmTA_inPromoter$mean_total / tp73_tp73ConfirmDN_inPromoter$mean_total)
+ta_vs_dn_tp73Confirm_inPromoter <- cbind(mean.TA=tp73_tp73ConfirmTA_inPromoter$mean_total_binary,
+                                         mean.DN=tp73_tp73ConfirmDN_inPromoter$mean_total_binary,
+                                         ratio=tp73_tp73ConfirmTA_inPromoter$mean_total_binary / tp73_tp73ConfirmDN_inPromoter$mean_total_binary)
 ta_vs_dn_tp73Confirm_inPromoter.sorted <- ta_vs_dn_tp73Confirm_inPromoter[order(ta_vs_dn_tp73Confirm_inPromoter[, "ratio"]), ]
 rownames(ta_vs_dn_tp73Confirm_inPromoter.sorted) <- prettyIdentifierJaspar(rownames(ta_vs_dn_tp73Confirm_inPromoter.sorted))
 
@@ -610,10 +618,10 @@ rownames(ta_vs_dn_genesetEMT.TA.DN_tp73Confirm_posConfirm.sorted) <- prettyIdent
 
 # TA-/DN-specific gene expresssion change from Venn diagrams
 
-require(readxl)
-e <- read.xlsx("GeneLists/Venn Diagram (Gene mit hoher p73 Bindung) für Korrelationsgrafik.xlsx")
-e.ta.up<-unlist(e[1,!is.na(e[1,]),drop=T])
-e.dn.up<-unlist(e[2,!is.na(e[2,]),drop=T])
+require(xlsx)
+e <- read.xlsx("GeneLists/Venn Diagram (Gene mit hoher p73 Bindung) für Korrelationsgrafik.xlsx",header=F,sheetIndex=1,endRow=8)
+e.ta.up<-unlist(e[1,!is.na(e[1,]),drop=T])[-1]
+e.dn.up<-unlist(e[2,!is.na(e[2,]),drop=T])[-1]
 
 # Prepare data for vertical plot: top 5, bottom 5, and genes of interest
 require(ggplot2)
@@ -630,25 +638,6 @@ if (FALSE) {
 source("analyze_matrix_plots_slots.R")
 
 source("analyze_matrix_plots_heatmap.R")
-
-# Plot correlation matrix of all transcription factors (columns) against each other
-
-require(corrplot)
-
-gene.selection_tp73ConfirmAny_context_interest_heatmap_input_nonRedundant <- gene.selection_tp73ConfirmAny_context_interest_heatmap_input[!duplicated(gene.selection_tp73ConfirmAny_context_interest_heatmap_input[,"Gene"]),]
-rownames(gene.selection_tp73ConfirmAny_context_interest_heatmap_input_nonRedundant) <- gene.selection_tp73ConfirmAny_context_interest_heatmap_input_nonRedundant$Gene
-
-
-# Use the context data for all promoters with TP73 confirmation as the matrix
-cor_matrix <- cor(gene.selection_tp73ConfirmAny_context_interest_heatmap_input_nonRedundant[,-1],
-                     use="pairwise.complete.obs", method="pearson")
-
-pdf("correlation_matrix_TFBS.pdf", width=12, height=10)
-corrplot(cor_matrix, is.corr=TRUE, method="color", type="upper", order="hclust",
-         tl.col="black", tl.cex=0.7, addCoef.col="black", number.cex=0.35, number.digits=1,insig="n",
-         title="Correlation Matrix of TFBS (all promoters, TP73 confirmed)", mar=c(0,0,2,0))
-dev.off()
-cat("I: Correlation matrix plot saved to 'correlation_matrix_TFBS.pdf'.\n")
 
 #
 # OUTDATED (?) BELOW

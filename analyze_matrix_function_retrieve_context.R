@@ -5,6 +5,7 @@ cat("I: Retrieving context data for DN.enriched.valid and TA.enriched.valid rows
 retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=NULL,TA.or.DN=NULL) {
     context_data <- NULL
     context_data_binary <- NULL
+    context_shifts <- NULL
     cutandrun_data <- NULL
     coordinates <- NULL
     downstream_genes <- NULL
@@ -24,7 +25,8 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
         cat("I: Using enrichment ", TA.or.DN, ".\n", sep = "")
     }
 
-    cols.NumInWindow <- grepl("_NumInWindow", colnames(m.contexts[[1]]))
+    cols.NumInWindow <- grepl("_NumInWindow$", colnames(m.contexts[[1]]))
+    cols.Shift <- grepl("__Shift$", colnames(m.contexts[[1]]))
 
     # Create a matrix to store column sums for each chromosome
     mean_by_chromosome <- col_sums_by_chromosome <- col_sums_by_chromosome_binary <- matrix(
@@ -39,6 +41,7 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
 
         context_data_chromosome <- NULL
         context_data_chromosome_binary <- NULL
+        context_shifts_chromosome <- NULL
         cutandrun_data_chromosome <- NULL
         coordinates_chromosome <- NULL
         downstream_genes_chromosome <- NULL
@@ -95,7 +98,7 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
         if (is.null(enriched_rows)) {
 
             context_matches_chromosome <- which(m.context.extra.check)
-            downstream_genes_chromosome <- rep(NA, length(context_matches_chromosome))
+            downstream_genes_chromosome <- c()
             cat("I: No enriched rows specified, using all rows for chromosome ", chromosome, ", found ",length(context_matches_chromosome)," hits.\n", sep = "")
 
         } else {
@@ -129,6 +132,7 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
 
         context_data_chromosome <- m.contexts[[chromosome]][context_matches_chromosome, ..cols.NumInWindow]
         context_data_chromosome_binary <- m.contexts[[chromosome]][context_matches_chromosome, ..cols.NumInWindow]>0
+        context_shifts_chromosome <- m.contexts[[chromosome]][context_matches_chromosome, ..cols.Shift]
         cutandrun_data_chromosome <- m.contexts[[chromosome]][context_matches_chromosome, 7:18, drop = FALSE]
         coordinates_chromosome <- m.contexts[[chromosome]][context_matches_chromosome, 1:6, drop = FALSE]
 
@@ -142,6 +146,7 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
         else {
             context_data <- rbind(context_data, context_data_chromosome)
             context_data_binary <- rbind(context_data_binary, context_data_chromosome_binary)
+            context_shifts <- rbind(context_shifts, context_shifts_chromosome)
             context_matches <- c(context_matches, context_matches_chromosome)
             cutandrun_data <- rbind(cutandrun_data, cutandrun_data_chromosome)
             coordinates <- rbind(coordinates, coordinates_chromosome)
@@ -150,6 +155,7 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
             col_sums_by_chromosome_binary[chromosome,] <- colSums(context_data_chromosome_binary, na.rm = TRUE)
             num_matches_by_chromosome[chromosome] <- nrow(context_data_chromosome)
             mean_by_chromosome[chromosome,] <- colMeans(context_data_chromosome, na.rm = TRUE)
+            #mean_shifts_by_chromosome[chromosome,] <- colMeans(context_shifts_chromosome, na.rm = TRUE)
             cat("I: Calculated colSums, number of matches, and mean for chromosome ", chromosome, "\n", sep = "")
         }
     }
@@ -160,6 +166,8 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
         context_data = context_data,
         # Indication if more than 0 reads were found in the context data for each binding site
         context_data_binary = context_data_binary,
+        # Shifts of the cofactors' binding sites in the context data (e.g. for TP73)
+        context_shifts = context_shifts,
         # FIXME: Position in gene list passed to filter?
         context_matches = context_matches,
         # FIXME: broken
