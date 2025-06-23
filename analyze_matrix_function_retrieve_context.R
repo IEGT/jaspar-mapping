@@ -2,7 +2,7 @@
 # Iterate over chromosomes and retrieve context data for DN.enriched.valid and TA.enriched.valid rows
 cat("I: Retrieving context data for DN.enriched.valid and TA.enriched.valid rows by iterating over chromosomes...\n")
 
-retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=NULL,TA.or.DN=NULL) {
+retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=NULL,TA.or.DN=NULL,verbose=TRUE) {
     context_data <- NULL
     context_data_binary <- NULL
     context_shifts <- NULL
@@ -98,6 +98,8 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
         if (is.null(enriched_rows)) {
 
             context_matches_chromosome <- which(m.context.extra.check)
+            # FIXME
+            cat("W: Need to revise the logic for enriched_rows==NULL for downstream genes.\n")
             downstream_genes_chromosome <- c()
             cat("I: No enriched rows specified, using all rows for chromosome ", chromosome, ", found ",length(context_matches_chromosome)," hits.\n", sep = "")
 
