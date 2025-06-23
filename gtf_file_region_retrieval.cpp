@@ -62,7 +62,7 @@ static bool beVerbose=false;
 static bool showHelp=false;
 
 void printHelp(const std::string& gtfFile, const std::vector<std::string>& geneNames) {
-    std::cerr << "Usage: gtf_file_region_retrieval [-g gtf_file] [-c head_count] [-f \"promoter\"] [--gene gene_name1 --gene gene_name2 ...]\n";
+    std::cerr << "Usage: gtf_file_region_retrieval [-g gtf_file] [-c head_count] [-f ( \"promoter\" | \"utr\" ) ] [--gene gene_name1 --gene gene_name2 ...]\n";
     exit(1);
 }
 
@@ -181,6 +181,9 @@ int main(int argc, char* argv[]) {
             for (const GeneRegion& region : regions) {
                 if ("promoter" == filter) {
                     std::cout << region.relative_upstream(1,500).toBedString() << std::endl;
+                }
+                else if ("utr" == filter) {
+                    std::cout << region.relative_downstream(1,500).toBedString() << std::endl;
                 }
                 else {
                     std::cout << region.toBedString() << std::endl;

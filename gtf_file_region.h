@@ -15,7 +15,10 @@ struct GeneRegion {
     std::string toBedString() const;
 
     // Return a new GeneRegion object that represents the region upstream of the current region
-    GeneRegion relative_upstream(size_t upstream, size_t downstream) const;
+    GeneRegion relative_upstream(size_t min_upstream, size_t max_upstream) const;
+
+    // Return a new GeneRegion object that represents the region downstream of the current region
+    GeneRegion relative_downstream(size_t min_downstream, size_t max_downstream) const;
 
     // Overload the << operator for GeneRegion
     friend std::ostream& operator<<(std::ostream& os, const GeneRegion& region);

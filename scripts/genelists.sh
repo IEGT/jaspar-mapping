@@ -24,7 +24,7 @@ for list in $lists; do
         echo "I: Downloading $list to $fname"
         wget -O "$fname" "$URL"
     fi
-    if [ -f "$ofolder/$list.promoter.bed" ] && [ -f "$ofolder/$list.transcript.bed" ]; then
+    if [ -f "$ofolder/$list.promoter.bed" ] && [ -f "$ofolder/$list.transcript.bed" ]&& [ -f "$ofolder/$list.utr.bed" ]; then
         echo "I: $list.promoter.bed and $list.transcript.bed already exist - skipping"
         continue
     else
@@ -35,6 +35,7 @@ for list in $lists; do
         fi
         #echo "D: Grepping genes found $genes"
         ./gtf_file_region_retrieval -c 1 -n "$genes" -f promoter > "$ofolder/$list.promoter.bed"
+        ./gtf_file_region_retrieval -c 1 -n "$genes" -f utr > "$ofolder/$list.utr.bed"
         ./gtf_file_region_retrieval -c 1 -n "$genes" > "$ofolder/$list.transcript.bed"
     fi
 done

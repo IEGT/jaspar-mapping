@@ -226,13 +226,39 @@ GeneRegion GeneRegion::relative_upstream(size_t minDist=1, size_t maxDist=500) c
     if ("+" == strand) {
         size_t newStart = start - maxDist;
         size_t newEnd = start - minDist;
+        assert(newStart<=newEnd);
         return {chromosome, newStart, newEnd, strand, geneId, geneName, transcriptName};
     }
     else if ("-" == strand) {
         size_t newStart = end + minDist;
         size_t newEnd = end + maxDist;
+        assert(newStart<=newEnd);
         return {chromosome, newStart, newEnd, strand, geneId, geneName, transcriptName};
     }
+    std::cerr << "E GeneRegion::relative_upstream: unknown strand: '" << strand << "'" << std::endl;
+    abort();
+}
+
+// Return a new GeneRegion object that represents the region upstream of the current region
+GeneRegion GeneRegion::relative_downstream(size_t minDist=1, size_t maxDist=500) const {
+    assert(end>start);
+    if (minDist > maxDist) {
+        std::cerr << "E GeneRegion::relative_downstream: minDist > maxDist" << std::endl;
+        abort();
+    }
+    if ("+" == strand) {
+        size_t newStart = start + minDist-1; // -1 since the start position itself is part of the feature
+        size_t newEnd = start + maxDist-1;
+        assert(newStart<=newEnd);
+        return {chromosome, newStart, newEnd, strand, geneId, geneName, transcriptName};
+    }
+    else if ("-" == strand) {
+        size_t newStart = end - maxDist+1; // +1 since the end position itself is part of the feature
+        size_t newEnd = end - minDist+1;
+        assert(newStart<=newEnd);
+        return {chromosome, newStart, newEnd, strand, geneId, geneName, transcriptName};
+    }
+ 
     std::cerr << "E GeneRegion::relative_upstream: unknown strand: '" << strand << "'" << std::endl;
     abort();
 }
