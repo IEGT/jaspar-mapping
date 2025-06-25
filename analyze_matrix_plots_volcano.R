@@ -10,7 +10,7 @@
 
 require(ggplot2)
 
-threshold.num.reads <- 1
+threshold.num.reads <- 3
 
 #rm(m); m <- m.contexts[[22]]
 # Derive the number of TFBS per cofactor in each context, not counting multiple occurrences in same TFBS context
@@ -191,13 +191,13 @@ count.tfbs <- function(confirmation=NULL, TA.or.DN="any", threshold.num.reads=1 
 #frequency.cofactors.taOrDn <- m.contexts.num.binary.confirmed.taOrDn.sum.total/m.contexts.num.tfbs.confirmed.taOrDn.total
 #names(frequency.cofactors.taOrDn) <- prettyIdentifierJaspar(names(frequency.cofactors.taOrDn))
 
-m.contexts.num.binary.confirmed.ta.sum.total <- rowSums(count.cofactors.per.tfbs(confirmation=c("tp73"), TA.or.DN="TA", threshold.num.reads=threshold.num.reads), na.rm = TRUE))
+m.contexts.num.binary.confirmed.ta.sum.total <- rowSums(count.cofactors.per.tfbs(confirmation=c("tp73"), TA.or.DN="TA", threshold.num.reads=threshold.num.reads), na.rm = TRUE)
 m.contexts.num.tfbs.confirmed.ta.total <- sum(count.tfbs(confirmation=c("tp73"), TA.or.DN="TA", threshold.num.reads=threshold.num.reads))
 frequency.cofactors.ta <- m.contexts.num.binary.confirmed.ta.sum.total/m.contexts.num.tfbs.confirmed.ta.total
 names(frequency.cofactors.ta) <- prettyIdentifierJaspar(names(frequency.cofactors.ta))
 
 
-m.contexts.num.binary.confirmed.dn.sum.total <- rowSums(count.cofactors.per.tfbs(confirmation=c("tp73"), TA.or.DN="DN", threshold.num.reads=threshold.num.reads), na.rm = TRUE))
+m.contexts.num.binary.confirmed.dn.sum.total <- rowSums(count.cofactors.per.tfbs(confirmation=c("tp73"), TA.or.DN="DN", threshold.num.reads=threshold.num.reads), na.rm = TRUE)
 m.contexts.num.tfbs.confirmed.dn.total <- sum(count.tfbs(confirmation=c("tp73"), TA.or.DN="DN", threshold.num.reads=threshold.num.reads))
 frequency.cofactors.dn <- m.contexts.num.binary.confirmed.dn.sum.total/m.contexts.num.tfbs.confirmed.dn.total
 names(frequency.cofactors.dn) <- prettyIdentifierJaspar(names(frequency.cofactors.dn))
@@ -291,7 +291,7 @@ require(ggrepel)
 
 my.volcano.plot <- function(data,title="Volcano Plot: Enrichment vs Frequency",
                             xlab="log2 Enrichment (confirmed / initial)",
-                            ylab="Frequency (confirmed / initial)") {
+                            ylab="Frequency (confirmed / initial)",n.tfbs.prior=NA,n.tfbs.post=NA) {
 
     ggplot(data, aes(x=Enrichment, y=Frequency, label=TF)) +
         geom_point(#aes(fill=TAvsDN),

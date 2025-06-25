@@ -1,9 +1,9 @@
 library(data.table)
 
 # Function to read all BED files matching the pattern into a list of data tables
-readPromoterBedFiles <- function() {
+readBedFiles <- function(path="GeneLists", pattern="*.bed") {
     # List all files matching the pattern
-    bedFiles <- list.files(path="GeneLists", pattern = "*.promoter.bed", full.names = TRUE)
+    bedFiles <- list.files(path=path, pattern = pattern, full.names = TRUE)
 
     if (length(bedFiles) == 0) {
         stop("No BED files matching the pattern were found.")
@@ -12,7 +12,29 @@ readPromoterBedFiles <- function() {
     # Read each BED file into a data table
     bedDataTables <- lapply(bedFiles, function(file) {
         dt <- fread(file)  # Read without specifying colClasses
-        setnames(dt, c("Chr", "From", "To", "Gene", "Score", "Strand"))  # Rename columns
+        h <- c("Chr", "From", "To", "Gene", "Score", "Strand")
+        if (ncol(dt) > length(h)) {
+            if (ncol(dt) < 6) {
+                stop("BED file must have at least 6 columns: Chr, From, To, Gene, Score, Strand.")
+            }
+            if (grepl(pattern="cutandrun", x=file)) {
+                combinations <- sort(as.vector(outer(outer(c("pos", "tp73"),c("saos2","skmel29_2"),paste,sep="_"), c("TA", "DN", "GFP"),paste,sep="_")))
+                h <- c(h, combinations)  # Add specific combinations for cutandrun files
+            }
+            if (grepl(pattern="tp73bs", x=file)) {
+                combinations <- sort(as.vector(outer(outer(c("pos", "tp73"),c("saos2","skmel29_2"),paste,sep="_"), c("TA", "DN", "GFP"),paste,sep="_")))
+                h <- c(h, "num.tfbs")  # Add specific combinations for cutandrun files
+            }
+            if (ncol(dt) > length(h)) {
+                h <- c(h, paste0("V", (length(h) + 1):ncol(dt)))  # Fill with Vn for extra columns
+            }
+            if (ncol(dt) < length(h)) {
+                cat("D: h: ", paste(h,collapse=",",sep=""),"\n",sep="")
+                print(dt[1:2,])  # Print first two rows for debugging
+                stop("BED file has fewer columns than expected. Expected at least ", length(h), "columns, but found ", ncol(dt), ".")
+            }
+        }
+        setnames(dt, h)  # Rename columns
         dt[, `:=`(Chr = as.character(Chr), From = as.integer(From), To = as.integer(To),
                   Gene = as.character(Gene), Score = as.integer(Score),
                   Strand=as.character(Strand)) ]  # Ensure correct types
@@ -54,7 +76,9 @@ checkBedOverlaps <- function(bed1, bed2) {
 }
 
 # Example usage
-promoterBedTables <- readPromoterBedFiles()
+promoterBedTables <- readBedFiles(pattern="*.promoter.*bed")
+utrBedTables <- readBedFiles(pattern="*.utr.*bed")
+
 
 # Example usage:
 # bed1 <- fread("path/to/bed1.bed")
