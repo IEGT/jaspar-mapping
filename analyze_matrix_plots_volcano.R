@@ -39,6 +39,10 @@ count.cofactors.per.tfbs <- function(confirmation=NULL, TA.or.DN, cell.lines, th
         stop("E: Invalid cell line specified. Only 'skmel29_2' or 'saos2' are supported.\n")
     }
 
+    if (! all (cell.lines %in% c("TA","DN","any"))) {
+        stop("E: Invalid variant specified. Only 'TA', 'DN', 'GFP' or 'any' are supported.\n")
+    }
+
     sapply(m.contexts, function(m) {
 
         if (is.null(m)) {
@@ -66,7 +70,7 @@ count.cofactors.per.tfbs <- function(confirmation=NULL, TA.or.DN, cell.lines, th
                         m[,..v.dn, drop=T] >= threshold.num.reads |
                         m[,..v.gfp,drop=T] >= threshold.num.reads
                     )
-                } else if (TA.or.DN == "none") {
+                } else if (TA.or.DN == "ignored") {
                     # doing nothing, as we want to check all rows
                 } else {
                     stop("E: Invalid TA.or.DN method specified.\n")
@@ -84,13 +88,12 @@ count.cofactors.per.tfbs <- function(confirmation=NULL, TA.or.DN, cell.lines, th
                     v.ta <- paste0(prefix, "TA")
                     v.dn <- paste0(prefix, "DN")
                     v.gfp <- paste0(prefix, "GFP")
-
                     m.context.extra.check <- m.context.extra.check & as.vector(
                         m[,..v.ta, drop=T] >= threshold.num.reads |
                         m[,..v.dn, drop=T] >= threshold.num.reads |
                         m[,..v.gfp,drop=T] >= threshold.num.reads
                     )
-                } else if (TA.or.DN == "none") {
+                } else if (TA.or.DN == "ignored") {
                     # doing nothing, as we want to check all rows
                 } else {
                     stop("E: Invalid TA.or.DN method specified.\n")
@@ -113,7 +116,7 @@ count.cofactors.per.tfbs <- function(confirmation=NULL, TA.or.DN, cell.lines, th
                         m[,..v.dn,drop=T] >= m[,..v.gfp,drop=T] |
                         m[,..v.ta,drop=T] >= m[,..v.gfp,drop=T]
                     )
-                } else if (TA.or.DN == "none") {
+                } else if (TA.or.DN == "ignored") {
                     # doing nothing, as we want to check all rows
                 } else {
                     stop("E: Invalid TA.or.DN method specified.\n")
@@ -136,12 +139,17 @@ count.tfbs <- function(confirmation=NULL, TA.or.DN, cell.lines, threshold.num.re
         stop("E: Invalid cell line specified. Only 'skmel29_2' or 'saos2' are supported.\n")
     }
 
+    if (! TA.or.DN %in% c("TA","DN","GFP","any","TAandDN","all","ignored")) {
+        stop("E: Invalid variant specified. Only 'TA', 'DN', 'GFP', 'any', 'TAandDN', 'all' or 'ignored' are supported, found '",TA.or.DN,"'.\n")
+    }
+
     sapply(m.contexts, function(m) {
         # m <- m.contexts[[1]]
         if (is.null(m)) {
             return(NA)
         }
         m.context.extra.check <- rep(TRUE, nrow(m))
+        #cat("D: Initial sum(m.context.extra.check): ",sum(m.context.extra.check, na.rm = TRUE),"\n") 
         cols.Score.index <- grep("_NumInWindow$", colnames(m), value = FALSE)
 
         if ("promoter" %in% confirmation) {
@@ -151,19 +159,30 @@ count.tfbs <- function(confirmation=NULL, TA.or.DN, cell.lines, threshold.num.re
         if ("tp73" %in% confirmation) {
             for (cell.line in cell.lines) {
                 prefix <- paste0("tp73","_",cell.line,"_")
+                v.ta <- paste0(prefix, "TA")
+                v.dn <- paste0(prefix, "DN")
+                v.gfp <- paste0(prefix, "GFP")
                 if (TA.or.DN %in% c("TA","DN","GFP")) {
                     v <- paste0(prefix, TA.or.DN)
                     m.context.extra.check <- m.context.extra.check & as.vector( m[,..v, drop=T] >= threshold.num.reads )
                 } else if (TA.or.DN == "any") {
-                    v.ta <- paste0(prefix, "TA")
-                    v.dn <- paste0(prefix, "DN")
-                    v.gfp <- paste0(prefix, "GFP")
                     m.context.extra.check <- m.context.extra.check & as.vector(
                         m[,..v.ta, drop=T] >= threshold.num.reads |
                         m[,..v.dn, drop=T] >= threshold.num.reads |
                         m[,..v.gfp, drop=T] >= threshold.num.reads
                     )
-                } else if (TA.or.DN == "none") {
+                } else if (TA.or.DN == "TAandDN") {
+                    m.context.extra.check <- m.context.extra.check & as.vector(
+                        m[,..v.ta, drop=T] >= threshold.num.reads &
+                        m[,..v.dn, drop=T] >= threshold.num.reads
+                    )
+                } else if (TA.or.DN == "all") {
+                    m.context.extra.check <- m.context.extra.check & as.vector(
+                        m[,..v.ta, drop=T] >= threshold.num.reads &
+                        m[,..v.dn, drop=T] >= threshold.num.reads &
+                        m[,..v.gfp, drop=T] >= threshold.num.reads
+                    )
+                } else if (TA.or.DN == "ignored") {
                     # doing nothing, as we want to check all rows
                 } else {
                     stop("E: Invalid TA.or.DN method specified, found '",ta.or.dn,"'.\n")
@@ -174,19 +193,30 @@ count.tfbs <- function(confirmation=NULL, TA.or.DN, cell.lines, threshold.num.re
         if ("pos" %in% confirmation) {
             for (cell.line in cell.lines) {
                 prefix <- paste0("pos","_",cell.line,"_")
+                v.ta <- paste0(prefix, "TA")
+                v.dn <- paste0(prefix, "DN")
+                v.gfp <- paste0(prefix, "GFP")
                 if (TA.or.DN %in% c("TA","DN","GFP")) {
                     v <- paste0(prefix, TA.or.DN)
                     m.context.extra.check <- m.context.extra.check & as.vector( m[,..v, drop=T] >= threshold.num.reads )
                 } else if (TA.or.DN == "any") {
-                    v.ta <- paste0(prefix, "TA")
-                    v.dn <- paste0(prefix, "DN")
-                    v.gfp <- paste0(prefix, "GFP")
                     m.context.extra.check <- m.context.extra.check & as.vector(
                         m[,..v.ta, drop=T] >= threshold.num.reads |
                         m[,..v.dn, drop=T] >= threshold.num.reads |
                         m[,..v.gfp, drop=T] >= threshold.num.reads
                     )
-                } else if (TA.or.DN == "none") {
+                } else if (TA.or.DN == "TAandDN") {
+                    m.context.extra.check <- m.context.extra.check & as.vector(
+                        m[,..v.ta, drop=T] >= threshold.num.reads &
+                        m[,..v.dn, drop=T] >= threshold.num.reads
+                    )
+                } else if (TA.or.DN == "all") {
+                    m.context.extra.check <- m.context.extra.check & as.vector(
+                        m[,..v.ta, drop=T] >= threshold.num.reads &
+                        m[,..v.dn, drop=T] >= threshold.num.reads &
+                        m[,..v.gfp, drop=T] >= threshold.num.reads
+                    )
+                } else if (TA.or.DN == "ignored") {
                     # doing nothing, as we want to check all rows
                 } else {
                     stop("E: Invalid TA.or.DN method specified, found '",ta.or.dn,"'.\n")
@@ -209,7 +239,12 @@ count.tfbs <- function(confirmation=NULL, TA.or.DN, cell.lines, threshold.num.re
                         m[,..v.dn, drop=T] >= m[,..v.gfp, drop=T] |
                         m[,..v.ta, drop=T] >= m[,..v.gfp, drop=T]
                     )
-                } else if (TA.or.DN == "none") {
+                } else if (TA.or.DN == "all" || TA.or.DN == "TAandDN") {
+                    m.context.extra.check <- m.context.extra.check & as.vector(
+                        m[,..v.dn, drop=T] >= m[,..v.gfp, drop=T] &
+                        m[,..v.ta, drop=T] >= m[,..v.gfp, drop=T]
+                    )
+                } else if (TA.or.DN == "ignored") {
                     # doing nothing, as we want to check all rows
                 } else {
                     stop("E: Invalid TA.or.DN method specified - only TA or DN valid for pos-up, found '",TA.or.DN,"'.\n")
@@ -221,13 +256,19 @@ count.tfbs <- function(confirmation=NULL, TA.or.DN, cell.lines, threshold.num.re
     })
 }
 
-count.tfbs.cache <- matrix(rep(NA,8),nrow=3, ncol=5, dimnames=list(cell.line=c("skmel29_2","saos2"),îsoform=c("TA","DN","GFP","any","both")))
+# 
+# count.tfbs.cache
+#
+#
+count.tfbs.cache <- matrix(rep(NA,2*7*2),nrow=2, ncol=7*2)
+dim(count.tfbs.cache) <- c(2,7,2)
+dimnames(count.tfbs.cache) <- list(cell.line=c("skmel29_2","saos2"),isoform=c("ignored","TA","DN","GFP","any","TAandDN","all"),inPromoter=c("maybe","yes"))
 for( cell.line in c("skmel29_2","saos2") ) {
-    for( ta.or.dn in c("TA","DN","GFP","any")) {
-        count.tfbs.cache[cell.line,ta.or.dn] <- sum(count.tfbs(confirmation=c("tp73"), TA.or.DN=ta.or.dn, cell.lines=cell.line, threshold.num.reads=threshold.num.reads))
+    for( ta.or.dn in c("ignored","TA","DN","GFP","any","TAandDN","all")) {
+        cat("D: ta.or.dn: ",ta.or.dn," cell.line: ",cell.line,"\n",sep="")
+        count.tfbs.cache[cell.line,ta.or.dn,"maybe"] <- sum(count.tfbs(confirmation=c("tp73"), TA.or.DN=ta.or.dn, cell.lines=cell.line, threshold.num.reads=threshold.num.reads))
+        count.tfbs.cache[cell.line,ta.or.dn,"yes"] <- sum(count.tfbs(confirmation=c("tp73","promoter"), TA.or.DN=ta.or.dn, cell.lines=cell.line, threshold.num.reads=threshold.num.reads))
     }
-    # Not implmemented yet
-    #count.tfbs.cache[cell.line,"both"] <- count.tfbs(confirmation=c("tp73"), TA.or.DN="none", cell.lines=cell.line, threshold.num.reads=threshold.num.reads)
 }
 
 #m.contexts.num.tfbs.confirmed.taOrDn2 <- count.tfbs(confirmation=c("tp73"), TA.or.DN="any", threshold.num.reads=threshold.num.reads)
@@ -239,12 +280,14 @@ for( cell.line in c("skmel29_2","saos2") ) {
 rm(list=c("cell.line","m.context.num.binary.confirmed.sum.total","m.context.num.tfbs.confirmed.total","frequency.cofactors","frequency.cofactors.human",
    "log.ratio.confirmed.ta.vs.dn","log.ratio.confirmed.ta.vs.dn.human","enrichment,enrichment.human","a","ta.or.dn","TA.or.DN","enrichment.mean"))
 
-volcano.plot.for.cell.line <- function(cell.line, threshold.num.reads=1, debug=TRUE) {
+volcano.plot.for.cell.line <- function(cell.line, threshold.num.reads=1, debug=TRUE,
+                                       m.context.num.binary.confirmed.sum.total=m.context.num.binary.confirmed.sum.total,
+                                       m.context.num.tfbs.confirmed.total=m.context.num.tfbs.confirmed.total) {
 
     # cell.line <- "skmel29_2"
 
     if (! cell.line %in% c("skmel29_2","skmel29_1","saos2")) {
-        stop("E: Invalid cell line specified. Only 'skmel29_2' or 'saos2' are supported.\n")
+        stop("E: Invalid cell line specified. Only 'skmel29_2', 'skmel29_1' or 'saos2' are supported.\n")
     }
 
     if (debug) {
@@ -269,8 +312,19 @@ volcano.plot.for.cell.line <- function(cell.line, threshold.num.reads=1, debug=T
         cat("D: 2\n")
     }
 
-    frequency.cofactors <- sapply(c("TA","DN","GFP"), function(ta.or.dn) {
-        a <- (m.context.num.binary.confirmed.sum.total[,ta.or.dn]) / (m.context.num.tfbs.confirmed.total[ta.or.dn])
+    frequency.cofactors <- sapply(c("TA","DN","GFP"), function(ta.or.dn,m.context.num.binary.confirmed.sum.tota=m.context.num.binary.confirmed.sum.total,m.context.num.tfbs.confirmed.total=m.context.num.tfbs.confirmed.total) {
+
+        total.confirmed <- m.context.num.binary.confirmed.sum.total[,ta.or.dn]
+        if (is.na(total.confirmed)) {
+            stop(paste0("E: Values for 'm.context.num.binary.confirmed.sum.total[\"",ta.or.dn,"\"]' have not been computed."))
+        }
+
+        total.predicted.jaspar <- m.context.num.tfbs.confirmed.total[ta.or.dn]
+        if(is.na(m.context.num.tfbs.confirmed.total)) {
+            stop(paste0("E: Values for 'm.context.num.tfbs.confirmed.total[\"",ta.or.dn,"\"]' have not been computed."))
+        }
+
+        a <- total.confirmed / m.context.num.tfbs.confirmed.total
         names(a) <- prettyIdentifierJaspar(names(a))
         a
     })
@@ -508,6 +562,7 @@ pdf(pdf.volcano.filename, width=11, height=8)
 
     
     if (FALSE) {
+        ta.or.dn <- "any" # "TA" or "DN"
         volcano_data <- data.frame(
             TF = sapply(strsplit(x=names(d.skmel29_2$enrichment[,ta.or.dn]),split="[_ ]",fixed=FALSE), function(x) x[1]),
             Enrichment = d.skmel29_2$enrichment[,ta.or.dn],

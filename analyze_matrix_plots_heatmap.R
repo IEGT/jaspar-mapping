@@ -7,6 +7,91 @@
 all_inPromoter_tp73ConfirmAny <- retrieve_context_data_by_chromosome(NULL, confirmation=c("tp73","promoter"),TA.or.DN="any")
 all_inPromoter_tp73ConfirmAny.colSums <- colSums(all_inPromoter_tp73ConfirmAny$context_data_binary,na.rm=T)
 
+all_inPromoter_tp73ConfirmTA <- retrieve_context_data_by_chromosome(NULL, confirmation=c("tp73","promoter"),TA.or.DN="TA")
+all_inPromoter_tp73ConfirmTA.colSums <- colSums(all_inPromoter_tp73ConfirmTA$context_data_binary,na.rm=T)
+
+all_inPromoter_tp73ConfirmDN <- retrieve_context_data_by_chromosome(NULL, confirmation=c("tp73","promoter"),TA.or.DN="DN")
+all_inPromoter_tp73ConfirmDN.colSums <- colSums(all_inPromoter_tp73ConfirmDN$context_data_binary,na.rm=T)
+
+target.gene.selection.EMT <- promoterBedTables$HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION.promoter.bed$Gene
+combined.expression.data.selected.EMT <- combined.expression.data[,"Gene Symbol"] %in% target.gene.selection.EMT
+target.gene.selection.EMT_tp73ConfirmTA <- retrieve_context_data_by_chromosome(combined.expression.data.selected.EMT, confirmation=c("tp73"),TA.or.DN="TA", verbose=verbose)
+target.gene.selection.EMT_tp73ConfirmDN <- retrieve_context_data_by_chromosome(combined.expression.data.selected.EMT, confirmation=c("tp73"),TA.or.DN="DN", verbose=verbose)
+
+
+target.gene.selection.EMT_tp73ConfirmTA.colSums <- colSums(target.gene.selection_tp73ConfirmTA$context_data_binary,na.rm=T)
+target.gene.selection.EMT_tp73ConfirmDN.colSums <- colSums(target.gene.selection_tp73ConfirmDN$context_data_binary,na.rm=T)
+
+if (verbose) {
+    print(target.gene.selection.EMT_tp73ConfirmTA.colSums[1:10])
+    print(target.gene.selection.EMT_tp73ConfirmDN.colSums[1:10])
+}
+
+
+target.gene.vs.universe.prior.to.selection_TA <- cbind(
+    mean.enriched=target.gene.selection.EMT_tp73ConfirmTA$mean_total_binary,
+    mean.background=all_inPromoter_tp73ConfirmTA$mean_total_binary,
+    log2.ratio=log2(target.gene.selection.EMT_tp73ConfirmTA$mean_total_binary / all_inPromoter_tp73ConfirmTA$mean_total_binary)
+)
+rownames(target.gene.vs.universe.prior.to.selection_TA) <- prettyIdentifierJaspar(rownames(target.gene.vs.universe.prior.to.selection_TA))
+
+target.gene.vs.universe.prior.to.selection_DN <- cbind(
+    mean.enriched=target.gene.selection.EMT_tp73ConfirmDN$mean_total_binary,
+    mean.background=all_inPromoter_tp73ConfirmDN$mean_total_binary,
+    log2.ratio=log2(target.gene.selection.EMT_tp73ConfirmDN$mean_total_binary / all_inPromoter_tp73ConfirmDN$mean_total_binary)
+)
+rownames(target.gene.vs.universe.prior.to.selection_DN) <- prettyIdentifierJaspar(rownames(target.gene.vs.universe.prior.to.selection_DN))
+
+
+target.gene.vs.universe.prior.to.selection_EMT.eligible <- target.gene.vs.universe.prior.to.selection_TA[,"mean.enriched"]>0 | target.gene.vs.universe.prior.to.selection_DN[,"mean.enriched"]>0
+target.gene.vs.universe.prior.to.selection_EMT.eligible <- target.gene.vs.universe.prior.to.selection_EMT.eligible & (
+    (is.finite(target.gene.vs.universe.prior.to.selection_TA[,"log2.ratio"]) & abs(target.gene.vs.universe.prior.to.selection_TA[,"log2.ratio"]) > 0.1 ) &
+    (is.finite(target.gene.vs.universe.prior.to.selection_DN[,"log2.ratio"]) & abs(target.gene.vs.universe.prior.to.selection_DN[,"log2.ratio"]) > 0.1 )
+)
+target.gene.vs.universe.prior.to.selection_EMT.eligible <- target.gene.vs.universe.prior.to.selection_EMT.eligible & (
+    is.human.jaspar.id(rownames(target.gene.vs.universe.prior.to.selection_TA))
+)
+
+write.table(cbind(TA=target.gene.vs.universe.prior.to.selection_TA,DN=target.gene.vs.universe.prior.to.selection_DN),
+    file="enrichment_TAvsDN_for_EMT.tsv",
+    col.names=NA, row.names=TRUE, sep="\t", quote=FALSE, dec=",")
+
+
+pdf("enrichment_TAvsDN_for_EMT.pdf", width=25, height=25)
+# Plot the enrichment for TA vs DN for EMT 
+require(ggplot2)
+require(ggrepel)
+
+df <- data.frame(
+    log2_enrichment_TA = target.gene.vs.universe.prior.to.selection_TA[,"log2.ratio"][target.gene.vs.universe.prior.to.selection_EMT.eligible],
+    log2_enrichment_DN = target.gene.vs.universe.prior.to.selection_DN[,"log2.ratio"][target.gene.vs.universe.prior.to.selection_EMT.eligible],
+    max_mean_enriched = apply(cbind(target.gene.vs.universe.prior.to.selection_TA[,"mean.enriched"][target.gene.vs.universe.prior.to.selection_EMT.eligible],
+                            target.gene.vs.universe.prior.to.selection_DN[,"mean.enriched"][target.gene.vs.universe.prior.to.selection_EMT.eligible]),1,max),
+    TF = prettyIdentifierJaspar(rownames(target.gene.vs.universe.prior.to.selection_TA)[target.gene.vs.universe.prior.to.selection_EMT.eligible])
+)
+
+quantile(df$max_mean_enriched, probs = 0:20/20)
+
+# Color and size by max_mean_enriched (continuous)
+ggplot(df, aes(x = log2_enrichment_TA, y = log2_enrichment_DN, label = TF, 
+               color = max_mean_enriched, size = max_mean_enriched)) +
+    geom_point() +
+    geom_text_repel(size = 3, max.overlaps = Inf) +
+    scale_color_gradient(low = "red", high = "blue", name = "Max frequency (%)") +
+    scale_size_continuous(range = c(2, 8), name = "Max frequency (%)") +
+    labs(
+        x = "log2 enrichment TA",
+        y = "log2 enrichment DN",
+        title = "Enrichment of TFBS in EMT genes (TA vs DN)"
+    ) +
+    theme_bw()
+
+dev.off()
+
+
+
+
+
 require(corrplot)
 # Use ggrepel to avoid overlapping labels and dots
 suppressPackageStartupMessages(require(ggplot2))
