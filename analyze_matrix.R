@@ -150,10 +150,8 @@ if (!meta.from.scratch && file.exists("combined.expression.data.RData")) {
     write.table(list.of.all.promoters.plus.utr.aggregated, file="all.genes.all.promoters.and.utr.cutandrun.tp73bs.aggregated.tsv", row.names=FALSE, col.names=TRUE, sep="\t", quote=FALSE,na="")
     
     max.binding.for.gene <- as.data.frame(matrix(NA, nrow=length(expressionData.symbols), ncol=1+17+3+1))
-    colnames(max.binding.for.gene) <- c(colnames(m.contexts[[1]])[1:18],"PromoterOfWhichGene")
-    colnames(max.binding.for.gene)[4] <- "TF"
-    colnames(max.binding.for.gene)[5] <- "TF.Score"
-    colnames(max.binding.for.gene)[6] <- "TF.Strand"
+    colnames(max.binding.for.gene) <- c(colnames(m.contexts[[1]])[1:18],"DN Max Methylation 500 + 500", "GFP Max Methylation 500 + 500", "TA Max Methylation 500 + 500", "PromoterOfWhichGene")
+    colnames(max.binding.for.gene)[4:6] <- c("TF","TF.Score","TF.Strand")
 
     debug <- FALSE
     columns.with.methylation.of.interest <- c("pos_skmel29_2_DN","pos_skmel29_2_GFP","pos_skmel29_2_TA")
@@ -161,13 +159,13 @@ if (!meta.from.scratch && file.exists("combined.expression.data.RData")) {
     columns.with.methylation.of.interest.utr <- paste("utr", columns.with.methylation.of.interest,sep=".")
 
 
-    #ed.rowno <- 1123
+    #ed.rowno <- 57
     for(ed.rowno in 1:nrow(expressionData)) {
 
-        if (ed.rowno>500) {
-            cat("I: Stopping after 500 genes processed.\n")
-            break
-        }
+        #if (ed.rowno>500) {
+        #    cat("I: Stopping after 500 genes processed.\n")
+        #    break
+        #}
 
         gene <- expressionData.symbols[ed.rowno]
         cat(ed.rowno,": ",gene,"\n",sep="")
@@ -219,7 +217,7 @@ if (!meta.from.scratch && file.exists("combined.expression.data.RData")) {
             cat("I: Found ",length(overlap.index.of.m.chr.promoters)," overlaps for gene ",gene," in chromosome ",chr,"\n",sep="")
             # Get the promoter location
             gene.promoter.location.promoters <- m.contexts[[chr]][overlap.index.of.m.chr.promoters,1:18]
-            print(gene.promoter.location.promoters)
+            if (debug) print(gene.promoter.location.promoters)
             val <- gene.promoter.location.promoters$"tp73_skmel29_2_DN" + gene.promoter.location.promoters$"tp73_skmel29_2_TA"
             stopifnot(!is.null(val))
             val.max <- max(val)
@@ -244,7 +242,7 @@ if (!meta.from.scratch && file.exists("combined.expression.data.RData")) {
             methylation.data.of.interest.promoter <- list.of.all.promoters[gene.in.promoter.rows,,drop=F][select.line,..columns.with.methylation.of.interest.promoters,drop=F]
             methylation.data.of.interest.utr <- list.of.all.utr[gene.in.promoter.rows,,drop=F][select.line,..columns.with.methylation.of.interest.utr,drop=F]
             methylation.data.of.interest.sum <- methylation.data.of.interest.promoter + methylation.data.of.interest.utr
-            max.binding.for.gene[ed.rowno,] <- c(gene.promoter.location.promoters[select.line,],methylation.data.of.interest.sum,gene)
+            max.binding.for.gene[ed.rowno,] <- c(gene.promoter.location.promoters[select.line,],methylation.data.of.interest.sum,PromotorOfWhichGene=gene)
             #break;
         } else {
             if (sum(list.of.all.promoters[gene.in.promoter.rows,"promoter.num.tfbs"])>0) {
@@ -256,7 +254,7 @@ if (!meta.from.scratch && file.exists("combined.expression.data.RData")) {
             names(mean.methylation.for.gene.utr) <- paste0("mean.500bp.utr.",names(mean.methylation.for.gene.utr))
             mean.methylation.for.gene.joint <- mean.methylation.for.gene.utr+mean.methylation.for.gene.promoter
             names(mean.methylation.for.gene.joint) <- paste0("mean.1000bp.",names(mean.methylation.for.gene.utr))
-            max.binding.for.gene[ed.rowno,] <- c(chr,rep(NA,17),mean.methylation.for.gene.joint,gene)
+            max.binding.for.gene[ed.rowno,] <- c(chr,rep(NA,17),round(mean.methylation.for.gene.joint,2),"PromoterOfWhichGene"=gene)
             cat("E: No overlaps found for gene ",gene," in chromosome ",chr,"\n",sep="")
         }
     }
@@ -277,7 +275,7 @@ if (!meta.from.scratch && file.exists("combined.expression.data.RData")) {
     save(combined.expression.data, file="combined.expression.data.RData")
     require(xlsx)
     xlsx::write.xlsx(combined.expression.data, file="combined.expression.data.xlsx", row.names=FALSE)
-    write.table(combined.expression.data, file="combined.expression.data.tsv", sep="\t", row.names=FALSE, col.names=TRUE, quote=FALSE)
+    write.table(combined.expression.data, file="combined.expression.data.tsv", sep="\t", row.names=FALSE, col.names=TRUE, na="", quote=FALSE, dec=",")
     cat("I: Saved combined expression data to 'combined.expression.data.RData' and 'combined.expression.data.xlsx'.\n")
 }
 
@@ -676,12 +674,12 @@ rownames(ta_vs_dn_genesetEMT_tp73Confirm_posConfirm.sorted) <- prettyIdentifierJ
 #gene.selection.EMT.TAonly <- c("EDIL3","MMP2","LRRC15","LAMA3","BGN","FBLN2","ACTA2","TGFBR3","TNFRSF12A","VCAN","MYLK","SERPINH1","TPM1","COL8A2","CRLF1","LGALS1","COL5A2","SLIT2","MATN2")
 #gene.selection.EMT.DNonly <- c("LAMA1","CDH11","SPARC","EMP3","DAB2","FN1","THBS1","DKK1","COLGALT1","PCOLCE","VIM","SNAI2","MCM7","ITGAV","PMP22","PLOD1")
 #gene.selection.EMT.TAandDN <- c("CD44","PMEPA1","SFRP1","GADD45B","CADM1","SLC6A8","ID2","SDC1")
-gene.selection.EMT.TAonly <- promoterBedTables$Nico_Analysis_TA_20250618.promoter.bed$Gene
-gene.selection.EMT.DNonly <- promoterBedTables$Nico_Analysis_DN_20250618.promoter.bed$Gene
-gene.selection.EMT.TAandDN <- c()
-gene.selection.EMT.TAorDN <- unique(c(gene.selection.EMT.TAonly, gene.selection.EMT.DNonly, gene.selection.EMT.TAandDN))
-gene.selection.EMT.TA <- c(gene.selection.EMT.TAonly, gene.selection.EMT.TAandDN)
-gene.selection.EMT.DN <- c(gene.selection.EMT.DNonly, gene.selection.EMT.TAandDN)
+gene.selection.EMT.TA <- promoterBedTables$Nico_Analysis_TA_20250618.promoter.bed$Gene
+gene.selection.EMT.DN <- promoterBedTables$Nico_Analysis_DN_20250618.promoter.bed$Gene
+gene.selection.EMT.TAandDN <- intersect(gene.selection.EMT.TA, gene.selection.EMT.DN)
+gene.selection.EMT.TAorDN <- unique(c(gene.selection.EMT.TA, gene.selection.EMT.DN, gene.selection.EMT.TAandDN))
+gene.selection.EMT.TAonly <- gene.selection.EMT.TA[!gene.selection.EMT.TA %in% gene.selection.EMT.DN]
+gene.selection.EMT.DNonly <- gene.selection.EMT.DN[!gene.selection.EMT.DN %in% gene.selection.EMT.TA]
 
 genesetEMT.TA_tp73ConfirmTA_posConfirmTA <- retrieve_context_data_by_chromosome(combined.expression.data[,"Gene Symbol"] %in% gene.selection.EMT.TA, confirmation=c("tp73","pos"),TA.or.DN="TA")
 genesetEMT.DN_tp73ConfirmDN_posConfirmDN <- retrieve_context_data_by_chromosome(combined.expression.data[,"Gene Symbol"] %in%gene.selection.EMT.DN, confirmation=c("tp73","pos"),TA.or.DN="DN")

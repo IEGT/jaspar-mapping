@@ -10,7 +10,7 @@
 
 require(ggplot2)
 
-threshold.num.reads <- 3
+threshold.num.reads <- 1
 
 #rm(m); m <- m.contexts[[22]]
 # Derive the number of TFBS per cofactor in each context, not counting multiple occurrences in same TFBS context
@@ -26,12 +26,19 @@ m.contexts.num.binary.sum <- sapply(m.contexts, function(m) {
 print(dim(m.contexts.num.binary.sum))
 
 m.contexts.num.binary.sum.total <- rowSums(m.contexts.num.binary.sum, na.rm = TRUE)
-m.contexts.num.tfbs <- sapply(m.contexts, nrow)
-m.contexts.num.tfbs.total <- sum(m.contexts.num.tfbs, na.rm = TRUE)
+m.contexts.num.tfbs.total <- sum(sapply(m.contexts, nrow),  na.rm = TRUE)
+frequency.cofactors.initial <- m.contexts.num.binary.sum.total/m.contexts.num.tfbs.total
+
+# 4446155
 
 #rm(m); m <- m.contexts[[22]]
 
-count.cofactors.per.tfbs <- function(confirmation=NULL, TA.or.DN="any", threshold.num.reads=1 ) {
+count.cofactors.per.tfbs <- function(confirmation=NULL, TA.or.DN, cell.lines, threshold.num.reads=1 ) {
+
+    if (! all (cell.lines %in% c("skmel29_2","skmel29_1","saos2"))) {
+        stop("E: Invalid cell line specified. Only 'skmel29_2' or 'saos2' are supported.\n")
+    }
+
     sapply(m.contexts, function(m) {
 
         if (is.null(m)) {
@@ -45,60 +52,72 @@ count.cofactors.per.tfbs <- function(confirmation=NULL, TA.or.DN="any", threshol
         }
 
         if ("tp73" %in% confirmation) {
-
-            if (TA.or.DN == "TA") {
-                m.context.extra.check <- m.context.extra.check & m$"tp73_skmel29_2_TA" >= threshold.num.reads
-            } else if (TA.or.DN == "DN") {
-                m.context.extra.check <- m.context.extra.check & m$"tp73_skmel29_2_DN" >= threshold.num.reads
-            } else if (TA.or.DN == "GFP") {
-                m.context.extra.check <- m.context.extra.check & m$"tp73_skmel29_2_GFP" >= threshold.num.reads
-            } else if (TA.or.DN == "any") {
-                m.context.extra.check <- m.context.extra.check & (
-                    m$"tp73_skmel29_2_TA" >= threshold.num.reads |
-                    m$"tp73_skmel29_2_DN" >= threshold.num.reads |
-                    m$"tp73_skmel29_2_GFP" >= threshold.num.reads
-                )
-            } else if (TA.or.DN == "none") {
-                # doing nothing, as we want to check all rows
-            } else {
-                stop("E: Invalid TA.or.DN method specified.\n")
+            prefix <- paste0("tp73","_",cell.line,"_")
+            for (cell.line in cell.lines) {
+                if (TA.or.DN %in% c("TA","DN","GFP")) {
+                    v <- paste0(prefix, TA.or.DN)
+                    m.context.extra.check <- m.context.extra.check &  as.vector(m[,..v,drop=T] >= threshold.num.reads )
+                } else if (TA.or.DN == "any") {
+                    v.ta <- paste0(prefix, "TA")
+                    v.dn <- paste0(prefix, "DN")
+                    v.gfp <- paste0(prefix, "GFP")
+                    m.context.extra.check <- m.context.extra.check & as.vector(
+                        m[,..v.ta, drop=T] >= threshold.num.reads |
+                        m[,..v.dn, drop=T] >= threshold.num.reads |
+                        m[,..v.gfp,drop=T] >= threshold.num.reads
+                    )
+                } else if (TA.or.DN == "none") {
+                    # doing nothing, as we want to check all rows
+                } else {
+                    stop("E: Invalid TA.or.DN method specified.\n")
+                }
             }
         }
 
         if ("pos" %in% confirmation) {
-            if (TA.or.DN == "TA") {
-                m.context.extra.check <- m.context.extra.check & ( m$"pos_skmel29_2_TA" >= threshold.num.reads )
-            } else if (TA.or.DN == "DN") {
-                m.context.extra.check <- m.context.extra.check & ( m$"pos_skmel29_2_DN" >= threshold.num.reads )
-            } else if (TA.or.DN == "GFP") {
-                m.context.extra.check <- m.context.extra.check & ( m$"pos_skmel29_2_GFP" >= threshold.num.reads )
-            } else if (TA.or.DN == "any") {
-                m.context.extra.check <- m.context.extra.check & (
-                    m$"pos_skmel29_2_DN" >= threshold.num.reads |
-                    m$"pos_skmel29_2_TA" >= threshold.num.reads |
-                    m$"pos_skmel29_2_GFP" >= threshold.num.reads
+            for (cell.line in cell.lines) {
+                prefix <- paste0("pos","_",cell.line,"_")
+                if (TA.or.DN %in% c("TA","DN","GFP")) {
+                    v <- paste0(prefix, TA.or.DN)
+                    m.context.extra.check <- m.context.extra.check & as.vector( m[,..v,drop=T] >= threshold.num.reads )
+                } else if (TA.or.DN == "any") {
+                    v.ta <- paste0(prefix, "TA")
+                    v.dn <- paste0(prefix, "DN")
+                    v.gfp <- paste0(prefix, "GFP")
+
+                    m.context.extra.check <- m.context.extra.check & as.vector(
+                        m[,..v.ta, drop=T] >= threshold.num.reads |
+                        m[,..v.dn, drop=T] >= threshold.num.reads |
+                        m[,..v.gfp,drop=T] >= threshold.num.reads
                     )
-            } else if (TA.or.DN == "none") {
-                # doing nothing, as we want to check all rows
-            } else {
-                stop("E: Invalid TA.or.DN method specified.\n")
+                } else if (TA.or.DN == "none") {
+                    # doing nothing, as we want to check all rows
+                } else {
+                    stop("E: Invalid TA.or.DN method specified.\n")
+                }
             }
         }
 
         if ("pos-up" %in% confirmation) {
-            if (TA.or.DN == "TA") {
-                m.context.extra.check <- m.context.extra.check & ( m$"pos_skmel29_2_TA" >= m$"pos_skmel29_2_GFP" )
-            } else if (TA.or.DN == "DN") {
-                m.context.extra.check <- m.context.extra.check & ( m$"pos_skmel29_2_DN" >= m$"pos_skmel29_2_GFP" )
-            } else if (TA.or.DN == "any") {
-                m.context.extra.check <- m.context.extra.check & (
-                    m$"pos_skmel29_2_DN" >= m$"pos_skmel29_2_GFP" |
-                    m$"pos_skmel29_2_TA" >= m$"pos_skmel29_2_GFP"
+            for (cell.line in cell.lines) {
+                prefix <- paste0("pos","_",cell.line,"_")
+                v.ta <- paste0(prefix, "TA")
+                v.dn <- paste0(prefix, "DN")
+                v.gfp <- paste0(prefix, "GFP")
+                if (TA.or.DN == "TA") {
+                    m.context.extra.check <- m.context.extra.check & as.vector( m[,..v.ta,drop=T] >= m[,..v.gfp,drop=T] )
+                } else if (TA.or.DN == "DN") {
+                    m.context.extra.check <- m.context.extra.check & as.vector( m[,..v.dn,drop=T] >= m[,..v.gfp,drop=T] )
+                } else if (TA.or.DN == "any") {
+                    m.context.extra.check <- m.context.extra.check & as.vector(
+                        m[,..v.dn,drop=T] >= m[,..v.gfp,drop=T] |
+                        m[,..v.ta,drop=T] >= m[,..v.gfp,drop=T]
                     )
-            } else if (TA.or.DN == "none") {
-                # doing nothing, as we want to check all rows
-            } else {
-                stop("E: Invalid TA.or.DN method specified.\n")
+                } else if (TA.or.DN == "none") {
+                    # doing nothing, as we want to check all rows
+                } else {
+                    stop("E: Invalid TA.or.DN method specified.\n")
+                }
             }
         }
 
@@ -111,9 +130,14 @@ count.cofactors.per.tfbs <- function(confirmation=NULL, TA.or.DN="any", threshol
 #m.contexts.num.binary.confirmed.taOrDn.sum <- count.cofactors.per.tfbs(confirmation=c("tp73"), TA.or.DN="any", threshold.num.reads=threshold.num.reads)
 #m.contexts.num.binary.confirmed.taOrDn.sum.total <- rowSums(m.contexts.num.binary.confirmed.taOrDn.sum, na.rm = TRUE)
 
-count.tfbs <- function(confirmation=NULL, TA.or.DN="any", threshold.num.reads=1 ) {
-    sapply(m.contexts, function(m) {
+count.tfbs <- function(confirmation=NULL, TA.or.DN, cell.lines, threshold.num.reads=1 ) {
 
+    if (! all (cell.lines %in% c("skmel29_2","skmel29_1","saos2"))) {
+        stop("E: Invalid cell line specified. Only 'skmel29_2' or 'saos2' are supported.\n")
+    }
+
+    sapply(m.contexts, function(m) {
+        # m <- m.contexts[[1]]
         if (is.null(m)) {
             return(NA)
         }
@@ -125,60 +149,71 @@ count.tfbs <- function(confirmation=NULL, TA.or.DN="any", threshold.num.reads=1 
         }
 
         if ("tp73" %in% confirmation) {
-
-            if (TA.or.DN == "TA") {
-                m.context.extra.check <- m.context.extra.check & ( m$"tp73_skmel29_2_TA" >= threshold.num.reads )
-            } else if (TA.or.DN == "DN") {
-                m.context.extra.check <- m.context.extra.check & ( m$"tp73_skmel29_2_DN" >= threshold.num.reads )
-            } else if (TA.or.DN == "GFP") {
-                m.context.extra.check <- m.context.extra.check & ( m$"tp73_skmel29_2_GFP" >= threshold.num.reads )
-            } else if (TA.or.DN == "any") {
-                m.context.extra.check <- m.context.extra.check & (
-                    m$"tp73_skmel29_2_TA" >= threshold.num.reads |
-                    m$"tp73_skmel29_2_DN" >= threshold.num.reads |
-                    m$"tp73_skmel29_2_GFP" >= threshold.num.reads
-                )
-            } else if (TA.or.DN == "none") {
-                # doing nothing, as we want to check all rows
-            } else {
-                stop("E: Invalid TA.or.DN method specified.\n")
+            for (cell.line in cell.lines) {
+                prefix <- paste0("tp73","_",cell.line,"_")
+                if (TA.or.DN %in% c("TA","DN","GFP")) {
+                    v <- paste0(prefix, TA.or.DN)
+                    m.context.extra.check <- m.context.extra.check & as.vector( m[,..v, drop=T] >= threshold.num.reads )
+                } else if (TA.or.DN == "any") {
+                    v.ta <- paste0(prefix, "TA")
+                    v.dn <- paste0(prefix, "DN")
+                    v.gfp <- paste0(prefix, "GFP")
+                    m.context.extra.check <- m.context.extra.check & as.vector(
+                        m[,..v.ta, drop=T] >= threshold.num.reads |
+                        m[,..v.dn, drop=T] >= threshold.num.reads |
+                        m[,..v.gfp, drop=T] >= threshold.num.reads
+                    )
+                } else if (TA.or.DN == "none") {
+                    # doing nothing, as we want to check all rows
+                } else {
+                    stop("E: Invalid TA.or.DN method specified, found '",ta.or.dn,"'.\n")
+                }
             }
         }
 
         if ("pos" %in% confirmation) {
-            if (TA.or.DN == "TA") {
-                m.context.extra.check <- m.context.extra.check & ( m$"pos_skmel29_2_TA" >= threshold.num.reads )
-            } else if (TA.or.DN == "DN") {
-                m.context.extra.check <- m.context.extra.check & ( m$"pos_skmel29_2_DN" >= threshold.num.reads )
-            } else if (TA.or.DN == "GFP") {
-                m.context.extra.check <- m.context.extra.check & ( m$"pos_skmel29_2_GFP" >= threshold.num.reads )
-            } else if (TA.or.DN == "any") {
-                m.context.extra.check <- m.context.extra.check & (
-                    m$"pos_skmel29_2_DN" >= threshold.num.reads |
-                    m$"pos_skmel29_2_TA" >= threshold.num.reads |
-                    m$"pos_skmel29_2_GFP" >= threshold.num.reads
+            for (cell.line in cell.lines) {
+                prefix <- paste0("pos","_",cell.line,"_")
+                if (TA.or.DN %in% c("TA","DN","GFP")) {
+                    v <- paste0(prefix, TA.or.DN)
+                    m.context.extra.check <- m.context.extra.check & as.vector( m[,..v, drop=T] >= threshold.num.reads )
+                } else if (TA.or.DN == "any") {
+                    v.ta <- paste0(prefix, "TA")
+                    v.dn <- paste0(prefix, "DN")
+                    v.gfp <- paste0(prefix, "GFP")
+                    m.context.extra.check <- m.context.extra.check & as.vector(
+                        m[,..v.ta, drop=T] >= threshold.num.reads |
+                        m[,..v.dn, drop=T] >= threshold.num.reads |
+                        m[,..v.gfp, drop=T] >= threshold.num.reads
                     )
-            } else if (TA.or.DN == "none") {
-                # doing nothing, as we want to check all rows
-            } else {
-                stop("E: Invalid TA.or.DN method specified.\n")
+                } else if (TA.or.DN == "none") {
+                    # doing nothing, as we want to check all rows
+                } else {
+                    stop("E: Invalid TA.or.DN method specified, found '",ta.or.dn,"'.\n")
+                }
             }
         }
 
         if ("pos-up" %in% confirmation) {
-            if (TA.or.DN == "TA") {
-                m.context.extra.check <- m.context.extra.check & ( m$"pos_skmel29_2_TA" >= m$"pos_skmel29_2_GFP" )
-            } else if (TA.or.DN == "DN") {
-                m.context.extra.check <- m.context.extra.check & ( m$"pos_skmel29_2_DN" >= m$"pos_skmel29_2_GFP" )
-            } else if (TA.or.DN == "any") {
-                m.context.extra.check <- m.context.extra.check & (
-                    m$"pos_skmel29_2_DN" >= m$"pos_skmel29_2_GFP" |
-                    m$"pos_skmel29_2_TA" >= m$"pos_skmel29_2_GFP"
+            for (cell.line in cell.lines) {
+                prefix <- paste0("pos","_",cell.line,"_")
+                v.ta <- paste0(prefix, "TA")
+                v.dn <- paste0(prefix, "DN")
+                v.gfp <- paste0(prefix, "GFP")
+                if (TA.or.DN == "TA") {
+                    m.context.extra.check <- m.context.extra.check & as.vector( m[,..v.ta, drop=T] >= m[,..v.gfp, drop=T] )
+                } else if (TA.or.DN == "DN") {
+                    m.context.extra.check <- m.context.extra.check & as.vector( m[,..v.dn, drop=T] >= m[,..v.gfp, drop=T] )
+                } else if (TA.or.DN == "any") {
+                    m.context.extra.check <- m.context.extra.check & as.vector(
+                        m[,..v.dn, drop=T] >= m[,..v.gfp, drop=T] |
+                        m[,..v.ta, drop=T] >= m[,..v.gfp, drop=T]
                     )
-            } else if (TA.or.DN == "none") {
-                # doing nothing, as we want to check all rows
-            } else {
-                stop("E: Invalid TA.or.DN method specified.\n")
+                } else if (TA.or.DN == "none") {
+                    # doing nothing, as we want to check all rows
+                } else {
+                    stop("E: Invalid TA.or.DN method specified - only TA or DN valid for pos-up, found '",TA.or.DN,"'.\n")
+                }
             }
         }
 
@@ -186,101 +221,201 @@ count.tfbs <- function(confirmation=NULL, TA.or.DN="any", threshold.num.reads=1 
     })
 }
 
+count.tfbs.cache <- matrix(rep(NA,8),nrow=3, ncol=5, dimnames=list(cell.line=c("skmel29_2","saos2"),îsoform=c("TA","DN","GFP","any","both")))
+for( cell.line in c("skmel29_2","saos2") ) {
+    for( ta.or.dn in c("TA","DN","GFP","any")) {
+        count.tfbs.cache[cell.line,ta.or.dn] <- sum(count.tfbs(confirmation=c("tp73"), TA.or.DN=ta.or.dn, cell.lines=cell.line, threshold.num.reads=threshold.num.reads))
+    }
+    # Not implmemented yet
+    #count.tfbs.cache[cell.line,"both"] <- count.tfbs(confirmation=c("tp73"), TA.or.DN="none", cell.lines=cell.line, threshold.num.reads=threshold.num.reads)
+}
+
 #m.contexts.num.tfbs.confirmed.taOrDn2 <- count.tfbs(confirmation=c("tp73"), TA.or.DN="any", threshold.num.reads=threshold.num.reads)
 #m.contexts.num.tfbs.confirmed.taOrDn.total <- sum(m.contexts.num.tfbs.confirmed.taOrDn, na.rm = TRUE)
 #frequency.cofactors.taOrDn <- m.contexts.num.binary.confirmed.taOrDn.sum.total/m.contexts.num.tfbs.confirmed.taOrDn.total
 #names(frequency.cofactors.taOrDn) <- prettyIdentifierJaspar(names(frequency.cofactors.taOrDn))
 
-m.contexts.num.binary.confirmed.ta.sum.total <- rowSums(count.cofactors.per.tfbs(confirmation=c("tp73"), TA.or.DN="TA", threshold.num.reads=threshold.num.reads), na.rm = TRUE)
-m.contexts.num.tfbs.confirmed.ta.total <- sum(count.tfbs(confirmation=c("tp73"), TA.or.DN="TA", threshold.num.reads=threshold.num.reads))
-frequency.cofactors.ta <- m.contexts.num.binary.confirmed.ta.sum.total/m.contexts.num.tfbs.confirmed.ta.total
-names(frequency.cofactors.ta) <- prettyIdentifierJaspar(names(frequency.cofactors.ta))
 
+rm(list=c("cell.line","m.context.num.binary.confirmed.sum.total","m.context.num.tfbs.confirmed.total","frequency.cofactors","frequency.cofactors.human",
+   "log.ratio.confirmed.ta.vs.dn","log.ratio.confirmed.ta.vs.dn.human","enrichment,enrichment.human","a","ta.or.dn","TA.or.DN","enrichment.mean"))
 
-m.contexts.num.binary.confirmed.dn.sum.total <- rowSums(count.cofactors.per.tfbs(confirmation=c("tp73"), TA.or.DN="DN", threshold.num.reads=threshold.num.reads), na.rm = TRUE)
-m.contexts.num.tfbs.confirmed.dn.total <- sum(count.tfbs(confirmation=c("tp73"), TA.or.DN="DN", threshold.num.reads=threshold.num.reads))
-frequency.cofactors.dn <- m.contexts.num.binary.confirmed.dn.sum.total/m.contexts.num.tfbs.confirmed.dn.total
-names(frequency.cofactors.dn) <- prettyIdentifierJaspar(names(frequency.cofactors.dn))
+volcano.plot.for.cell.line <- function(cell.line, threshold.num.reads=1, debug=TRUE) {
 
-log.ratio.confirmed.ta.vs.dn <- log2(frequency.cofactors.ta / frequency.cofactors.dn)
-names(log.ratio.confirmed.ta.vs.dn) <- prettyIdentifierJaspar(names(log.ratio.confirmed.ta.vs.dn))
-log.ratio.confirmed.ta.vs.dn.human <- log.ratio.confirmed.ta.vs.dn[is.human.jaspar.id(names(log.ratio.confirmed.ta.vs.dn))]
+    # cell.line <- "skmel29_2"
 
-frequency.cofactors.initial <- m.contexts.num.binary.sum.total/m.contexts.num.tfbs.total
+    if (! cell.line %in% c("skmel29_2","skmel29_1","saos2")) {
+        stop("E: Invalid cell line specified. Only 'skmel29_2' or 'saos2' are supported.\n")
+    }
+
+    if (debug) {
+        cat("D: Preparing data for Volcano plot of cell line '",cell.line,"' with threshold ",threshold.num.reads,".\n",sep="")
+    }
+
+    m.context.num.binary.confirmed.sum.total <- sapply(c("TA","DN","GFP"), function(ta.or.dn) {
+        rowSums(count.cofactors.per.tfbs(confirmation=c("tp73"), TA.or.DN=ta.or.dn, cell.lines=cell.line, threshold.num.reads=threshold.num.reads), na.rm = TRUE)
+    })
+
+    print(apply(m.context.num.binary.confirmed.sum.total, 2, quantile, na.rm = TRUE))
+
+    if (debug) {
+        cat("D: 1\n")
+    }
+
+    m.context.num.tfbs.confirmed.total <- sapply(c("TA","DN","GFP"), function(ta.or.dn) {
+        sum(count.tfbs(confirmation=c("tp73"), TA.or.DN=ta.or.dn, cell.lines=cell.line, threshold.num.reads=threshold.num.reads))
+    })
+
+    if (debug) {
+        cat("D: 2\n")
+    }
+
+    frequency.cofactors <- sapply(c("TA","DN","GFP"), function(ta.or.dn) {
+        a <- (m.context.num.binary.confirmed.sum.total[,ta.or.dn]) / (m.context.num.tfbs.confirmed.total[ta.or.dn])
+        names(a) <- prettyIdentifierJaspar(names(a))
+        a
+    })
+
+    print(apply(frequency.cofactors, 2, quantile, na.rm = TRUE))
+
+    if (debug) {
+        cat("D: 3\n")
+    }
+
+    frequency.cofactors.human <- frequency.cofactors[is.human.jaspar.id(rownames(frequency.cofactors)),]
+
+    if (debug) {
+        cat("D: 4\n")
+    }
+
+    log.ratio.confirmed.ta.vs.dn <- log2(frequency.cofactors[,"TA"] / frequency.cofactors[,"DN"])
+    log.ratio.confirmed.ta.vs.dn.human <- log.ratio.confirmed.ta.vs.dn[is.human.jaspar.id(names(log.ratio.confirmed.ta.vs.dn))]
+ 
+    if (debug) {
+        cat("D: 5\n")
+    }
+
+    cat("All names in sync: "); print(all(rownames(frequency.cofactors) == prettyIdentifierJaspar(names(frequency.cofactors.initial))))
+
+    enrichment <- apply(frequency.cofactors,2,function(X) {
+        log2(X / frequency.cofactors.initial)
+    })
+
+    enrichment.mean <- apply(enrichment, 2, mean, na.rm = TRUE)
+    if (any(abs(enrichment.mean) > 0.50)) {
+        print(apply(enrichment, 2, quantile,na.rm=T))
+        stop("E: Enrichment mean values are too high, check the data or threshold.")
+    }
+
+    if (debug) {
+        cat("D: 6\n")
+    }
+
+    enrichment.human <- enrichment[is.human.jaspar.id(rownames(enrichment)),]
+
+    list(
+        enrichment = enrichment,
+        enrichment.human = enrichment.human,
+        m.context.num.tfbs.confirmed.total = m.context.num.tfbs.confirmed.total,
+        m.context.num.binary.confirmed.sum.total = m.context.num.binary.confirmed.sum.total,
+        frequency.cofactors = frequency.cofactors,
+        frequency.cofactors.human = frequency.cofactors.human,
+        threshold.num.reads = threshold.num.reads,
+        log.ratio.confirmed.ta.vs.dn = log.ratio.confirmed.ta.vs.dn,
+        log.ratio.confirmed.ta.vs.dn.human = log.ratio.confirmed.ta.vs.dn.human,
+        cell.line = cell.line
+        )
+}
+
+if (FALSE) {
+    m.contexts.num.binary.confirmed.ta.sum.total <- rowSums(count.cofactors.per.tfbs(confirmation=c("tp73"), TA.or.DN="TA", threshold.num.reads=threshold.num.reads), na.rm = TRUE)
+    m.contexts.num.tfbs.confirmed.ta.total <- sum(count.tfbs(confirmation=c("tp73"), TA.or.DN="TA", threshold.num.reads=threshold.num.reads))
+    # 948129
+    frequency.cofactors.ta <- m.contexts.num.binary.confirmed.ta.sum.total/m.contexts.num.tfbs.confirmed.ta.total
+    names(frequency.cofactors.ta) <- prettyIdentifierJaspar(names(frequency.cofactors.ta))
+
+    m.contexts.num.binary.confirmed.dn.sum.total <- rowSums(count.cofactors.per.tfbs(confirmation=c("tp73"), TA.or.DN="DN", threshold.num.reads=threshold.num.reads), na.rm = TRUE)
+    m.contexts.num.tfbs.confirmed.dn.total <- sum(count.tfbs(confirmation=c("tp73"), TA.or.DN="DN", threshold.num.reads=threshold.num.reads))
+    frequency.cofactors.dn <- m.contexts.num.binary.confirmed.dn.sum.total/m.contexts.num.tfbs.confirmed.dn.total
+    names(frequency.cofactors.dn) <- prettyIdentifierJaspar(names(frequency.cofactors.dn))
+
+    log.ratio.confirmed.ta.vs.dn <- log2(frequency.cofactors.ta / frequency.cofactors.dn)
+    names(log.ratio.confirmed.ta.vs.dn) <- prettyIdentifierJaspar(names(log.ratio.confirmed.ta.vs.dn))
+    log.ratio.confirmed.ta.vs.dn.human <- log.ratio.confirmed.ta.vs.dn[is.human.jaspar.id(names(log.ratio.confirmed.ta.vs.dn))]
 
 #frequency.cofactors.taOrDn.human <- frequency.cofactors.taOrDn[is.human.jaspar.id(names(frequency.cofactors.taOrDn))]
-frequency.cofactors.ta.human <- frequency.cofactors.ta[is.human.jaspar.id(names(frequency.cofactors.ta))]
-frequency.cofactors.dn.human <- frequency.cofactors.dn[is.human.jaspar.id(names(frequency.cofactors.dn))]
+    frequency.cofactors.ta.human <- frequency.cofactors.ta[is.human.jaspar.id(names(frequency.cofactors.ta))]
+    frequency.cofactors.dn.human <- frequency.cofactors.dn[is.human.jaspar.id(names(frequency.cofactors.dn))]
 
 #enrichment.taOrDn <- log2(frequency.cofactors.taOrDn / frequency.cofactors.initial)
 ## enrichment.taOrDn <- log2((m.contexts.num.binary.confirmed.taOrDn.sum.total/m.contexts.num.tfbs.confirmed.taOrDn.total) / (m.contexts.num.binary.sum.total/m.contexts.num.tfbs.total))
 #names(enrichment.taOrDn) <- prettyIdentifierJaspar(names(enrichment.taOrDn))
 #enrichment.taOrDn.human <- enrichment.taOrDn[is.human.jaspar.id(names(enrichment.taOrDn))]
 
-enrichment.ta <- log2(frequency.cofactors.ta / frequency.cofactors.initial)
-names(enrichment.ta) <- prettyIdentifierJaspar(names(enrichment.ta))
-enrichment.ta.human <- enrichment.ta[is.human.jaspar.id(names(enrichment.ta))]
+    enrichment.ta <- log2(frequency.cofactors.ta / frequency.cofactors.initial)
+    names(enrichment.ta) <- prettyIdentifierJaspar(names(enrichment.ta))
+    enrichment.ta.human <- enrichment.ta[is.human.jaspar.id(names(enrichment.ta))]
 
-enrichment.dn <- log2(frequency.cofactors.dn / frequency.cofactors.initial)
-names(enrichment.dn) <- prettyIdentifierJaspar(names(enrichment.dn))
-enrichment.dn.human <- enrichment.dn[is.human.jaspar.id(names(enrichment.dn))]
+    enrichment.dn <- log2(frequency.cofactors.dn / frequency.cofactors.initial)
+    names(enrichment.dn) <- prettyIdentifierJaspar(names(enrichment.dn))
+    enrichment.dn.human <- enrichment.dn[is.human.jaspar.id(names(enrichment.dn))]
 
-# Enrichments for methylation for CUT&RUN-confirmed p73 binding sites
-#m.contexts.num.binary.confirmed.taOrDn.methylation.sum.total <- rowSums(count.cofactors.per.tfbs(confirmation=c("tp73","pos"), TA.or.DN="any", threshold.num.reads=threshold.num.reads), na.rm = TRUE))
-m.contexts.num.binary.confirmed.ta.methylation.sum.total <- rowSums(count.cofactors.per.tfbs(confirmation=c("tp73","pos"), TA.or.DN="TA", threshold.num.reads=threshold.num.reads), na.rm = TRUE)
-m.contexts.num.binary.confirmed.dn.methylation.sum.total <- rowSums(count.cofactors.per.tfbs(confirmation=c("tp73","pos"), TA.or.DN="DN", threshold.num.reads=threshold.num.reads), na.rm = TRUE)
+    # Enrichments for methylation for CUT&RUN-confirmed p73 binding sites
+    #m.contexts.num.binary.confirmed.taOrDn.methylation.sum.total <- rowSums(count.cofactors.per.tfbs(confirmation=c("tp73","pos"), TA.or.DN="any", threshold.num.reads=threshold.num.reads), na.rm = TRUE))
+    m.contexts.num.binary.confirmed.ta.methylation.sum.total <- rowSums(count.cofactors.per.tfbs(confirmation=c("tp73","pos"), TA.or.DN="TA", threshold.num.reads=threshold.num.reads), na.rm = TRUE)
+    m.contexts.num.binary.confirmed.dn.methylation.sum.total <- rowSums(count.cofactors.per.tfbs(confirmation=c("tp73","pos"), TA.or.DN="DN", threshold.num.reads=threshold.num.reads), na.rm = TRUE)
 
-#m.contexts.num.tfbs.confirmed.taOrDn.methylation <- sum(count.tfbs(confirmation=c("tp73","pos"), TA.or.DN="any", threshold.num.reads=threshold.num.reads), na.rm = TRUE)
-m.contexts.num.tfbs.confirmed.ta.methylation.total <- sum(count.tfbs(confirmation=c("tp73","pos"), TA.or.DN="TA", threshold.num.reads=threshold.num.reads), na.rm = TRUE)
-m.contexts.num.tfbs.confirmed.dn.methylation.total <- sum(count.tfbs(confirmation=c("tp73","pos"), TA.or.DN="DN", threshold.num.reads=threshold.num.reads), na.rm = TRUE)
+    #m.contexts.num.tfbs.confirmed.taOrDn.methylation <- sum(count.tfbs(confirmation=c("tp73","pos"), TA.or.DN="any", threshold.num.reads=threshold.num.reads), na.rm = TRUE)
+    m.contexts.num.tfbs.confirmed.ta.methylation.total <- sum(count.tfbs(confirmation=c("tp73","pos"), TA.or.DN="TA", threshold.num.reads=threshold.num.reads), na.rm = TRUE)
+    m.contexts.num.tfbs.confirmed.dn.methylation.total <- sum(count.tfbs(confirmation=c("tp73","pos"), TA.or.DN="DN", threshold.num.reads=threshold.num.reads), na.rm = TRUE)
 
-#frequency.cofactors.taOrDn.methylation <- m.contexts.num.binary.confirmed.taOrDn.methylation.sum.total / m.contexts.num.tfbs.confirmed.taOrDn.methylation.total
-#names(frequency.cofactors.taOrDn.methylation) <- prettyIdentifierJaspar(names(frequency.cofactors.taOrDn.methylation))
-frequency.cofactors.ta.methylation <- m.contexts.num.binary.confirmed.ta.methylation.sum.total / m.contexts.num.tfbs.confirmed.ta.methylation.total
-names(frequency.cofactors.ta.methylation) <- prettyIdentifierJaspar(names(frequency.cofactors.ta.methylation))
-frequency.cofactors.dn.methylation <- m.contexts.num.binary.confirmed.dn.methylation.sum.total / m.contexts.num.tfbs.confirmed.dn.methylation.total
-names(frequency.cofactors.dn.methylation) <- prettyIdentifierJaspar(names(frequency.cofactors.dn.methylation))
+    #frequency.cofactors.taOrDn.methylation <- m.contexts.num.binary.confirmed.taOrDn.methylation.sum.total / m.contexts.num.tfbs.confirmed.taOrDn.methylation.total
+    #names(frequency.cofactors.taOrDn.methylation) <- prettyIdentifierJaspar(names(frequency.cofactors.taOrDn.methylation))
+    frequency.cofactors.ta.methylation <- m.contexts.num.binary.confirmed.ta.methylation.sum.total / m.contexts.num.tfbs.confirmed.ta.methylation.total
+    names(frequency.cofactors.ta.methylation) <- prettyIdentifierJaspar(names(frequency.cofactors.ta.methylation))
+    frequency.cofactors.dn.methylation <- m.contexts.num.binary.confirmed.dn.methylation.sum.total / m.contexts.num.tfbs.confirmed.dn.methylation.total
+    names(frequency.cofactors.dn.methylation) <- prettyIdentifierJaspar(names(frequency.cofactors.dn.methylation))
 
-#enrichment.taOrDn.methylation.vs.taOrDn.tp73 <- log2(frequency.cofactors.taOrDn.methylation / frequency.cofactors.taOrDn)
-enrichment.ta.methylation.vs.ta.tp73 <- log2(frequency.cofactors.ta.methylation / frequency.cofactors.ta)
-enrichment.dn.methylation.vs.dn.tp73 <- log2(frequency.cofactors.dn.methylation / frequency.cofactors.dn)
-#enrichment.taOrDn.methylation.vs.taOrDn.tp73.human <- enrichment.taOrDn.methylation.vs.taOrDn.tp73[is.human.jaspar.id(names(enrichment.taOrDn.methylation.vs.taOrDn.tp73))]
-enrichment.ta.methylation.vs.ta.tp73.human <- enrichment.ta.methylation.vs.ta.tp73[is.human.jaspar.id(names(enrichment.ta.methylation.vs.ta.tp73))]
-enrichment.dn.methylation.vs.dn.tp73.human <- enrichment.dn.methylation.vs.dn.tp73[is.human.jaspar.id(names(enrichment.dn.methylation.vs.dn.tp73))]
+    #enrichment.taOrDn.methylation.vs.taOrDn.tp73 <- log2(frequency.cofactors.taOrDn.methylation / frequency.cofactors.taOrDn)
+    enrichment.ta.methylation.vs.ta.tp73 <- log2(frequency.cofactors.ta.methylation / frequency.cofactors.ta)
+    enrichment.dn.methylation.vs.dn.tp73 <- log2(frequency.cofactors.dn.methylation / frequency.cofactors.dn)
+    #enrichment.taOrDn.methylation.vs.taOrDn.tp73.human <- enrichment.taOrDn.methylation.vs.taOrDn.tp73[is.human.jaspar.id(names(enrichment.taOrDn.methylation.vs.taOrDn.tp73))]
+    enrichment.ta.methylation.vs.ta.tp73.human <- enrichment.ta.methylation.vs.ta.tp73[is.human.jaspar.id(names(enrichment.ta.methylation.vs.ta.tp73))]
+    enrichment.dn.methylation.vs.dn.tp73.human <- enrichment.dn.methylation.vs.dn.tp73[is.human.jaspar.id(names(enrichment.dn.methylation.vs.dn.tp73))]
 
-log.ratio.confirmed.ta.vs.dn.methylation <- log2(enrichment.ta.methylation.vs.ta.tp73 / enrichment.dn.methylation.vs.dn.tp73)
-names(log.ratio.confirmed.ta.vs.dn.methylation) <- prettyIdentifierJaspar(names(log.ratio.confirmed.ta.vs.dn.methylation))
-log.ratio.confirmed.ta.vs.dn.methylation.human <- log.ratio.confirmed.ta.vs.dn.methylation[is.human.jaspar.id(names(log.ratio.confirmed.ta.vs.dn.methylation))]
+    log.ratio.confirmed.ta.vs.dn.methylation <- log2(enrichment.ta.methylation.vs.ta.tp73 / enrichment.dn.methylation.vs.dn.tp73)
+    names(log.ratio.confirmed.ta.vs.dn.methylation) <- prettyIdentifierJaspar(names(log.ratio.confirmed.ta.vs.dn.methylation))
+    log.ratio.confirmed.ta.vs.dn.methylation.human <- log.ratio.confirmed.ta.vs.dn.methylation[is.human.jaspar.id(names(log.ratio.confirmed.ta.vs.dn.methylation))]
 
-# Again for methylation for CUT&RUN-confirmed p73 binding sites, but only accepting TFBS with up-regulated methylation
+    # Again for methylation for CUT&RUN-confirmed p73 binding sites, but only accepting TFBS with up-regulated methylation
 
-#m.contexts.num.binary.confirmed.taOrDn.methylation.is.up.sum.total <- rowSums(count.cofactors.per.tfbs(confirmation=c("tp73","pos"), TA.or.DN="any", threshold.num.reads=threshold.num.reads), na.rm = TRUE)
-m.contexts.num.binary.confirmed.ta.methylation.is.up.sum.total <- rowSums(count.cofactors.per.tfbs(confirmation=c("tp73","pos"), TA.or.DN="TA", threshold.num.reads=threshold.num.reads), na.rm = TRUE)
-m.contexts.num.binary.confirmed.dn.methylation.is.up.sum.total <- rowSums(count.cofactors.per.tfbs(confirmation=c("tp73","pos"), TA.or.DN="DN", threshold.num.reads=threshold.num.reads), na.rm = TRUE)
-#m.contexts.num.tfbs.confirmed.taOrDn.methylation.is.up.total <- sum(count.tfbs(confirmation=c("tp73","pos"), TA.or.DN="any", threshold.num.reads=threshold.num.reads), na.rm=T)
-m.contexts.num.tfbs.confirmed.ta.methylation.is.up.total <- sum(count.tfbs(confirmation=c("tp73","pos"), TA.or.DN="TA", threshold.num.reads=threshold.num.reads), na.rm=T)
-m.contexts.num.tfbs.confirmed.dn.methylation.is.up.total <- sum(count.tfbs(confirmation=c("tp73","pos"), TA.or.DN="DN", threshold.num.reads=threshold.num.reads), na.rm=T)
+    #m.contexts.num.binary.confirmed.taOrDn.methylation.is.up.sum.total <- rowSums(count.cofactors.per.tfbs(confirmation=c("tp73","pos"), TA.or.DN="any", threshold.num.reads=threshold.num.reads), na.rm = TRUE)
+    m.contexts.num.binary.confirmed.ta.methylation.is.up.sum.total <- rowSums(count.cofactors.per.tfbs(confirmation=c("tp73","pos"), TA.or.DN="TA", threshold.num.reads=threshold.num.reads), na.rm = TRUE)
+    m.contexts.num.binary.confirmed.dn.methylation.is.up.sum.total <- rowSums(count.cofactors.per.tfbs(confirmation=c("tp73","pos"), TA.or.DN="DN", threshold.num.reads=threshold.num.reads), na.rm = TRUE)
+    #m.contexts.num.tfbs.confirmed.taOrDn.methylation.is.up.total <- sum(count.tfbs(confirmation=c("tp73","pos"), TA.or.DN="any", threshold.num.reads=threshold.num.reads), na.rm=T)
+    m.contexts.num.tfbs.confirmed.ta.methylation.is.up.total <- sum(count.tfbs(confirmation=c("tp73","pos"), TA.or.DN="TA", threshold.num.reads=threshold.num.reads), na.rm=T)
+    m.contexts.num.tfbs.confirmed.dn.methylation.is.up.total <- sum(count.tfbs(confirmation=c("tp73","pos"), TA.or.DN="DN", threshold.num.reads=threshold.num.reads), na.rm=T)
 
-#frequency.cofactors.taOrDn.methylation.is.up <- m.contexts.num.binary.confirmed.taOrDn.methylation.is.up.sum.total / m.contexts.num.tfbs.confirmed.taOrDn.methylation.is.up.total
-#names(frequency.cofactors.taOrDn.methylation.is.up) <- prettyIdentifierJaspar(names(frequency.cofactors.taOrDn.methylation.is.up))
-frequency.cofactors.ta.methylation.is.up <- m.contexts.num.binary.confirmed.ta.methylation.is.up.sum.total / m.contexts.num.tfbs.confirmed.ta.methylation.is.up.total
-names(frequency.cofactors.ta.methylation.is.up) <- prettyIdentifierJaspar(names(frequency.cofactors.ta.methylation.is.up))
-frequency.cofactors.dn.methylation.is.up <- m.contexts.num.binary.confirmed.dn.methylation.is.up.sum.total / m.contexts.num.tfbs.confirmed.dn.methylation.is.up.total
-names(frequency.cofactors.dn.methylation.is.up) <- prettyIdentifierJaspar(names(frequency.cofactors.dn.methylation.is.up))
-#frequency.cofactors.taOrDn.methylation.is.up.human <- frequency.cofactors.taOrDn.methylation.is.up[is.human.jaspar.id(names(frequency.cofactors.taOrDn.methylation.is.up))]
-frequency.cofactors.ta.methylation.is.up.human <- frequency.cofactors.ta.methylation.is.up[is.human.jaspar.id(names(frequency.cofactors.ta.methylation.is.up))]
-frequency.cofactors.dn.methylation.is.up.human <- frequency.cofactors.dn.methylation.is.up[is.human.jaspar.id(names(frequency.cofactors.dn.methylation.is.up))]
+    #frequency.cofactors.taOrDn.methylation.is.up <- m.contexts.num.binary.confirmed.taOrDn.methylation.is.up.sum.total / m.contexts.num.tfbs.confirmed.taOrDn.methylation.is.up.total
+    #names(frequency.cofactors.taOrDn.methylation.is.up) <- prettyIdentifierJaspar(names(frequency.cofactors.taOrDn.methylation.is.up))
+    frequency.cofactors.ta.methylation.is.up <- m.contexts.num.binary.confirmed.ta.methylation.is.up.sum.total / m.contexts.num.tfbs.confirmed.ta.methylation.is.up.total
+    names(frequency.cofactors.ta.methylation.is.up) <- prettyIdentifierJaspar(names(frequency.cofactors.ta.methylation.is.up))
+    frequency.cofactors.dn.methylation.is.up <- m.contexts.num.binary.confirmed.dn.methylation.is.up.sum.total / m.contexts.num.tfbs.confirmed.dn.methylation.is.up.total
+    names(frequency.cofactors.dn.methylation.is.up) <- prettyIdentifierJaspar(names(frequency.cofactors.dn.methylation.is.up))
+    #frequency.cofactors.taOrDn.methylation.is.up.human <- frequency.cofactors.taOrDn.methylation.is.up[is.human.jaspar.id(names(frequency.cofactors.taOrDn.methylation.is.up))]
+    frequency.cofactors.ta.methylation.is.up.human <- frequency.cofactors.ta.methylation.is.up[is.human.jaspar.id(names(frequency.cofactors.ta.methylation.is.up))]
+    frequency.cofactors.dn.methylation.is.up.human <- frequency.cofactors.dn.methylation.is.up[is.human.jaspar.id(names(frequency.cofactors.dn.methylation.is.up))]
 
 
-#enrichment.taOrDn.methylation.is.up.vs.taOrDn.tp73 <- log2(frequency.cofactors.taOrDn.methylation.is.up / frequency.cofactors.taOrDn)
-enrichment.ta.methylation.is.up.vs.ta.tp73 <- log2(frequency.cofactors.ta.methylation.is.up / frequency.cofactors.ta)
-enrichment.dn.methylation.is.up.vs.dn.tp73 <- log2(frequency.cofactors.dn.methylation.is.up / frequency.cofactors.dn)
-#enrichment.taOrDn.methylation.is.up.vs.taOrDn.tp73.human <- enrichment.taOrDn.methylation.is.up.vs.taOrDn.tp73[is.human.jaspar.id(names(enrichment.taOrDn.methylation.is.up.vs.taOrDn.tp73))]
-enrichment.ta.methylation.is.up.vs.ta.tp73.human <- enrichment.ta.methylation.is.up.vs.ta.tp73[is.human.jaspar.id(names(enrichment.ta.methylation.is.up.vs.ta.tp73))]
-enrichment.dn.methylation.is.up.vs.dn.tp73.human <- enrichment.dn.methylation.is.up.vs.dn.tp73[is.human.jaspar.id(names(enrichment.dn.methylation.is.up.vs.dn.tp73))]
+    #enrichment.taOrDn.methylation.is.up.vs.taOrDn.tp73 <- log2(frequency.cofactors.taOrDn.methylation.is.up / frequency.cofactors.taOrDn)
+    enrichment.ta.methylation.is.up.vs.ta.tp73 <- log2(frequency.cofactors.ta.methylation.is.up / frequency.cofactors.ta)
+    enrichment.dn.methylation.is.up.vs.dn.tp73 <- log2(frequency.cofactors.dn.methylation.is.up / frequency.cofactors.dn)
+    #enrichment.taOrDn.methylation.is.up.vs.taOrDn.tp73.human <- enrichment.taOrDn.methylation.is.up.vs.taOrDn.tp73[is.human.jaspar.id(names(enrichment.taOrDn.methylation.is.up.vs.taOrDn.tp73))]
+    enrichment.ta.methylation.is.up.vs.ta.tp73.human <- enrichment.ta.methylation.is.up.vs.ta.tp73[is.human.jaspar.id(names(enrichment.ta.methylation.is.up.vs.ta.tp73))]
+    enrichment.dn.methylation.is.up.vs.dn.tp73.human <- enrichment.dn.methylation.is.up.vs.dn.tp73[is.human.jaspar.id(names(enrichment.dn.methylation.is.up.vs.dn.tp73))]
 
-log.ratio.confirmed.ta.vs.dn.methylation.is.up <- enrichment.ta.methylation.is.up.vs.ta.tp73 - enrichment.dn.methylation.is.up.vs.dn.tp73
-log.ratio.confirmed.ta.vs.dn.methylation.is.up.human <- log.ratio.confirmed.ta.vs.dn.methylation.is.up[is.human.jaspar.id(names(log.ratio.confirmed.ta.vs.dn.methylation.is.up))]
+    log.ratio.confirmed.ta.vs.dn.methylation.is.up <- enrichment.ta.methylation.is.up.vs.ta.tp73 - enrichment.dn.methylation.is.up.vs.dn.tp73
+    log.ratio.confirmed.ta.vs.dn.methylation.is.up.human <- log.ratio.confirmed.ta.vs.dn.methylation.is.up[is.human.jaspar.id(names(log.ratio.confirmed.ta.vs.dn.methylation.is.up))]
+}
 
 
 # Volcano-like scatter plot: enrichment.taOrDn (X) vs frequency.cofactors.taOrDn (Y)
@@ -289,9 +424,13 @@ require(ggrepel)
 #log.ratio.confirmed.ta.vs.dn.human.ranked <- rank(log.ratio.confirmed.ta.vs.dn.human, ties.method = "first")
 #log.ratio.confirmed.ta.vs.dn.human.ranked <- log.ratio.confirmed.ta.vs.dn.human.ranked - mean(log.ratio.confirmed.ta.vs.dn.human.ranked)
 
-my.volcano.plot <- function(data,title="Volcano Plot: Enrichment vs Frequency",
+my.volcano.plot <- function(data,
+                            title="Volcano Plot: Enrichment vs Frequency",
                             xlab="log2 Enrichment (confirmed / initial)",
-                            ylab="Frequency (confirmed / initial)",n.tfbs.prior=NA,n.tfbs.post=NA) {
+                            ylab="Frequency (confirmed / initial)",n.tfbs.prior=NA,n.tfbs.post=NA,
+                            enrichment.min=NA, enrichment.max=NA) {
+
+    cat("D: Plotting Volcano plot with title '",title,"'.\n",sep="")
 
     ggplot(data, aes(x=Enrichment, y=Frequency, label=TF)) +
         geom_point(#aes(fill=TAvsDN),
@@ -307,6 +446,7 @@ my.volcano.plot <- function(data,title="Volcano Plot: Enrichment vs Frequency",
             size = 2.5, max.overlaps = Inf, min.segment.length = 0,
             box.padding = 0.3, point.padding = 0.2, segment.color = "grey90"
         ) +
+        xlim(enrichment.min, enrichment.max) +
         labs(
             title=title,
             x=xlab,
@@ -318,8 +458,6 @@ my.volcano.plot <- function(data,title="Volcano Plot: Enrichment vs Frequency",
 
 #enrichment.ta.human>0 & enrichment.dn.human<0
 
-pdf.volcano.filename <- paste("volcano_plot_enrichment_vs_frequency_treshold_",threshold.num.reads,".pdf",sep="")
-pdf(pdf.volcano.filename, width=11, height=8)
 
 # p73 binding enrichment plots
 
@@ -333,24 +471,139 @@ if (FALSE) {
     my.volcano.plot(volcano_data.taOrDn,title=paste0("Enrichment for p73 binding (TA, DN or GFP confirmed by ",threshold.num.reads,"+ reads)"))
 }
 
-volcano_data.ta <- data.frame(
-    TF = sapply(strsplit(x=names(enrichment.ta.human),split="[_ ]",fixed=FALSE), function(x) x[1]),
-    Enrichment = enrichment.ta.human,
-    Frequency = frequency.cofactors.ta.human,
+if (FALSE) {
+
+    volcano_data.ta <- data.frame(
+        TF = sapply(strsplit(x=names(enrichment.ta.human),split="[_ ]",fixed=FALSE), function(x) x[1]),
+        Enrichment = enrichment.ta.human,
+        Frequency = frequency.cofactors.ta.human,
+        TAvsDN = log.ratio.confirmed.ta.vs.dn.human
+    )
+    my.volcano.plot(volcano_data.ta,title=paste0("Enrichment for p73 binding (TA confirmed by ",threshold.num.reads,"+ reads)"))
+
+    relevant.cofactors.ta <- enrichment.ta.human > 0.1 & frequency.cofactors.ta.human > 0.05
+    relevant.cofactors <- TRUE & relevant.cofactors.ta
+
+    volcano_data.dn <- data.frame(
+        TF = sapply(strsplit(x=names(enrichment.dn.human),split="[_ ]",fixed=FALSE), function(x) x[1]),
+        Enrichment = enrichment.dn.human,
+        Frequency = frequency.cofactors.dn.human,
+        TAvsDN = log.ratio.confirmed.ta.vs.dn.human
+    )
+    my.volcano.plot(volcano_data.dn,title=paste0("Enrichment for p73 binding (DN confirmed by ",threshold.num.reads,"+ reads)"))
+
+}
+
+d.skmel29_2 <- volcano.plot.for.cell.line(cell.line="skmel29_2", threshold.num.reads=threshold.num.reads, debug=TRUE)
+
+pdf.volcano.filename <- paste("volcano_plot_enrichment_vs_frequency_treshold_",threshold.num.reads,"_",format(Sys.time(), "%Y%m%d"),"_skmel29.pdf",sep="")
+pdf(pdf.volcano.filename, width=11, height=8)
+
+    # SKMel29
+
+    ta.or.dn <- "TA" # "TA" or "DN"
+
+    enrichment.human.min <- min(d.skmel29_2$enrichment.human, na.rm=TRUE)
+    enrichment.human.max <- max(d.skmel29_2$enrichment.human, na.rm=TRUE)
+
+    
+    if (FALSE) {
+        volcano_data <- data.frame(
+            TF = sapply(strsplit(x=names(d.skmel29_2$enrichment[,ta.or.dn]),split="[_ ]",fixed=FALSE), function(x) x[1]),
+            Enrichment = d.skmel29_2$enrichment[,ta.or.dn],
+            Frequency = d.skmel29_2$frequency.cofactors[,ta.or.dn],
+            TAvsDN=d.skmel29_2$enrichment[,"TA"] - d.skmel29_2$enrichment[,"DN"]
+        )
+        my.volcano.plot(volcano_data,title=paste0("Enrichment for p73 binding in SKMel-29 (",ta.or.dn," confirmed by ",threshold.num.reads,"+ reads) - all of JASPAR"),
+                        enrichment.min=enrichment.human.min,enrichment.max=enrichment.human.max)
+    }
+    volcano_data.ta <- volcano_data <- data.frame(
+        TF = sapply(strsplit(x=names(d.skmel29_2$enrichment.human[,ta.or.dn]),split="[_ ]",fixed=FALSE), function(x) x[1]),
+        Enrichment = d.skmel29_2$enrichment.human[,ta.or.dn],
+        Frequency = d.skmel29_2$frequency.cofactors.human[,ta.or.dn],
+        TAvsDN=d.skmel29_2$enrichment.human[,"TA"] - d.skmel29_2$enrichment.human[,"DN"]
+    )
+    my.volcano.plot(volcano_data,title=paste0("Enrichment for p73 binding in SKMel-29 (",ta.or.dn," confirmed by ",threshold.num.reads,"+ reads) - Human subset of JASPAR"),
+                        enrichment.min=enrichment.human.min,enrichment.max=enrichment.human.max)
+
+    ta.or.dn <- "DN" # "TA" or "DN"
+
+    volcano_data.dn <- volcano_data <- data.frame(
+        TF = sapply(strsplit(x=names(d.skmel29_2$enrichment.human[,ta.or.dn]),split="[_ ]",fixed=FALSE), function(x) x[1]),
+        Enrichment = d.skmel29_2$enrichment.human[,ta.or.dn],
+        Frequency = d.skmel29_2$frequency.cofactors.human[,ta.or.dn],
+        TAvsDN=d.skmel29_2$enrichment.human[,"TA"] - d.skmel29_2$enrichment.human[,"DN"]
+    )
+    my.volcano.plot(volcano_data,title=paste0("Enrichment for p73 binding in SKMel-29 (",ta.or.dn," confirmed by ",threshold.num.reads,"+ reads) - Human subset of JASPAR"),
+                        enrichment.min=enrichment.human.min,enrichment.max=enrichment.human.max)
+
+    ta.or.dn <- "GFP" # "TA" or "DN"
+
+    volcano_data.gfp <- volcano_data <- data.frame(
+        TF = sapply(strsplit(x=names(d.skmel29_2$enrichment.human[,ta.or.dn]),split="[_ ]",fixed=FALSE), function(x) x[1]),
+        Enrichment = d.skmel29_2$enrichment.human[,ta.or.dn],
+        Frequency = d.skmel29_2$frequency.cofactors.human[,ta.or.dn],
+        TAvsDN=d.skmel29_2$enrichment.human[,"TA"] - d.skmel29_2$enrichment.human[,"DN"]
+    )
+    my.volcano.plot(volcano_data,title=paste0("Enrichment for p73 binding in SKMel-29 (",ta.or.dn," confirmed by ",threshold.num.reads,"+ reads) - Human subset of JASPAR"),
+                        enrichment.min=enrichment.human.min,enrichment.max=enrichment.human.max)
+
+dev.off()
+cat("I: Volcano plot saved to '",pdf.volcano.filename,"'.\n",sep="")
+
+write.table(list(SKMel29.TA=volcano_data.ta[,-4],SKMel29.DN=volcano_data.dn[,-4],SKMel29.GFP=volcano_data.gfp[,-4]), file=paste0("volcano_data_skmel29_",format(Sys.time(), "%Y%m%d"),".tsv"), row.names=TRUE,na="",col.names=NA,quote=FALSE,sep="\t", dec=",")
+
+
+
+d.saos2 <- volcano.plot.for.cell.line(cell.line="saos2", threshold.num.reads=threshold.num.reads, debug=TRUE)
+
+pdf.volcano.filename <- paste("volcano_plot_enrichment_vs_frequency_treshold_",threshold.num.reads,"_",format(Sys.time(), "%Y%m%d"),"_saos2.pdf",sep="")
+pdf(pdf.volcano.filename, width=11, height=8)
+
+    # Saos2
+
+    ta.or.dn <- "TA" # "TA" or "DN"
+
+    if (FALSE) {
+        volcano_data <- data.frame(
+            TF = sapply(strsplit(x=names(d.saos2$enrichment[,ta.or.dn]),split="[_ ]",fixed=FALSE), function(x) x[1]),
+            Enrichment = d.saos2$enrichment[,ta.or.dn],
+            Frequency = d.saos2$frequency.cofactors[,ta.or.dn]
+        )
+        my.volcano.plot(volcano_data,title=paste0("Enrichment for p73 binding in Saos2 (",ta.or.dn," confirmed by ",threshold.num.reads,"+ reads) - all of JASPAR"))
+    }
+
+    volcano_data <- data.frame(
+        TF = sapply(strsplit(x=names(d.saos2$enrichment.human[,ta.or.dn]),split="[_ ]",fixed=FALSE), function(x) x[1]),
+        Enrichment = d.saos2$enrichment.human[,ta.or.dn],
+        Frequency = d.saos2$frequency.cofactors.human[,ta.or.dn],
+        TAvsDN=d.saos2$enrichment.human[,"TA"] - d.saos2$enrichment.human[,"DN"]
+    )
+    my.volcano.plot(volcano_data,title=paste0("Enrichment for p73 binding in Saos2 (",ta.or.dn," confirmed by ",threshold.num.reads,"+ reads) - Human subset of JASPAR"))
+
+    ta.or.dn <- "DN" # "TA" or "DN"
+
+    volcano_data <- data.frame(
+        TF = sapply(strsplit(x=names(d.saos2$enrichment.human[,ta.or.dn]),split="[_ ]",fixed=FALSE), function(x) x[1]),
+        Enrichment = d.saos2$enrichment.human[,ta.or.dn],
+        Frequency = d.saos2$frequency.cofactors.human[,ta.or.dn],
+        TAvsDN=d.saos2$enrichment.human[,"TA"] - d.saos2$enrichment.human[,"DN"]
+    )
+    my.volcano.plot(volcano_data,title=paste0("Enrichment for p73 binding in Saos2 (",ta.or.dn," confirmed by ",threshold.num.reads,"+ reads) - Human subset of JASPAR"))
+
+
+dev.off()
+
+
+volcano_data.ta.human <- data.frame(
+    TF = sapply(strsplit(x=names(d.skmel29_2$enrichment.human),split="[_ ]",fixed=FALSE), function(x) x[1]),
+    Enrichment = d.skmel29_2$enrichment.human[,"TA"],
+    Frequency = d.skmel29_2$frequency.cofactors.human[,"TA"],
     TAvsDN = log.ratio.confirmed.ta.vs.dn.human
 )
 my.volcano.plot(volcano_data.ta,title=paste0("Enrichment for p73 binding (TA confirmed by ",threshold.num.reads,"+ reads)"))
 
-relevant.cofactors.ta <- enrichment.ta.human > 0.1 & frequency.cofactors.ta.human > 0.05
-relevant.cofactors <- TRUE & relevant.cofactors.ta
 
-volcano_data.dn <- data.frame(
-    TF = sapply(strsplit(x=names(enrichment.dn.human),split="[_ ]",fixed=FALSE), function(x) x[1]),
-    Enrichment = enrichment.dn.human,
-    Frequency = frequency.cofactors.dn.human,
-    TAvsDN = log.ratio.confirmed.ta.vs.dn.human
-)
-my.volcano.plot(volcano_data.dn,title=paste0("Enrichment for p73 binding (DN confirmed by ",threshold.num.reads,"+ reads)"))
 
 relevant.cofactors.dn <- enrichment.dn.human > 0.1 & frequency.cofactors.dn.human > 0.05
 relevant.cofactors <- relevant.cofactors | relevant.cofactors.dn
@@ -390,10 +643,8 @@ if (FALSE) {
     relevant.cofactors.methylation.is.up <- relevant.cofactors.methylation.is.up | relevant.cofactors.methylation.is.up.dn
 }
 
-dev.off()
-cat("I: Volcano plot saved to '",pdf.volcano.filename,"'.\n",sep="")
-
-write.xlsx(list(TA=volcano_data.ta[,-4],DN=volcano_data.dn[,-4]), file="volcano_data.xlsx", row.names=TRUE)
+write.xlsx(list(TA=volcano_data.ta[,-4],DN=volcano_data.dn[,-4]), file=paste0("volcano_data_",format(Sys.time(), "%Y%m%d"),".xlsx"), row.names=TRUE)
+write.table(list(TA=volcano_data.ta[,-4],DN=volcano_data.dn[,-4]), file=paste0("volcano_data_",format(Sys.time(), "%Y%m%d"),".tsv"), row.names=TRUE,na="",col.names=NA,quote=FALSE,sep="\t", dec=",")
 
 
 relevant.cofactors.selection.ta <- names(which(relevant.cofactors.methylation.is.up.ta & relevant.cofactors))
