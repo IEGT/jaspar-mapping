@@ -14,3 +14,7 @@ pssm_scan
 context
 *.gz
 *.RData
+*.pdf
+*.png
+*.svg
+*.jpg
