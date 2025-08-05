@@ -12,10 +12,12 @@ rm(list=grep(ls(),pattern="^mean.NumInWindow*",value=T))
 
 jaspar.human <- read.delim("jaspar_homo.tsv",row.names=1,col.names=FALSE)
 
-# Import function to read and interpret the matrix for individual chromosomes
+# Import series of functions and basic data
 source("analyze_matrix_function_lists.R")
 source("analyze_matrix_function_distances.R")
 source("analyze_matrix_function_promoters.R")
+source("analyze_matrix_function_helper.R")
+source("analyze_matrix_function_retrieve_context.R")
 
 chromosomes <- c(as.character(1:22),"X","Y")
 
@@ -719,7 +721,7 @@ if (FALSE) {
 
 source("analyze_matrix_plots_slots.R")
 
-source("analyze_matrix_plots_heatmap.R")
+## manual ## source("analyze_matrix_plots_heatmap.R")
 
 #
 # OUTDATED (?) BELOW
