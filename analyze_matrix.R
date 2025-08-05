@@ -348,6 +348,7 @@ for (i in names(m.contexts)) {
         cat("E: List of all promoter regions not found for chromosome ",i," - skipping\n",sep="")
         next
     }
+    stopifnot(nrow(m.contexts[[i]]) == length(tfbs.in.promoter.list[[i]][["all.promoter.bed"]]))
     m.contexts[[i]]$InPromoter <- tfbs.in.promoter.list[[i]][["all.promoter.bed"]]
 }
 
@@ -539,6 +540,10 @@ require(ggplot2)
 # FIXME: Find better name and possibly split into multiple files
 source("analyze_matrix_function_lists_genomewide.R")
 
+
+#
+# Manuscript Figure 1C
+#
 svg("fractions_by_score.svg", width=800, height=400)
 # Plot the fractions    
 ggplot(fractions, aes(x = ScoreBin+bin.size/2)) +
@@ -693,8 +698,10 @@ rownames(ta_vs_dn_genesetEMT.TA.DN_tp73Confirm_posConfirm.sorted) <- prettyIdent
 
 # TA-/DN-specific gene expresssion change from Venn diagrams
 
+# Figure 3C
+
 require(xlsx)
-e <- read.xlsx("GeneLists/Venn Diagram (Gene mit hoher p73 Bindung) für Korrelationsgrafik.xlsx",header=F,sheetIndex=1,endRow=8)
+e <- read.xlsx("GeneLists/Venn Diagram (Gene mit hoher p73 Bindung) für Korrelationsgrafik.xlsx",header=F,sheetIndex=2,endRow=8)
 e.ta.up<-unlist(e[1,!is.na(e[1,]),drop=T])[-1]
 e.dn.up<-unlist(e[2,!is.na(e[2,]),drop=T])[-1]
 
