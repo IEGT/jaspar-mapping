@@ -543,29 +543,7 @@ require(ggplot2)
 source("analyze_matrix_function_lists_genomewide.R")
 
 
-#
-# Manuscript Figure 1C
-#
-svg("fractions_by_score.svg", width=800, height=400)
-# Plot the fractions    
-ggplot(fractions, aes(x = ScoreBin+bin.size/2)) +
-    geom_bar(aes(y = TFBS_Count / max(TFBS_Count), fill = "p73 BS Count"), stat = "identity", alpha = 0.5) +
-    geom_line(aes(y = Fraction_DN, color = "DN"), linewidth = 1) +
-    geom_line(aes(y = Fraction_TA, color = "TA"), linewidth = 1) +
-    scale_y_continuous(
-        limits = c(0, 1),  # Ensure the y-axis covers 0 to 1 so 0.15 is visible
-        name = "Fraction confirmed by CUT&RUN",
-        sec.axis = sec_axis(~ . * max(fractions$TFBS_Count), name = "TFBS Count")
-    ) +
-    labs(
-        title = "Fraction of Entries with Value > 0 by Score and TFBS Count",
-        x = "Score",
-        color = "Legend",
-        fill = "Legend"
-    ) +
-    theme_minimal()
-dev.off()
-
+# source("analyze_matrix_figure1C.R")
 
 #
 # Determine genes 1.5fold change upon DN-overexpression but not for TA-overexpression
@@ -700,13 +678,14 @@ rownames(ta_vs_dn_genesetEMT.TA.DN_tp73Confirm_posConfirm.sorted) <- prettyIdent
 
 # TA-/DN-specific gene expresssion change from Venn diagrams
 
-# Figure 3C
+# Figure 3C - preparation
 
 require(xlsx)
-e <- read.xlsx("GeneLists/Venn Diagram (Gene mit hoher p73 Bindung) für Korrelationsgrafik.xlsx",header=F,sheetIndex=2,endRow=8)
+#e <- read.xlsx("GeneLists/Venn Diagram (Gene mit hoher p73 Bindung) für Korrelationsgrafik.xlsx",header=F,sheetIndex=2,endRow=8)
+e <- read.xlsx("GeneLists/Genlisten_fuer_p73_Bindung_EMT_Gene_GSEA_20250721.xlsx",header=F,sheetIndex=2,startRow=2,endRow=4)
 e.ta.up<-unlist(e[1,!is.na(e[1,]),drop=T])[-1]
 e.dn.up<-unlist(e[2,!is.na(e[2,]),drop=T])[-1]
-
+e.both.up<-unlist(e[3,!is.na(e[3,]),drop=T])[-1]
 # Prepare data for vertical plot: top 5, bottom 5, and genes of interest
 require(ggplot2)
 
