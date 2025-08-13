@@ -198,3 +198,15 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
         mean_total_binary = colMeans(context_data_binary, na.rm = TRUE)
     ))
 }
+
+cat("D: Retrieving data for Figures 3C and 4\n")
+
+# Used by Figures 3C and 4
+all_inPromoter_tp73ConfirmAny <- retrieve_context_data_by_chromosome(NULL, confirmation=c("tp73","promoter"),TA.or.DN="any")
+all_inPromoter_tp73ConfirmAny.colSums <- colSums(all_inPromoter_tp73ConfirmAny$context_data_binary,na.rm=T)
+
+all_inPromoter_tp73ConfirmTA <- retrieve_context_data_by_chromosome(NULL, confirmation=c("tp73","promoter"),TA.or.DN="TA")
+all_inPromoter_tp73ConfirmTA.colSums <- colSums(all_inPromoter_tp73ConfirmTA$context_data_binary,na.rm=T)
+
+all_inPromoter_tp73ConfirmDN <- retrieve_context_data_by_chromosome(NULL, confirmation=c("tp73","promoter"),TA.or.DN="DN")
+all_inPromoter_tp73ConfirmDN.colSums <- colSums(all_inPromoter_tp73ConfirmDN$context_data_binary,na.rm=T)
