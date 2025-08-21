@@ -16,9 +16,8 @@ suppressPackageStartupMessages(require(ggrepel))
 #' between variables. The function supports various customization options for
 #' colors, labels, and layout to enhance interpretability.
 #'
-#' @param m A correlation matrix to be visualized.
+#' @param m A correlation matrix or a matrix to be visualized.
 #' @param formats Character string indicating the file formats for the correlation plot
-#' @param mar Margins to be used for the plot.
 #' @param type Character string specifying the type of plot ("full", "upper", or "lower").
 #' @param cofactors.selection.and.order
 #' @param order Character string specifying the ordering method for the correlation matrix.
@@ -32,11 +31,11 @@ suppressPackageStartupMessages(require(ggrepel))
 #' @seealso \code{\link[corrplot]{corrplot}}
 #' @export
 my.corrplot <- function(m,file="correlation_matrix_TFBS",formats="none",
-                        mar=c(0, 2, 0, 0), # Increase top margin for title
+                        mar = c(0, 0, 6, 0),   # Increase top margin (third value)
+                        is.corr=FALSE,
                         cofactors.selection.and.order=NULL, order="hclust", type="upper",
                         title="Correlation Matrix of TFBS (all promoters, TP73 confirmed)",
                         relevant.cofactors.selection.ta=c(), relevant.cofactors.selection.dn=c(), external.relevant.cofactors.selection.always=c()) {
-        #m <- target.gene.selection_tp73ConfirmAny_context_interest.informative
         m.sd <- apply(m,2,sd)
         # Remove constant columns
         m <- m[,m.sd>0]
@@ -45,21 +44,23 @@ my.corrplot <- function(m,file="correlation_matrix_TFBS",formats="none",
         stopifnot(nrow(m) > 0)
 
         cor_matrix <- NULL
- 
-        if (is.null(cofactors.selection.and.order)) {
-            cor_matrix <- cor(x=m, use="pairwise.complete.obs", method="pearson")
+        if (is.corr) {
+            cor_matrix <- m
         } else {
-            # cofactors.selection.and.order is a vector of TFs that need to be described by the correlation matrix m
-            cofactors.selection.and.order <- cofactors.selection.and.order[cofactors.selection.and.order %in% colnames(m)]
-            if (length(cofactors.selection.and.order) == 0) {
-                stop("E: No cofactors selected for correlation matrix.")
+            if (is.null(cofactors.selection.and.order)) {
+                cor_matrix <- cor(x=m, use="pairwise.complete.obs", method="pearson")
             } else {
-                cat("I: Selected for ",length(cofactors.selection.and.order)," cofactors for correlation matrix.\n")
+                # cofactors.selection.and.order is a vector of TFs that need to be described by the correlation matrix m
+                cofactors.selection.and.order <- cofactors.selection.and.order[cofactors.selection.and.order %in% colnames(m)]
+                if (length(cofactors.selection.and.order) == 0) {
+                    stop("E: No cofactors selected for correlation matrix.")
+                } else {
+                    cat("I: Selected for ",length(cofactors.selection.and.order)," cofactors for correlation matrix.\n")
+                }
+                cor_matrix <- cor(x=m[,cofactors.selection.and.order], use="pairwise.complete.obs", method="pearson")
+                cor_matrix <- cor_matrix[cofactors.selection.and.order, cofactors.selection.and.order]
             }
-            cor_matrix <- cor(x=m[,cofactors.selection.and.order], use="pairwise.complete.obs", method="pearson")
-            cor_matrix <- cor_matrix[cofactors.selection.and.order, cofactors.selection.and.order]
         }
-
         # Use the context data for all promoters with TP73 confirmation as the matrix
 
         for(f in formats) {
@@ -80,16 +81,20 @@ my.corrplot <- function(m,file="correlation_matrix_TFBS",formats="none",
                 stop(paste0("E: Unsupported format: '", f, "'"))
             }
         
-            # Increase the bottom margin to make the title fully visible
-            op <- par(mar = c(0, 0, 6, 0)) # Increase bottom margin (third value)
-            ret <- corrplot(cor_matrix, is.corr=TRUE, order=order, method="color", type=type, mar=mar,
-                tl.col= 1 + colnames(cor_matrix) %in% relevant.cofactors.selection.dn + 
+            tl.col <- 1 # black
+            if ("original" == order) {
+                # Use original order of columns
+                tl.col <- ifelse("original" == order, 1 + colnames(cor_matrix) %in% relevant.cofactors.selection.dn + 
                     2*colnames(cor_matrix) %in% relevant.cofactors.selection.ta + 
-                    4*colnames(cor_matrix) %in% external.relevant.cofactors.selection.always,
-                tl.cex=ifelse(nrow(cor_matrix)>180,0.5,0.7), number.cex=0.35, number.digits=1,insig="n",
+                    4*colnames(cor_matrix) %in% external.relevant.cofactors.selection.always, 1)
+            }
+
+            # Increase the bottom margin to make the title fully visible
+            ret <- corrplot(cor_matrix, is.corr=TRUE, order=order, method="color", type=type, mar=mar,
+                tl.col= tl.col,
+                tl.cex=ifelse(nrow(cor_matrix)>180,0.25,0.45), number.cex=0.25, number.digits=1,insig="n",
                 addCoef.col=NULL,
                 title=title)
-            par(op) # Restore previous margins
             legend("bottomleft", legend=c("enriched DN","enriched TA","enriched DN+TA"), fill=c(1+1,1+2,1+1+2), bty="n", cex=0.9, inset=0.02, xpd=TRUE)
 
             if ("none" != f) {
@@ -131,13 +136,14 @@ my.heatmap.and.corrplot <- function(base.filename="gene_selection_tp73ConfirmAny
                                     formats=c("pdf","png","svg"),
                                     target.gene.selection.TA,
                                     target.gene.selection.DN,
-                                    target.gene.selection.always=c("TP73"),
-                                    combined.expression.data = combined.expression.data,
+                                    target.gene.selection.TAandDN=c("TP73"),
+                                    expression.data=combined.expression.data,
                                     external.relevant.cofactors.selection.ta=NULL,
                                     external.relevant.cofactors.selection.dn=NULL,
                                     external.relevant.cofactors.selection.always=c("TP73 (MA0861.1)"),
                                     universe.prior.to.selection.TA = all_inPromoter_tp73ConfirmTA,
                                     universe.prior.to.selection.DN = all_inPromoter_tp73ConfirmDN,
+                                    universe.prior.to.selection.TAandDN = all_inPromoter_tp73ConfirmAll,
                                     universe.prior.to.selection.TAorDN = all_inPromoter_tp73ConfirmAny,
                                     threshold.min.frequency = 0.05,
                                     threshold.min.log2.enrichment = 0.1,
@@ -152,12 +158,28 @@ my.heatmap.and.corrplot <- function(base.filename="gene_selection_tp73ConfirmAny
                                     verbose=TRUE) {
 
     stopifnot(all(formats %in% c("pdf","png","svg","none")))
-    stopifnot("Gene Symbol" %in% colnames(combined.expression.data))
+    stopifnot(!is.null(target.gene.selection.TA) && is.vector(target.gene.selection.TA))
+    stopifnot(!is.null(target.gene.selection.DN) && is.vector(target.gene.selection.DN))
+    # The intersection of TA and DN may be empty
+    stopifnot(is.null(target.gene.selection.TAandDN) || is.vector(target.gene.selection.TAandDN))
+
+    stopifnot(!is.null(expression.data))
+    stopifnot("Gene Symbol" %in% colnames(expression.data))
+
+    stopifnot(!is.null(universe.prior.to.selection.TA))
+    stopifnot(!is.null(universe.prior.to.selection.DN))
+    stopifnot(!is.null(universe.prior.to.selection.TAandDN))
+    stopifnot(!is.null(universe.prior.to.selection.TAorDN))
+
     # Subset combined expression data for target genes - array of >77500 logicals, indicating rows of expression data
-    combined.expression.data.selected.TA = combined.expression.data[,"Gene Symbol"] %in% target.gene.selection.TA
-    combined.expression.data.selected.DN = combined.expression.data[,"Gene Symbol"] %in% target.gene.selection.DN
+    expression.data.selected.TA = expression.data[,"Gene Symbol"] %in% target.gene.selection.TA
+    expression.data.selected.DN = expression.data[,"Gene Symbol"] %in% target.gene.selection.DN
     # for joined representation in Heatmap
-    combined.expression.data.selected.TAorDN = combined.expression.data[,"Gene Symbol"] %in% c(target.gene.selection.TA,target.gene.selection.DN)
+    expression.data.selected.TAandDN = expression.data[,"Gene Symbol"] %in% target.gene.selection.TAandDN |
+                                         (expression.data[,"Gene Symbol"] %in% target.gene.selection.TA & 
+                                          expression.data[,"Gene Symbol"] %in% target.gene.selection.DN)
+
+    expression.data.selected.TAorDN = expression.data[,"Gene Symbol"] %in% c(target.gene.selection.TA,target.gene.selection.DN,target.gene.selection.TAandDN)
 
 
     # Context data retrieval for genes  - presented as list of properties
@@ -169,20 +191,23 @@ my.heatmap.and.corrplot <- function(base.filename="gene_selection_tp73ConfirmAny
     # [13] "num_matches_total"             "mean_by_chromosome"            "mean_total"
     # [16] "mean_total_binary"
     cat("I: Retrieving context data for target genes in TP73 confirmed contexts...takes a while.\n")
-    target.gene.selection_tp73ConfirmTA <- retrieve_context_data_by_chromosome(combined.expression.data.selected.TA, confirmation=c("tp73"),TA.or.DN="TA", verbose=verbose)
-    target.gene.selection_tp73ConfirmDN <- retrieve_context_data_by_chromosome(combined.expression.data.selected.DN, confirmation=c("tp73"),TA.or.DN="DN", verbose=verbose)
-    target.gene.selection_tp73ConfirmTAorDN <- retrieve_context_data_by_chromosome(combined.expression.data.selected.TAorDN, confirmation=c("tp73"),TA.or.DN="any", verbose=verbose)
+    target.gene.selection_tp73ConfirmTA <- retrieve_context_data_by_chromosome(expression.data.selected.TA, confirmation=c("tp73"),TA.or.DN="TA", verbose=verbose)
+    target.gene.selection_tp73ConfirmDN <- retrieve_context_data_by_chromosome(expression.data.selected.DN, confirmation=c("tp73"),TA.or.DN="DN", verbose=verbose)
+    target.gene.selection_tp73ConfirmTAandDN <- retrieve_context_data_by_chromosome(expression.data.selected.TAandDN, confirmation=c("tp73"),TA.or.DN="all", verbose=verbose)
+    target.gene.selection_tp73ConfirmTAorDN <- retrieve_context_data_by_chromosome(expression.data.selected.TAorDN, confirmation=c("tp73"),TA.or.DN="any", verbose=verbose)
 
     if (verbose) {
         cat("I: Distribution of number of matches by chromosome:\n")
         cat("TA:\n"); print(target.gene.selection_tp73ConfirmTA$num_matches_by_chromosome)
         cat("DN:\n"); print(target.gene.selection_tp73ConfirmDN$num_matches_by_chromosome)
-        cat("TA/DN:\n"); print(target.gene.selection_tp73ConfirmTAorDN$num_matches_by_chromosome)
+        cat("TA&DN:\n"); print(target.gene.selection_tp73ConfirmTAandDN$num_matches_by_chromosome)
+        cat("TA|DN:\n"); print(target.gene.selection_tp73ConfirmTAorDN$num_matches_by_chromosome)
 
         cat("I: Total number of matches across all chromosomes:\n",
             "   TA:",sum(target.gene.selection_tp73ConfirmTA$num_matches_by_chromosome),"\n",
             "   DN:",sum(target.gene.selection_tp73ConfirmDN$num_matches_by_chromosome),"\n",
-            "   TA/DN:",sum(target.gene.selection_tp73ConfirmTAorDN$num_matches_by_chromosome),"\n",
+            "   TA&DN:",sum(target.gene.selection_tp73ConfirmTAandDN$num_matches_by_chromosome),"\n",
+            "   TA|DN:",sum(target.gene.selection_tp73ConfirmTAorDN$num_matches_by_chromosome),"\n",
             sep="")
     }
 
@@ -192,8 +217,10 @@ my.heatmap.and.corrplot <- function(base.filename="gene_selection_tp73ConfirmAny
     if (verbose) {cat("TA:\n"); print(target.gene.selection_tp73ConfirmTA.colSums[1:10])}
     target.gene.selection_tp73ConfirmDN.colSums <- colSums(target.gene.selection_tp73ConfirmDN$context_data_binary,na.rm=T)
     if (verbose) {cat("DN:\n"); print(target.gene.selection_tp73ConfirmDN.colSums[1:10])}
+    target.gene.selection_tp73ConfirmTAandDN.colSums <- colSums(target.gene.selection_tp73ConfirmTAandDN$context_data_binary,na.rm=T)
+    if (verbose) {cat("TA&DN:\n"); print(target.gene.selection_tp73ConfirmTAandDN.colSums[1:10])}
     target.gene.selection_tp73ConfirmTAorDN.colSums <- colSums(target.gene.selection_tp73ConfirmTAorDN$context_data_binary,na.rm=T)
-    if (verbose) {cat("TA/DN:\n"); print(target.gene.selection_tp73ConfirmTAorDN.colSums[1:10])}
+    if (verbose) {cat("TA|DN:\n"); print(target.gene.selection_tp73ConfirmTAorDN.colSums[1:10])}
 
 
     # In analogy to Volcano plots - determine enrichment in comparison to background of arbitrary p73 binding sites in promoter regions
@@ -209,13 +236,19 @@ my.heatmap.and.corrplot <- function(base.filename="gene_selection_tp73ConfirmAny
         log2.ratio=log2(target.gene.selection_tp73ConfirmDN$mean_total_binary / universe.prior.to.selection.DN$mean_total_binary)
     )
     
-     target.gene.vs.universe.prior.to.selection_TAorDN <- cbind(
+     target.gene.vs.universe.prior.to.selection_TAandDN <- cbind(
+        mean.enriched=target.gene.selection_tp73ConfirmTAandDN$mean_total_binary,
+        mean.background=universe.prior.to.selection.TAandDN$mean_total_binary,
+        log2.ratio=log2(target.gene.selection_tp73ConfirmTAandDN$mean_total_binary / universe.prior.to.selection.TAandDN$mean_total_binary)
+    )
+
+    target.gene.vs.universe.prior.to.selection_TAorDN <- cbind(
         mean.enriched=target.gene.selection_tp73ConfirmTAorDN$mean_total_binary,
         mean.background=universe.prior.to.selection.TAorDN$mean_total_binary,
         log2.ratio=log2(target.gene.selection_tp73ConfirmTAorDN$mean_total_binary / universe.prior.to.selection.TAorDN$mean_total_binary)
     )
 
-    # Ranking genes for their ratio (== enrichment)
+    # Ranking cofactors for their ratio (== enrichment)
     target.gene.vs.universe.prior.to.selection_TA.sorted <- target.gene.vs.universe.prior.to.selection_TA[order(target.gene.vs.universe.prior.to.selection_TA[, "log2.ratio"],decreasing=T), ]
     head(target.gene.vs.universe.prior.to.selection_TA.sorted,5)
     if (verbose) cat("I: TA Number of target genes vs universe prior to selection: ", nrow(target.gene.vs.universe.prior.to.selection_TA.sorted), "\n")
@@ -226,9 +259,14 @@ my.heatmap.and.corrplot <- function(base.filename="gene_selection_tp73ConfirmAny
     if (verbose) cat("I: DN Number of target genes vs universe prior to selection: ", nrow(target.gene.vs.universe.prior.to.selection_DN.sorted), "\n")
     rownames(target.gene.vs.universe.prior.to.selection_DN.sorted) <- prettyIdentifierJaspar(rownames(target.gene.vs.universe.prior.to.selection_DN.sorted))
 
+    target.gene.vs.universe.prior.to.selection_TAandDN.sorted <- target.gene.vs.universe.prior.to.selection_TAandDN[order(target.gene.vs.universe.prior.to.selection_TAandDN[, "log2.ratio"],decreasing=T), ]
+    head(target.gene.vs.universe.prior.to.selection_TAandDN.sorted,5)
+    if (verbose) cat("I: TA&DN Number of target genes vs universe prior to selection: ", nrow(target.gene.vs.universe.prior.to.selection_TAandDN.sorted), "\n")
+    rownames(target.gene.vs.universe.prior.to.selection_TAandDN.sorted) <- prettyIdentifierJaspar(rownames(target.gene.vs.universe.prior.to.selection_TAandDN.sorted))
+
     target.gene.vs.universe.prior.to.selection_TAorDN.sorted <- target.gene.vs.universe.prior.to.selection_TAorDN[order(target.gene.vs.universe.prior.to.selection_TAorDN[, "log2.ratio"],decreasing=T), ]
     head(target.gene.vs.universe.prior.to.selection_TAorDN.sorted,5)
-    if (verbose) cat("I: TA/DN Number of target genes vs universe prior to selection: ", nrow(target.gene.vs.universe.prior.to.selection_TAorDN.sorted), "\n")
+    if (verbose) cat("I: TA|DN Number of target genes vs universe prior to selection: ", nrow(target.gene.vs.universe.prior.to.selection_TAorDN.sorted), "\n")
     rownames(target.gene.vs.universe.prior.to.selection_TAorDN.sorted) <- prettyIdentifierJaspar(rownames(target.gene.vs.universe.prior.to.selection_TAorDN.sorted))
 
     # Focus on human JASPAR IDs
@@ -236,12 +274,14 @@ my.heatmap.and.corrplot <- function(base.filename="gene_selection_tp73ConfirmAny
         if (verbose) cat("I: Filtering for human JASPAR IDs...\n")
         target.gene.vs.universe.prior.to.selection_TA.sorted <- target.gene.vs.universe.prior.to.selection_TA.sorted[is.human.jaspar.id(rownames(target.gene.vs.universe.prior.to.selection_TA.sorted)),]
         target.gene.vs.universe.prior.to.selection_DN.sorted <- target.gene.vs.universe.prior.to.selection_DN.sorted[is.human.jaspar.id(rownames(target.gene.vs.universe.prior.to.selection_DN.sorted)),]
+        target.gene.vs.universe.prior.to.selection_TAandDN.sorted <- target.gene.vs.universe.prior.to.selection_TAandDN.sorted[is.human.jaspar.id(rownames(target.gene.vs.universe.prior.to.selection_TAandDN.sorted)),]
         target.gene.vs.universe.prior.to.selection_TAorDN.sorted <- target.gene.vs.universe.prior.to.selection_TAorDN.sorted[is.human.jaspar.id(rownames(target.gene.vs.universe.prior.to.selection_TAorDN.sorted)),]
         if (verbose) {
             cat("I: Number of relevant cofactors remaining:",
                 "  TA:", nrow(target.gene.vs.universe.prior.to.selection_TA.sorted),
                 ", DN:", nrow(target.gene.vs.universe.prior.to.selection_DN.sorted),
-                ", TA/DN:", nrow(target.gene.vs.universe.prior.to.selection_TAorDN.sorted), "\n")
+                ", TA&DN:", nrow(target.gene.vs.universe.prior.to.selection_TAandDN.sorted),
+                ", TA|DN:", nrow(target.gene.vs.universe.prior.to.selection_TAorDN.sorted), "\n")
         }
     }
 
@@ -254,6 +294,9 @@ my.heatmap.and.corrplot <- function(base.filename="gene_selection_tp73ConfirmAny
         target.gene.vs.universe.prior.to.selection_DN.sorted <- target.gene.vs.universe.prior.to.selection_DN.sorted[
             target.gene.vs.universe.prior.to.selection_DN.sorted[,"log2.ratio"] < 0 |
             target.gene.vs.universe.prior.to.selection_DN.sorted[,"log2.ratio"] > threshold.min.log2.enrichment,]
+        target.gene.vs.universe.prior.to.selection_TAandDN.sorted <- target.gene.vs.universe.prior.to.selection_TAandDN.sorted[
+            target.gene.vs.universe.prior.to.selection_TAandDN.sorted[,"log2.ratio"] < 0 |
+            target.gene.vs.universe.prior.to.selection_TAandDN.sorted[,"log2.ratio"] > threshold.min.log2.enrichment,]
         target.gene.vs.universe.prior.to.selection_TAorDN.sorted <- target.gene.vs.universe.prior.to.selection_TAorDN.sorted[
             target.gene.vs.universe.prior.to.selection_TAorDN.sorted[,"log2.ratio"] < 0 |
             target.gene.vs.universe.prior.to.selection_TAorDN.sorted[,"log2.ratio"] > threshold.min.log2.enrichment,]
@@ -262,7 +305,8 @@ my.heatmap.and.corrplot <- function(base.filename="gene_selection_tp73ConfirmAny
             cat("I: Number of relevant cofactors remaining:",
                 "  TA:", nrow(target.gene.vs.universe.prior.to.selection_TA.sorted),
                 ", DN:", nrow(target.gene.vs.universe.prior.to.selection_DN.sorted),
-                ", TA/DN:", nrow(target.gene.vs.universe.prior.to.selection_TAorDN.sorted), "\n")
+                ", TA&DN:", nrow(target.gene.vs.universe.prior.to.selection_TAandDN.sorted),
+                ", TA|DN:", nrow(target.gene.vs.universe.prior.to.selection_TAorDN.sorted), "\n")
         }
     }    
 
@@ -275,6 +319,9 @@ my.heatmap.and.corrplot <- function(base.filename="gene_selection_tp73ConfirmAny
         target.gene.vs.universe.prior.to.selection_DN.sorted <- target.gene.vs.universe.prior.to.selection_DN.sorted[
             target.gene.vs.universe.prior.to.selection_DN.sorted[,"log2.ratio"] > 0 |
             target.gene.vs.universe.prior.to.selection_DN.sorted[,"log2.ratio"] < threshold.min.log2.depletion,]
+        target.gene.vs.universe.prior.to.selection_TAandDN.sorted <- target.gene.vs.universe.prior.to.selection_TAandDN.sorted[
+            target.gene.vs.universe.prior.to.selection_TAandDN.sorted[,"log2.ratio"] > 0 |
+            target.gene.vs.universe.prior.to.selection_TAandDN.sorted[,"log2.ratio"] < threshold.min.log2.depletion,]
         target.gene.vs.universe.prior.to.selection_TAorDN.sorted <- target.gene.vs.universe.prior.to.selection_TAorDN.sorted[
             target.gene.vs.universe.prior.to.selection_TAorDN.sorted[,"log2.ratio"] > 0 |
             target.gene.vs.universe.prior.to.selection_TAorDN.sorted[,"log2.ratio"] < threshold.min.log2.depletion,]
@@ -282,7 +329,8 @@ my.heatmap.and.corrplot <- function(base.filename="gene_selection_tp73ConfirmAny
             cat("I: Number of relevant cofactors remaining:",
                 "  TA:", nrow(target.gene.vs.universe.prior.to.selection_TA.sorted),
                 ", DN:", nrow(target.gene.vs.universe.prior.to.selection_DN.sorted),
-                ", TA/DN:", nrow(target.gene.vs.universe.prior.to.selection_TAorDN.sorted), "\n")
+                ", TA&DN:", nrow(target.gene.vs.universe.prior.to.selection_TAandDN.sorted),
+                ", TA|DN:", nrow(target.gene.vs.universe.prior.to.selection_TAorDN.sorted), "\n")
         }
     }
 
@@ -292,6 +340,8 @@ my.heatmap.and.corrplot <- function(base.filename="gene_selection_tp73ConfirmAny
             target.gene.vs.universe.prior.to.selection_TA.sorted[,"mean.enriched"] > threshold.min.frequency,]
         target.gene.vs.universe.prior.to.selection_DN.sorted <- target.gene.vs.universe.prior.to.selection_DN.sorted[
             target.gene.vs.universe.prior.to.selection_DN.sorted[,"mean.enriched"] > threshold.min.frequency,]
+        target.gene.vs.universe.prior.to.selection_TAandDN.sorted <- target.gene.vs.universe.prior.to.selection_TAandDN.sorted[
+            target.gene.vs.universe.prior.to.selection_TAandDN.sorted[,"mean.enriched"] > threshold.min.frequency,]
         target.gene.vs.universe.prior.to.selection_TAorDN.sorted <- target.gene.vs.universe.prior.to.selection_TAorDN.sorted[
             target.gene.vs.universe.prior.to.selection_TAorDN.sorted[,"mean.enriched"] > threshold.min.frequency,]
 
@@ -299,36 +349,73 @@ my.heatmap.and.corrplot <- function(base.filename="gene_selection_tp73ConfirmAny
             cat("I: Number of relevant cofactors remaining:",
                 "  TA:", nrow(target.gene.vs.universe.prior.to.selection_TA.sorted),
                 ", DN:", nrow(target.gene.vs.universe.prior.to.selection_DN.sorted),
-                ", TA/DN:", nrow(target.gene.vs.universe.prior.to.selection_TAorDN.sorted), "\n")
+                ", TA&DN:", nrow(target.gene.vs.universe.prior.to.selection_TAandDN.sorted),
+                ", TA|DN:", nrow(target.gene.vs.universe.prior.to.selection_TAorDN.sorted), "\n")
         }
     }
 
+    #grep(x=rownames(target.gene.vs.universe.prior.to.selection_TA.sorted),pattern="PAT")
     if (!is.na(filter.for.strong.enrichment.num) && filter.for.strong.enrichment.num > 0) {
         if (verbose) cat("I: Filtering for strong enrichment > ",filter.for.strong.enrichment.num,".\n",sep="")
         target.gene.vs.universe.prior.to.selection_TA.sorted <- target.gene.vs.universe.prior.to.selection_TA.sorted[1:filter.for.strong.enrichment.num,]
         target.gene.vs.universe.prior.to.selection_DN.sorted <- target.gene.vs.universe.prior.to.selection_DN.sorted[1:filter.for.strong.enrichment.num,]
+        target.gene.vs.universe.prior.to.selection_TAandDN.sorted <- target.gene.vs.universe.prior.to.selection_TAandDN.sorted[1:filter.for.strong.enrichment.num,]
         target.gene.vs.universe.prior.to.selection_TAorDN.sorted <- target.gene.vs.universe.prior.to.selection_TAorDN.sorted[1:filter.for.strong.enrichment.num,]
         if (verbose) {
             cat("I: Number of relevant cofactors remaining:",
                 "  TA:", nrow(target.gene.vs.universe.prior.to.selection_TA.sorted),
                 ", DN:", nrow(target.gene.vs.universe.prior.to.selection_DN.sorted),
-                ", TA/DN:", nrow(target.gene.vs.universe.prior.to.selection_TAorDN.sorted), "\n")
+                ", TA&DN:", nrow(target.gene.vs.universe.prior.to.selection_TAandDN.sorted),
+                ", TA|DN:", nrow(target.gene.vs.universe.prior.to.selection_TAorDN.sorted), "\n")
         }
     }
 
     cofactor.names.TA <- unique(c(external.relevant.cofactors.selection.ta,external.relevant.cofactors.selection.always,
                                rownames(target.gene.vs.universe.prior.to.selection_TA.sorted)))
+    if (any(is.na(cofactor.names.TA))) {
+        cat("W: NA values found in cofactor.names.TA - removing those\n")
+        cofactor.names.TA <- cofactor.names.TA[!is.na(cofactor.names.TA)]
+    }
     cofactor.names.DN <- unique(c(external.relevant.cofactors.selection.dn,external.relevant.cofactors.selection.always,
                                rownames(target.gene.vs.universe.prior.to.selection_DN.sorted)))
-    cofactor.names.union <- unique(c(cofactor.names.TA, rownames(target.gene.vs.universe.prior.to.selection_TAorDN.sorted), cofactor.names.DN))
+    if (any(is.na(cofactor.names.DN))) {
+        cat("W: NA values found in cofactor.names.DN - removing those\n")
+        cofactor.names.DN <- cofactor.names.DN[!is.na(cofactor.names.DN)]
+    }
+    cofactor.names.TAandDN <- unique(c(external.relevant.cofactors.selection.always,
+                               rownames(target.gene.vs.universe.prior.to.selection_TAandDN.sorted)))
+    if (any(is.na(cofactor.names.TAandDN))) {
+        cat("W: NA values found in cofactor.names.TAandDN - removing those\n")
+        cofactor.names.TAandDN <- cofactor.names.TAandDN[!is.na(cofactor.names.TAandDN)]
+    }
+    cofactor.names.TAorDN <- unique(c(external.relevant.cofactors.selection.always,
+                               rownames(target.gene.vs.universe.prior.to.selection_TAorDN.sorted)))
+    if (any(is.na(cofactor.names.TAorDN))) {
+        cat("W: NA values found in cofactor.names.TAorDN - removing those\n")
+        cofactor.names.TAorDN <- cofactor.names.TAorDN[!is.na(cofactor.names.TAorDN)]
+    }
+    # The order matters here - for the looks only
+    cofactor.names.union <- unique(c(cofactor.names.TA, cofactor.names.TAandDN, cofactor.names.TAorDN, cofactor.names.DN))
+    cofactor.names.union <- unique(c(cofactor.names.TA, cofactor.names.DN))
+    
+    if (any(is.na(cofactor.names.union))) {
+        cat("E: NA values found in cofactor.names.union - removing those, but meant to already have done so in inputs.\n")
+        cofactor.names.union <- cofactor.names.union[!is.na(cofactor.names.union)]
+    }
 
     cat("I: # TF of TA in DN: "); print(sum(cofactor.names.TA %in% cofactor.names.DN))
     cat("I: # TF of DN in TA: "); print(sum(cofactor.names.DN %in% cofactor.names.TA))
+    cat("I: # TF of Union in TA: "); print(sum(cofactor.names.union %in% cofactor.names.TA))
+    cat("I: # TF of Union in DN: "); print(sum(cofactor.names.union %in% cofactor.names.DN))
+    cat("I: # TF of Union in TA&DN: "); print(sum(cofactor.names.union %in% cofactor.names.TAandDN))
+    cat("I: # TF of Union in TA|DN: "); print(sum(cofactor.names.union %in% cofactor.names.TAorDN))
 
      # binary representation of context in p73 binding sites
     target.gene.selection_tp73ConfirmTA_context <- target.gene.selection_tp73ConfirmTA$context_data_binary
     # human-readable column names
     colnames(target.gene.selection_tp73ConfirmTA_context) <- prettyIdentifierJaspar(colnames(target.gene.selection_tp73ConfirmTA_context))
+    # all the transcription factors in either of the sets should be present after name conversion
+    stopifnot(all(cofactor.names.union %in% colnames(target.gene.selection_tp73ConfirmTA_context)))
     # choose the same set of TFs for TA and DN confirmed sites, so we can compare
     target.gene.selection_tp73ConfirmTA_context_interest <- target.gene.selection_tp73ConfirmTA_context[, cofactor.names.union, drop = FALSE]
     # number of observations of TFs within vicinity of confirmed binding sites
@@ -341,28 +428,43 @@ my.heatmap.and.corrplot <- function(base.filename="gene_selection_tp73ConfirmAny
     # analogously for DN
     target.gene.selection_tp73ConfirmDN_context <- target.gene.selection_tp73ConfirmDN$context_data_binary
     colnames(target.gene.selection_tp73ConfirmDN_context) <- prettyIdentifierJaspar(colnames(target.gene.selection_tp73ConfirmDN_context))
+    # all the transcription factors in either of the sets should be present after name conversion
+    stopifnot(all(cofactor.names.union %in% colnames(target.gene.selection_tp73ConfirmDN_context)))
     target.gene.selection_tp73ConfirmDN_context_interest <- target.gene.selection_tp73ConfirmDN_context[, cofactor.names.union, drop = FALSE]
     target.gene.selection_tp73ConfirmDN_context_interest.colsums <- colSums(target.gene.selection_tp73ConfirmDN_context_interest)
     target.gene.selection_tp73ConfirmDN_context_interest.informativeColumNames <- colnames(target.gene.selection_tp73ConfirmDN_context_interest)[target.gene.selection_tp73ConfirmDN_context_interest.colsums > 0]
     target.gene.selection_tp73ConfirmDN_context_interest.informative <- target.gene.selection_tp73ConfirmDN_context_interest[,target.gene.selection_tp73ConfirmDN_context_interest.informativeColumNames, drop = FALSE]
 
+    # analogously for TAandDN
+    target.gene.selection_tp73ConfirmTAandDN_context <- target.gene.selection_tp73ConfirmTAandDN$context_data_binary
+    colnames(target.gene.selection_tp73ConfirmTAandDN_context) <- prettyIdentifierJaspar(colnames(target.gene.selection_tp73ConfirmTAandDN_context))
+    # all the transcription factors in either of the sets should be present after name conversion
+    stopifnot(all(cofactor.names.union %in% colnames(target.gene.selection_tp73ConfirmTAandDN_context)))
+    target.gene.selection_tp73ConfirmTAandDN_context_interest <- target.gene.selection_tp73ConfirmTAandDN_context[, cofactor.names.union, drop = FALSE]
+    target.gene.selection_tp73ConfirmTAandDN_context_interest.colsums <- colSums(target.gene.selection_tp73ConfirmTAandDN_context_interest)
+    target.gene.selection_tp73ConfirmTAandDN_context_interest.informativeColumNames <- colnames(target.gene.selection_tp73ConfirmTAandDN_context_interest)[target.gene.selection_tp73ConfirmTAandDN_context_interest.colsums > 0]
+    target.gene.selection_tp73ConfirmTAandDN_context_interest.informative <- target.gene.selection_tp73ConfirmTAandDN_context_interest[,target.gene.selection_tp73ConfirmTAandDN_context_interest.informativeColumNames, drop = FALSE]
+
     # Preparation for heatmap and correlation matrix
     stopifnot(all(colnames(target.gene.selection_tp73ConfirmTA_context_interest) == colnames(target.gene.selection_tp73ConfirmDN_context_interest)))
 
-    target.gene.selection_tp73ConfirmTA_context_interest.informativeColumNames.TAorDN <- colnames(target.gene.selection_tp73ConfirmTA_context_interest)[target.gene.selection_tp73ConfirmTA_context_interest.colsums > 0 | target.gene.selection_tp73ConfirmDN_context_interest.colsums > 0]
-    target.gene.selection_tp73ConfirmDN_context_interest.informativeColumNames.TAorDN <- colnames(target.gene.selection_tp73ConfirmDN_context_interest)[target.gene.selection_tp73ConfirmTA_context_interest.colsums > 0 | target.gene.selection_tp73ConfirmDN_context_interest.colsums > 0]
+    # Deriving informative column names for TAorDN - which is not explicitly passed as an argument to the function
+    target.gene.selection_tp73ConfirmTA_context_interest.informativeColumNames.TAorDN <- colnames(target.gene.selection_tp73ConfirmTA_context_interest)[target.gene.selection_tp73ConfirmTA_context_interest.colsums > 0 | target.gene.selection_tp73ConfirmDN_context_interest.colsums > 0 | target.gene.selection_tp73ConfirmTAandDN_context_interest.colsums > 0]
+    target.gene.selection_tp73ConfirmDN_context_interest.informativeColumNames.TAorDN <- colnames(target.gene.selection_tp73ConfirmDN_context_interest)[target.gene.selection_tp73ConfirmTA_context_interest.colsums > 0 | target.gene.selection_tp73ConfirmDN_context_interest.colsums > 0 | target.gene.selection_tp73ConfirmTAandDN_context_interest.colsums > 0]
     stopifnot(all(target.gene.selection_tp73ConfirmDN_context_interest.informativeColumNames.TAorDN ==target.gene.selection_tp73ConfirmTA_context_interest.informativeColumNames.TAorDN ))
-    target.gene.selection_tp73ConfirmTAorDN_context_interest.informativeColumNames.TAorDN <- target.gene.selection_tp73ConfirmTA_context_interest.informativeColumNames.TAorDN
 
+    # Start analogously to the TA and DN sets
     target.gene.selection_tp73ConfirmTAorDN_context <- target.gene.selection_tp73ConfirmTAorDN$context_data_binary
     colnames(target.gene.selection_tp73ConfirmTAorDN_context) <- prettyIdentifierJaspar(colnames(target.gene.selection_tp73ConfirmTAorDN_context))
+    # all the transcription factors in either of the sets should be present after name conversion
+    stopifnot(all(cofactor.names.union %in% colnames(target.gene.selection_tp73ConfirmTAorDN_context)))
     target.gene.selection_tp73ConfirmTAorDN_context_interest <- target.gene.selection_tp73ConfirmTAorDN_context[, cofactor.names.union, drop = FALSE]
     # Do not compute colums, just take the same TFs that have been determined for TA and DN individually
     target.gene.selection_tp73ConfirmTAorDN_context_interest.informative <- target.gene.selection_tp73ConfirmTAorDN_context_interest[,target.gene.selection_tp73ConfirmTA_context_interest.informativeColumNames.TAorDN, drop = FALSE]       
 
-    m.cor.ta <- m.cor.dn <- NULL
-
     if (plot.corrplot) {
+
+        m.cor.ta <- m.cor.dn <- NULL
 
         # Plot correlation matrix of all transcription factors (columns) against each other
         ret.corrplot.ta <- my.corrplot(m=target.gene.selection_tp73ConfirmTA_context_interest.informative,
@@ -383,10 +485,11 @@ my.heatmap.and.corrplot <- function(base.filename="gene_selection_tp73ConfirmAny
                         order="original",
                         cofactors.selection.and.order=cofactors.union.order.ta,
                         relevant.cofactors.selection.ta=cofactor.names.TA,  relevant.cofactors.selection.dn=cofactor.names.DN, formats="none",
-                        title="Control experiment - should look like first - Correlation Matrix of TA -confirmed p73 BS cofactors in gene upregulated up TA overexpression - order adjusted to match TA - should look like the first TA one")
+                        title="Control plot - should look like first - Correlation Matrix of TA")
  
         # now the DN one, but ordered to match the TA one
-        ret.corrplot.dn.ordered.ta <- my.corrplot(m=target.gene.selection_tp73ConfirmDN_context_interest.informative[,cofactors.union.order.ta,drop=F],order="original",
+        ret.corrplot.dn.ordered.ta <- my.corrplot(m=target.gene.selection_tp73ConfirmDN_context_interest.informative[,cofactors.union.order.ta,drop=F],
+                        order="original",
                         cofactors.selection.and.order=cofactors.union.order.ta,
                         relevant.cofactors.selection.ta=cofactor.names.TA,  relevant.cofactors.selection.dn=cofactor.names.DN, formats="none",
                         title="Correlation Matrix of DN-confirmed p73 BS cofactors in gene upregulated up DN overexpression - order adjusted to match TA")
@@ -412,11 +515,14 @@ my.heatmap.and.corrplot <- function(base.filename="gene_selection_tp73ConfirmAny
         write.table(m.cor.ta.minus.dn.df, file="correlation_difference_TA_minus_DN.tsv", sep="\t", row.names=FALSE, quote=FALSE, dec=",",col.names=TRUE)
 
         #quantile(m.cor.ta.minus.dn, na.rm=TRUE)
-        ret <- corrplot(corr=m.cor.ta.minus.dn/max(abs(m.cor.ta.minus.dn)), is.corr=TRUE, order="original",addCoef.col=NULL,type="lower",
-                tl.cex=ifelse(nrow(m.cor.ta.minus.dn)>180,0.5,0.7), number.cex=0.35, number.digits=1,insig="n",
-                title=paste0("Difference of correlation matrix of TA-confirmed p73 BS cofactors in genes upregulated up TA overexpression - DN / scaled by ",max(abs(m.cor.ta.minus.dn))))
-
-    
+        ret <- my.corrplot(m=m.cor.ta.minus.dn/max(abs(m.cor.ta.minus.dn)), is.corr=TRUE, order="original",
+                #addCoef.col=NULL,
+                type="lower",
+                #tl.cex=ifelse(nrow(m.cor.ta.minus.dn)>180,0.25,0.5), number.cex=0.25, number.digits=1,insig="n",
+                #cofactors.selection.and.order=cofactors.union.order.ta,
+                relevant.cofactors.selection.ta=cofactor.names.TA,  relevant.cofactors.selection.dn=cofactor.names.DN, formats="none",
+                title=paste0("Difference of correlation matrix of TA-confirmed p73 BS cofactors in genes upregulated up TA overexpression - DN / scaled by ",max(abs(m.cor.ta.minus.dn)))
+            )
 
         x_vals <- colSums(target.gene.selection_tp73ConfirmTA_context_interest.informative[,cofactors.union]) / nrow(target.gene.selection_tp73ConfirmTA_context_interest.informative)
         y_vals <- colSums(target.gene.selection_tp73ConfirmDN_context_interest.informative[,cofactors.union]) / nrow(target.gene.selection_tp73ConfirmDN_context_interest.informative)
@@ -429,7 +535,7 @@ my.heatmap.and.corrplot <- function(base.filename="gene_selection_tp73ConfirmAny
         p <- ggplot(df, aes(x = x, y = y)) +
             geom_point(color = "blue", size = 2) +
             geom_abline(intercept = 0, slope = 1, color = "black") +
-            geom_text_repel(aes(label = label), size = 3, color = "darkred", max.overlaps = Inf) +
+            geom_text_repel(aes(label = label), size = 2.5, color = "darkred", max.overlaps = Inf) +
             labs(
             x = "Relative Abundance in TA",
             y = "Relative Abundance in DN",
@@ -438,7 +544,6 @@ my.heatmap.and.corrplot <- function(base.filename="gene_selection_tp73ConfirmAny
             theme_bw()
         print(p)
 
-        cat("I: Correlation matrix plots saved to 'correlation_matrix_TA_and_DN_separate.pdf'.\n")
     }
     #debugme <- data.frame(colnames(m),col=1 + colnames(m) %in% relevant.cofactors.selection.dn +  2*colnames(m) %in% relevant.cofactors.selection.ta +  4*colnames(m) %in% relevant.cofactors.selection.always)
 
@@ -455,6 +560,10 @@ my.heatmap.and.corrplot <- function(base.filename="gene_selection_tp73ConfirmAny
         target.gene.selection_tp73ConfirmDN_context_interest_heatmap_input <- target.gene.selection_tp73ConfirmDN_context_interest.informative * 1 # transform to numeric
         #stopifnot(nrow(target.gene.selection_tp73ConfirmDN_context_interest_heatmap_input) == length(target.gene.selection_tp73ConfirmDN_context_interest_heatmap_input.genes)  )
 
+        target.gene.selection_tp73ConfirmTAandDN_context_interest_heatmap_input.genes <- target.gene.selection_tp73ConfirmTAandDN$downstream_genes
+        target.gene.selection_tp73ConfirmTAandDN_context_interest_heatmap_input <- target.gene.selection_tp73ConfirmTAandDN_context_interest.informative * 1 # transform to numeric
+        #stopifnot(nrow(target.gene.selection_tp73ConfirmDN_context_interest_heatmap_input) == length(target.gene.selection_tp73ConfirmDN_context_interest_heatmap_input.genes)  )
+
         target.gene.selection_tp73ConfirmTAorDN_context_interest_heatmap_input.genes <- target.gene.selection_tp73ConfirmTAorDN$downstream_genes
         target.gene.selection_tp73ConfirmTAorDN_context_interest_heatmap_input <- target.gene.selection_tp73ConfirmTAorDN_context_interest.informative * 1 # transform to numeric
         #stopifnot(nrow(target.gene.selection_tp73ConfirmTAorDN_context_interest_heatmap_input) == length(target.gene.selection_tp73ConfirmTAorDN_context_interest_heatmap_input.genes)  )
@@ -469,6 +578,10 @@ my.heatmap.and.corrplot <- function(base.filename="gene_selection_tp73ConfirmAny
             target.gene.selection_tp73ConfirmDN_context_interest_heatmap_input <- cbind(
                 target.gene.selection_tp73ConfirmDN_context_interest_heatmap_input,
                 Score=target.gene.selection_tp73ConfirmDN$coordinates[,c(5)]
+            )
+            target.gene.selection_tp73ConfirmTAandDN_context_interest_heatmap_input <- cbind(
+                target.gene.selection_tp73ConfirmTAandDN_context_interest_heatmap_input,
+                Score=target.gene.selection_tp73ConfirmTAandDN$coordinates[,c(5)]
             )
             target.gene.selection_tp73ConfirmTAorDN_context_interest_heatmap_input <- cbind(
                 target.gene.selection_tp73ConfirmTAorDN_context_interest_heatmap_input,
@@ -491,6 +604,10 @@ my.heatmap.and.corrplot <- function(base.filename="gene_selection_tp73ConfirmAny
                 target.gene.selection_tp73ConfirmDN_context_interest_heatmap_input,
                 target.gene.selection_tp73ConfirmDN$cutandrun_data[,..combinations] 
             )
+            target.gene.selection_tp73ConfirmTAandDN_context_interest_heatmap_input <- cbind(
+                target.gene.selection_tp73ConfirmTAandDN_context_interest_heatmap_input,
+                target.gene.selection_tp73ConfirmTAandDN$cutandrun_data[,..combinations] 
+            )
             target.gene.selection_tp73ConfirmTAorDN_context_interest_heatmap_input <- cbind(
                 target.gene.selection_tp73ConfirmTAorDN_context_interest_heatmap_input,
                 target.gene.selection_tp73ConfirmTAorDN$cutandrun_data[,..combinations] 
@@ -509,6 +626,10 @@ my.heatmap.and.corrplot <- function(base.filename="gene_selection_tp73ConfirmAny
             target.gene.selection_tp73ConfirmDN_context_interest_heatmap_input[!duplicated(target.gene.selection_tp73ConfirmDN_context_interest_heatmap_input.genes),]
         rownames(target.gene.selection_tp73ConfirmDN_context_interest_heatmap_input_nonRedundant) <-
             target.gene.selection_tp73ConfirmDN_context_interest_heatmap_input.genes[!duplicated(target.gene.selection_tp73ConfirmDN_context_interest_heatmap_input.genes)]
+        target.gene.selection_tp73ConfirmTAandDN_context_interest_heatmap_input_nonRedundant <-
+            target.gene.selection_tp73ConfirmTAandDN_context_interest_heatmap_input[!duplicated(target.gene.selection_tp73ConfirmTAandDN_context_interest_heatmap_input.genes),]
+        rownames(target.gene.selection_tp73ConfirmTAandDN_context_interest_heatmap_input_nonRedundant) <-
+            target.gene.selection_tp73ConfirmTAandDN_context_interest_heatmap_input.genes[!duplicated(target.gene.selection_tp73ConfirmTAandDN_context_interest_heatmap_input.genes)]
         target.gene.selection_tp73ConfirmTAorDN_context_interest_heatmap_input_nonRedundant <-
             target.gene.selection_tp73ConfirmTAorDN_context_interest_heatmap_input[!duplicated(target.gene.selection_tp73ConfirmTAorDN_context_interest_heatmap_input.genes),]
         rownames(target.gene.selection_tp73ConfirmTAorDN_context_interest_heatmap_input_nonRedundant) <-
@@ -560,25 +681,24 @@ my.heatmap.and.corrplot <- function(base.filename="gene_selection_tp73ConfirmAny
 
             cat("I: Plotting heatmap to '",getwd(),"/",file,"'.\n",sep="")
 
-            colors <- colorRampPalette(c("white", "gray50"))(100)
-
+            colors <- colorRampPalette(c("white", "gray20"))(100)
+            margins <- c(10,10)
             if (nrow(n.show) < ncol(n.show)) {
 
                 cat("D: Transpose if more rows than columns\n")
                 heatmap.2(t(n.show),
                     trace="none", key=FALSE,
                     col = colors,
-                    scale="none", margins=c(10,10),
+                    scale="none", margins=margins,
                     dendrogram="none",
                     Rowv=TRUE, Colv=TRUE,
                     main=title.heatmap,
                     labRow=colnames(n.show),
-                    colRow=1 + colnames(n.show) %in% relevant.cofactors.selection.ta + 
-                        2*colnames(n.show) %in% relevant.cofactors.selection.dn + 
-                        4*colnames(n.show) %in% relevant.cofactors.selection.always,
+                    colRow= 1 + colnames(n.show) %in% cofactor.names.TA + 
+                        2*colnames(n.show) %in% cofactor.names.DN,
                     labCol=rownames(n.show),
-                    colCol=1 + rownames(n.show) %in% target.gene.selection.TA + 2 * rownames(n.show) %in% target.gene.selection.DN + 4 * rownames(n.show) %in% target.gene.selection.always,
-                    cexRow=ifelse(ncol(n.show)>50,0.6,0.75),
+                    colCol=1 + rownames(n.show) %in% target.gene.selection.TA + 2 * rownames(n.show) %in% target.gene.selection.DN + 4 * rownames(n.show) %in% target.gene.selection.TAandDN,
+                    cexRow=ifelse(ncol(n.show)>50,0.55,0.7),
                     cexCol=ifelse(nrow(n.show)>180,ifelse(nrow(n.show)>250,0.35,0.5),0.75)
                 )
              
@@ -587,31 +707,35 @@ my.heatmap.and.corrplot <- function(base.filename="gene_selection_tp73ConfirmAny
                 heatmap.2(n.show,
                     trace="none", key=FALSE,
                     col = colors,
-                    scale="none", margins=c(10,10),
+                    scale="none", margins=margins,
                     dendrogram="none",
                     Rowv=TRUE, Colv=TRUE,
                     main=title.heatmap,
                     labRow=n,
-                    colRow=1 + rownames(n.show) %in% target.gene.selection.TA + 2 * rownames(n.show) %in% target.gene.selection.DN + 4 * rownames(n.show) %in% target.gene.selection.always,
+                    colRow=1 + rownames(n.show) %in% target.gene.selection.TA + 2 * rownames(n.show) %in% target.gene.selection.DN + 4 * rownames(n.show) %in% target.gene.selection.TAandDN,
                     labCol=colnames(n.show),
-                    colCol=1 + colnames(n.show) %in% relevant.cofactors.selection.ta + 
-                        2*colnames(n.show) %in% relevant.cofactors.selection.dn + 
-                        4*colnames(n.show) %in% relevant.cofactors.selection.always,
-                    cexRow=ifelse(nrow(n.show)>50,0.6,0.75),
+                    colCol=1 + colnames(n.show) %in% cofactor.names.TA + 
+                        2*colnames(n.show) %in% cofactor.names.DN,
+                    cexRow=ifelse(nrow(n.show)>50,0.55,0.7),
                     cexCol=ifelse(ncol(n.show)>180,ifelse(ncol(n.show)>250,0.35,0.5),0.75)
                 )
             }
 
             # Add legend for red label color
-            legend("topright", legend=c("DN","TA","DN+TA"), text.col=c(1+1,1+2,1+1+2), bty="n", cex=0.9)
+            legend("topright", legend=c("TA","DN","DN+TA"), text.col=c(1+1+0,1+0+2,1+1+2), bty="n", cex=0.9)
             dev.off()
         }
+        cat("I: Finished plotting heatmap for ", title.heatmap, "\n", sep="")
+        write.table(rowSums(n.show), file=paste0(base.filename,"_gene_sums_of_cofactors_present.tsv"), sep="\t", quote=FALSE)
+        write.table(colSums(n.show), file=paste0(base.filename,"_cofactor_sums_of_genes_targeted.tsv"), sep="\t", quote=FALSE)
+
     }
     invisible(
         list(
             target.gene.selection.TA=target.gene.selection_tp73ConfirmTA_context_interest.informative,
             target.gene.selection.DN=target.gene.selection_tp73ConfirmDN_context_interest.informative,
-            target.gene.selection.always=target.gene.selection_tp73ConfirmAny_context_interest.informative,
+            #target.gene.selection.TAandDN=target.gene.selection_tp73ConfirmAll_context_interest.informative,
+            #target.gene.selection.TAorDN=target.gene.selection_tp73ConfirmAny_context_interest.informative,
             target.gene.vs.universe.prior.to.selection.TA.sorted=target.gene.vs.universe.prior.to.selection_TA.sorted,
             target.gene.vs.universe.prior.to.selection.DN.sorted=target.gene.vs.universe.prior.to.selection_DN.sorted,
             m.cor.ta=m.cor.ta,

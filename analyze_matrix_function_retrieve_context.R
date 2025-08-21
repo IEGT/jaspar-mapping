@@ -19,8 +19,8 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
         cat("I: Using method ", confirmation, ".\n", sep = "")
     }
 
-    if (is.null(TA.or.DN) || ! TA.or.DN %in% c("TA","DN","any")) {
-        stop("I: No enricment for TA or DN specified, make it TA or DN or any.\n")
+    if (is.null(TA.or.DN) || ! TA.or.DN %in% c("TA","DN","all","any")) {
+        stop("I: No enricment for TA or DN specified, make it TA or DN or all or any.\n")
     } else {
         cat("I: Using enrichment ", TA.or.DN, ".\n", sep = "")
     }
@@ -52,6 +52,7 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
             next
         }
 
+        # Indicator if binding site is eligible for selection
         m.context.extra.check <- rep(TRUE, nrow(m.contexts[[chromosome]]))
 
         if ("promoter" %in% confirmation) {
@@ -64,11 +65,18 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
                 m.context.extra.check <- m.context.extra.check & m.contexts[[chromosome]][, "tp73_skmel29_2_TA"] > 0
             } else if (TA.or.DN == "DN") {
                 m.context.extra.check <- m.context.extra.check & m.contexts[[chromosome]][, "tp73_skmel29_2_DN"] > 0
+            } else if (TA.or.DN == "all") {
+                m.context.extra.check <- m.context.extra.check & (
+                    m.contexts[[chromosome]][, "tp73_skmel29_2_TA"] > 0 &
+                    m.contexts[[chromosome]][, "tp73_skmel29_2_DN"] > 0
+                    # not requesting presence in controls
+                    #m.contexts[[chromosome]][, "tp73_skmel29_2_GFP"] > 0
+                )
             } else if (TA.or.DN == "any") {
                 m.context.extra.check <- m.context.extra.check & (
                     m.contexts[[chromosome]][, "tp73_skmel29_2_TA"] > 0 |
-                    m.contexts[[chromosome]][, "tp73_skmel29_2_DN"] > 0 |
-                    m.contexts[[chromosome]][, "tp73_skmel29_2_GFP"] > 0
+                    m.contexts[[chromosome]][, "tp73_skmel29_2_DN"] > 0
+                    #m.contexts[[chromosome]][, "tp73_skmel29_2_GFP"] > 0
                 )
             } else if (TA.or.DN == "none") {
                 # doing nothing, as we want to check all rows
@@ -82,11 +90,18 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
                 m.context.extra.check <- m.context.extra.check & m.contexts[[chromosome]][, "pos_skmel29_2_TA"] > 0
             } else if (TA.or.DN == "DN") {
                 m.context.extra.check <- m.context.extra.check & m.contexts[[chromosome]][, "pos_skmel29_2_DN"] > 0
+            } else if (TA.or.DN == "all") {
+                m.context.extra.check <- m.context.extra.check & (
+                    m.contexts[[chromosome]][, "pos_skmel29_2_DN"] > 0 &
+                    m.contexts[[chromosome]][, "pos_skmel29_2_TA"] > 0 &
+                    TRUE # controls would be of little constraint
+                    # m.contexts[[chromosome]][, "pos_skmel29_2_GFP"] > 0
+                )
             } else if (TA.or.DN == "any") {
                 m.context.extra.check <- m.context.extra.check & (
                     m.contexts[[chromosome]][, "pos_skmel29_2_DN"] > 0 |
-                    m.contexts[[chromosome]][, "pos_skmel29_2_TA"] > 0 |
-                    m.contexts[[chromosome]][, "pos_skmel29_2_GFP"] > 0
+                    m.contexts[[chromosome]][, "pos_skmel29_2_TA"] > 0
+                    #m.contexts[[chromosome]][, "pos_skmel29_2_GFP"] > 0
                     )
             } else if (TA.or.DN == "none") {
                 # doing nothing, as we want to check all rows
@@ -204,6 +219,9 @@ cat("D: Retrieving data for Figures 3C and 4\n")
 # Used by Figures 3C and 4
 all_inPromoter_tp73ConfirmAny <- retrieve_context_data_by_chromosome(NULL, confirmation=c("tp73","promoter"),TA.or.DN="any")
 all_inPromoter_tp73ConfirmAny.colSums <- colSums(all_inPromoter_tp73ConfirmAny$context_data_binary,na.rm=T)
+
+all_inPromoter_tp73ConfirmAll <- retrieve_context_data_by_chromosome(NULL, confirmation=c("tp73","promoter"),TA.or.DN="all")
+all_inPromoter_tp73ConfirmAll.colSums <- colSums(all_inPromoter_tp73ConfirmAny$context_data_binary,na.rm=T)
 
 all_inPromoter_tp73ConfirmTA <- retrieve_context_data_by_chromosome(NULL, confirmation=c("tp73","promoter"),TA.or.DN="TA")
 all_inPromoter_tp73ConfirmTA.colSums <- colSums(all_inPromoter_tp73ConfirmTA$context_data_binary,na.rm=T)

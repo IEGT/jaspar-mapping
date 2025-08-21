@@ -10,6 +10,12 @@ rm(list=grep(ls(),pattern="^ratio.*",value=T))
 rm(list=grep(ls(),pattern="^quantiles.*",value=T))
 rm(list=grep(ls(),pattern="^mean.NumInWindow*",value=T))
 
+require(ggplot2)
+require(corrplot)
+require(xlsx)
+require(gplots)
+require(data.table)
+
 jaspar.human <- read.delim("jaspar_homo.tsv",row.names=1,col.names=FALSE)
 
 # Import series of functions and basic data
@@ -542,7 +548,7 @@ require(ggplot2)
 # FIXME: Find better name and possibly split into multiple files
 source("analyze_matrix_function_lists_genomewide.R")
 
-
+# Figure 1C can be recreated with data collected at this point
 # source("analyze_matrix_figure1C.R")
 
 #
@@ -676,19 +682,7 @@ ta_vs_dn_genesetEMT.TA.DN_tp73Confirm_posConfirm <- cbind(
 ta_vs_dn_genesetEMT.TA.DN_tp73Confirm_posConfirm.sorted <- ta_vs_dn_genesetEMT.TA.DN_tp73Confirm_posConfirm[order(ta_vs_dn_genesetEMT.TA.DN_tp73Confirm_posConfirm[, "ratio"]), ]
 rownames(ta_vs_dn_genesetEMT.TA.DN_tp73Confirm_posConfirm.sorted) <- prettyIdentifierJaspar(rownames(ta_vs_dn_genesetEMT.TA.DN_tp73Confirm_posConfirm.sorted))
 
-# TA-/DN-specific gene expresssion change from Venn diagrams
-
-# Figure 3C - preparation
-
-require(xlsx)
-#e <- read.xlsx("GeneLists/Venn Diagram (Gene mit hoher p73 Bindung) für Korrelationsgrafik.xlsx",header=F,sheetIndex=2,endRow=8)
-e <- read.xlsx("GeneLists/Genlisten_fuer_p73_Bindung_EMT_Gene_GSEA_20250721.xlsx",header=F,sheetIndex=2,startRow=2,endRow=4)
-e.ta.up<-unlist(e[1,!is.na(e[1,]),drop=T])[-1]
-e.dn.up<-unlist(e[2,!is.na(e[2,]),drop=T])[-1]
-e.both.up<-unlist(e[3,!is.na(e[3,]),drop=T])[-1]
 # Prepare data for vertical plot: top 5, bottom 5, and genes of interest
-require(ggplot2)
-
 
 if (FALSE) {
     # To help with debugging, we can set these variables to NULL
