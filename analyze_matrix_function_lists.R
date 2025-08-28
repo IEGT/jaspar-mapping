@@ -767,16 +767,3 @@ create.lists.for.chromosome <- function(m, reportdir="Reports",offset=0.01) {
     invisible(m)
 }
 
-
-# FIXME - where are these data stored
-
-isoforms <- c("TA","DN","GFP")
-cell.lines <- c("saos2","skmel29_2")
-targets <- c("tp73","pos")
-
-
-
-
-
-
-

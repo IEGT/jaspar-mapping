@@ -19,13 +19,12 @@ require(data.table)
 jaspar.human <- read.delim("jaspar_homo.tsv",row.names=1,col.names=FALSE)
 
 # Import series of functions and basic data
+source("analyze_matrix_parameters.R")
 source("analyze_matrix_function_lists.R")
 source("analyze_matrix_function_distances.R")
 source("analyze_matrix_function_promoters.R")
 source("analyze_matrix_function_helper.R")
 source("analyze_matrix_function_retrieve_context.R")
-
-chromosomes <- c(as.character(1:22),"X","Y")
 
 m.findings.filename <- "m.findings.RData"
 m.context.filename <- "m.contexts.RData"
@@ -35,9 +34,9 @@ meta.from.scratch <- FALSE
 
 if (!meta.from.scratch && file.exists(m.context.filename) && file.exists(m.findings.filename)) {
 
-    cat("Loading '",m.context.filename,"'\n")
+    cat("Loading '",m.context.filename,"'\n",sep="")
     load(file=m.context.filename, verbose=TRUE)
-    cat("Loading '",m.findings.filename,"'\n")
+    cat("Loading '",m.findings.filename,"'\n",sep="")
     load(file=m.findings.filename,verbose=TRUE)
 
 } else {
@@ -693,6 +692,60 @@ if (FALSE) {
 
 
 source("analyze_matrix_plots_slots.R")
+
+
+# Retrieve all transcripts associated with a given genomic region
+transcript.associated.with <- function(chr, start, end) {
+   if (!"PromoterOfWhichGene" %in% colnames(combined.expression.data)) {
+     stop("E: Column 'PromoterOfWhichGene' not found in combined.expression.data.")
+   }
+   chr.vec <- as.character(combined.expression.data$Chr)
+   chr.query <- as.character(chr)
+   stopifnot(length(chr.query)==1)
+   lines.of.interest <- rep(TRUE,length(chr.vec))
+   lines.of.interest <- lines.of.interest & lines.of.interest & chr.vec == chr.query & !is.na(chr.vec)
+   lines.of.interest <- lines.of.interest & as.numeric(combined.expression.data$From)-500 <= as.numeric(start)
+   lines.of.interest <- lines.of.interest & as.numeric(combined.expression.data$To)+500 >= as.numeric(end)
+    lines.of.interest.which <- which(lines.of.interest)
+   if (length(lines.of.interest) > 0) {
+     cat("I: Found ", length(lines.of.interest.which), " transcripts\n", sep = "")
+     if (length(lines.of.interest.which)<10) print(lines.of.interest.which)
+     return(combined.expression.data[lines.of.interest.which, "PromoterOfWhichGene"])
+   } else {
+     cat("I: Found no transcripts\n", sep = "")
+     return(NA)
+   }
+}
+#   combined.expression.data[combined.expression.data$Chr==chr & combined.expression.data$From>=start & combined.expression.data$To<=end, ]  
+
+
+options(width=150)
+# Genes with more than 10 p73 binding sites in 500 bp promoter 
+for(i in chromosomes) {
+    cat("Chr ",i,": ",sep="")
+    i.max <- max(m.contexts[[i]][m.contexts[[i]]$InPromoter, ]$"TP73_MA0861.1_NumInWindow")
+    cat("Max: ", i.max, "\n")
+    if (i.max >= 10) {
+        i.m <- m.contexts[[i]][m.contexts[[i]]$InPromoter & m.contexts[[i]]$TP73_MA0861.1_NumInWindow>=10,
+            c("Chr","From","To","Score",
+            "pos_saos2_DN","pos_saos2_GFP","pos_saos2_TA",
+            "pos_skmel29_2_DN","pos_skmel29_2_GFP","pos_skmel29_2_TA",
+            "tp73_saos2_DN","tp73_saos2_GFP","tp73_saos2_TA",
+            "tp73_skmel29_2_DN","tp73_skmel29_2_GFP","tp73_skmel29_2_TA","TP73_MA0861.1_NumInWindow") ]
+        genes <- c()
+        for(i.n in 1:nrow(i.m)) {
+            g <-transcript.associated.with(i.m[i.n,"Chr"],i.m[i.n,"From"],i.m[i.n,"To"])
+            if (0 == length(g)) {
+                print(i.m[i.n,])
+            }
+            genes <- c(genes, g)
+        }
+        print(genes)
+        print(i.m)
+    }
+}
+
+
 
 ## manual ## source("analyze_matrix_plots_heatmap.R")
 
