@@ -14,6 +14,7 @@ require(ggplot2)
 require(corrplot)
 require(xlsx)
 require(gplots)
+require(ggplot2)
 require(data.table)
 
 jaspar.human <- read.delim("jaspar_homo.tsv",row.names=1,col.names=FALSE)
@@ -719,7 +720,6 @@ transcript.associated.with <- function(chr, start, end) {
 #   combined.expression.data[combined.expression.data$Chr==chr & combined.expression.data$From>=start & combined.expression.data$To<=end, ]  
 
 
-options(width=150)
 # Genes with more than 10 p73 binding sites in 500 bp promoter 
 for(i in chromosomes) {
     cat("Chr ",i,": ",sep="")
@@ -744,6 +744,54 @@ for(i in chromosomes) {
         print(i.m)
     }
 }
+
+
+## Show distribution of distances prior and after filtering for confirmed p73 binding sites
+
+plot.distance.distribution.pre.post <- function(tf) {
+    tf.colname <- paste0(tf,"_Shift")
+    distances.pre <- m.contexts[[1]][[tf.colname]]
+    distances.post <- m.contexts[[1]][m.contexts[[1]]$"tp73_skmel29_2_TA">0 | m.contexts[[1]]$"tp73_skmel29_2_DN">0,][[tf.colname]]
+    # Plot side-by-side distribution of distances (pre vs post) for non-NA values
+
+    distances.pre.nonNA <- distances.pre[!is.na(distances.pre)]
+    distances.post.nonNA <- distances.post[!is.na(distances.post)]
+
+    if (length(distances.pre.nonNA) == 0 || length(distances.post.nonNA) == 0) {
+        cat("E: No valid distances found for TF '",tf,"'\n",sep="")
+        return(NULL)
+    }
+
+    df <- data.frame(
+        Distance = c(distances.pre.nonNA, distances.post.nonNA),
+        Group = factor(rep(c("All TFBS", "Confirmed TFBS"), c(length(distances.pre.nonNA), length(distances.post.nonNA))))
+    )
+
+    p <- ggplot(df, aes(x=Distance, fill=Group)) +
+        geom_density(alpha=0.5, position="identity") +
+        theme_minimal() +
+        labs(title=paste("Distribution of TF ",prettyIdentifierJaspar(tf)," Distances", sep=""), x="Distance", y="Density")
+    #ggsave(f,p,width=20,units="cm")
+    return(p)
+}
+
+tf.of.interest <- c("TP73_MA0861.1","TP63_MA0525.2","TP53_MA0106.3","SP1_MA0079.5","RELA_MA0107.1","REST_MA0138.2",
+                    "NFKB2_MA0778.1","KLF15_MA1513.1","PATZ1_MA1961.1","KLF13_MA0657.1","HES7_MA0822.1","NFKB1_MA0105.4",
+                    "PLAG1_MA0163.1","BACH2_MA1470.1","E2F7_MA0758.1","JUND_MA0492.1","POU2F2_MA0507.2","POU1F1_MA0784.2",
+                    "NFIX_MA1528.1","PPARG_MA0066.1","MYBL2_MA0777.1","GATA5_MA0766.2","RXRB_MA0855.1","NRL_MA0842.2",
+                    "FOXF2_MA0030.1","FOXP2_MA0593.1","JDP2_MA0656.1","ATF7_MA0834.1","DBP_MA0639.1","DMRT3_MA0610.1",
+                    "SPDEF_MA0686.1","EVT2_MA0762.1","ELK4_MA0076.2","PROX1_MA0794.1")
+f <- "distances.pdf"
+pdf(f)
+for(tf in tf.of.interest) {
+    cat("I: Plotting distance distribution for TF '",tf,"'...\n",sep="")
+    p <- plot.distance.distribution.pre.post(tf)
+    if (is.null(p)) next();
+    #if (is.na(p)) next();
+    print(p)
+}
+dev.off()
+cat("I: Image stored at '",Sys.info()["effective_user"],"@",Sys.info()["nodename"],":",getwd(),"/",f,"\n",sep="")
 
 
 
@@ -795,6 +843,7 @@ for (l in lists) {
 
     rownames(m.all.findings[[l]]) <- prettyIdentifierJaspar(rownames(m.all.findings[[l]]))
 }
+
 
 motifs.of.interest <- c("TP73_MA0861.1","TP63_MA0525.2","TP53_MA0106.3", "CTCF_MA0139.1",
             "E2F1_MA0024.3", "E2F2_MA0864.2", "E2F4_MA0470.2", "E2F6_MA0471.2",
