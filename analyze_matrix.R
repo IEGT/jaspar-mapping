@@ -746,25 +746,129 @@ for(i in chromosomes) {
 }
 
 
+plot.distance.distribution.pre.post.intern <- function(d,name) {
+
+    stopifnot(!any(is.na(d$Distance)) & !any(is.na(d$Coverage)))
+
+    m.rect.y <- min(100,max(d$Coverage, na.rm = TRUE))
+    m.rect <- matrix(0, nrow=100+1+100, ncol=m.rect.y+1)
+    for(i in 1:nrow(d)) {
+        x <- d[i,"Distance"]
+        stopifnot(-100 <= x & x <= 100)
+        y <- d[i,"Coverage"]
+        stopifnot(!is.na(y) & y>=0)
+
+        if (y>m.rect.y) {
+            y <- m.rect.y
+        }
+        #x.bin <- round((x - min(df_ta$Distance, na.rm = TRUE)) / (max(df_ta$Distance, na.rm = TRUE)-min(df_ta$Distance, na.rm = TRUE)) * 100) + 100 + 1
+        x.bin <- x + 100 + 1
+        y.bin <- y + 1
+        # Ensure indices are within bounds
+        if (x.bin >= 1 && x.bin <= nrow(m.rect) && y.bin >= 1 && y.bin <= ncol(m.rect) ) {
+            m.rect[x.bin, y.bin] <- m.rect[x.bin, y.bin] + 1
+        } else {
+            cat("W: Skipping out-of-bounds index: x.bin=", x.bin, ", y=", y, "\n")
+        }
+    }
+
+    for(j in (ncol(m.rect)-1):1) {
+        m.rect[,j] <- m.rect[,j] + m.rect[,j+1]
+    }
+    
+    sum.rect.rows <- apply(m.rect, 2, sum)
+    max.rect.rows <- apply(m.rect, 2, max)
+    for(j in ncol(m.rect):1) {
+        m.rect[,j] <- m.rect[,j] / max.rect.rows[j]
+    }
+
+    # Plot m.rect as an image with values as intensities
+    # Add margin to the right for axis labels
+    old.mar <- par("mar")
+    par(mar = c(5, 4, 4, 8) + 0.1)  # increase right margin
+
+    image(
+        z = m.rect * 256,
+        col = c(0, colorRampPalette(c("blue", "red"))(255)),
+        axes = FALSE,
+        main = paste(name, " Coverage Heatmap for ", prettyIdentifierJaspar(tf), sep = ""),
+        xlab = "Distance (bin)", ylab = "TA Coverage (bin)"
+    )
+    axis(1, at = seq(0, 1, length.out = 5), labels = seq(-100, 100, length.out = 5))
+    axis(2, at = seq(0, 1, length.out = 5), labels = seq(0, m.rect.y, length.out = 5))
+    axis(4, at = seq(0, 1, length.out = ncol(m.rect)), labels = sum.rect.rows, las = 2)
+    box()
+
+    par(mar = old.mar)  # restore original margins
+}
+
+
 ## Show distribution of distances prior and after filtering for confirmed p73 binding sites
 
-plot.distance.distribution.pre.post <- function(tf) {
+plot.distance.distribution.pre.post <- function(tf,chr=chromosomes) {
     tf.colname <- paste0(tf,"_Shift")
-    distances.pre <- m.contexts[[1]][[tf.colname]]
-    distances.post <- m.contexts[[1]][m.contexts[[1]]$"tp73_skmel29_2_TA">0 | m.contexts[[1]]$"tp73_skmel29_2_DN">0,][[tf.colname]]
+
+    distances.pre <- distances.post.taOrDn <- distances.post.ta <- distances.post.dn <- distances.post.taOrDn.InPromoter <- numeric()
+    coverage.ta <- coverage.dn <- numeric()
+    inPromoter <- logical()
+
+    for(i in chr) {
+        if (!tf.colname %in% colnames(m.contexts[[i]])) {
+            cat("E: TF '",tf,"' not found in chromosome '",i,"' - skipping\n",sep="")
+            break;
+        }
+        if (is.null(m.contexts[[i]])) {
+            stop("E: Chromosome '",i,"' provides not content.\n",sep="")
+        }
+
+        coverage.ta <- c(coverage.ta, m.contexts[[i]][["tp73_skmel29_2_TA"]])
+        coverage.dn <- c(coverage.dn, m.contexts[[i]][["tp73_skmel29_2_DN"]])
+        distances.pre <- c(distances.pre, m.contexts[[i]][[tf.colname]])
+        inPromoter <- c(inPromoter, m.contexts[[i]]$InPromoter)
+
+
+        distances.post.taOrDn <- c(distances.post.taOrDn,
+                m.contexts[[i]][m.contexts[[i]]$"tp73_skmel29_2_TA">0 | m.contexts[[i]]$"tp73_skmel29_2_DN">0,][[tf.colname]])
+        distances.post.taOrDn.InPromoter <- c(distances.post.taOrDn.InPromoter,
+                                       m.contexts[[i]][
+                                           (m.contexts[[i]]$"tp73_skmel29_2_TA">0 | m.contexts[[i]]$"tp73_skmel29_2_DN">0) & m.contexts[[i]]$InPromoter,][[tf.colname]])
+
+    }
+    stopifnot(length(coverage.ta) == length(coverage.dn))
+    stopifnot(length(coverage.ta) == length(distances.pre))
+    stopifnot(length(coverage.ta) == length(inPromoter))
+
+    # Now filter for non-NA values to constrain on TF's presence
+    distances.pre.nonNA <- distances.pre[!is.na(distances.pre)]
+    coverage.ta.nonNA <- coverage.ta[!is.na(distances.pre)] 
+    coverage.dn.nonNA <- coverage.dn[!is.na(distances.pre)]
+    inPromoter.nonNA <- inPromoter[!is.na(distances.pre)]
+
+    distances.post.taOrDn2.nonNA <- distances.pre.nonNA[coverage.ta.nonNA>0 | coverage.dn.nonNA>0]
+    distances.post.taOrDn.InPromoter2.nonNA <- distances.pre.nonNA[(coverage.ta.nonNA>0 | coverage.dn.nonNA>0) & inPromoter.nonNA]
+    distances.post.ta <- distances.pre.nonNA[coverage.ta.nonNA>0]
+    distances.post.dn <- distances.pre.nonNA[coverage.dn.nonNA>0]
+
+    stopifnot(all(distances.post.taOrDn2.nonNA==distances.post.taOrDn[!is.na(distances.post.taOrDn)]))
+
+    # Controlling reimplementation
+    distances.post.taOrDn.InPromoter.nonNA <- distances.post.taOrDn.InPromoter[!is.na(distances.post.taOrDn.InPromoter)]
+    stopifnot(all(distances.post.taOrDn.InPromoter2.nonNA==distances.post.taOrDn.InPromoter2.nonNA))
+
+
     # Plot side-by-side distribution of distances (pre vs post) for non-NA values
 
-    distances.pre.nonNA <- distances.pre[!is.na(distances.pre)]
-    distances.post.nonNA <- distances.post[!is.na(distances.post)]
-
-    if (length(distances.pre.nonNA) == 0 || length(distances.post.nonNA) == 0) {
+    if (length(distances.pre.nonNA) == 0 || length(distances.post.taOrDn2.nonNA) == 0) {
         cat("E: No valid distances found for TF '",tf,"'\n",sep="")
         return(NULL)
     }
 
     df <- data.frame(
-        Distance = c(distances.pre.nonNA, distances.post.nonNA),
-        Group = factor(rep(c("All TFBS", "Confirmed TFBS"), c(length(distances.pre.nonNA), length(distances.post.nonNA))))
+        Distance = c(distances.pre.nonNA, distances.post.taOrDn2.nonNA, distances.post.taOrDn.InPromoter2.nonNA),
+        Group = factor(rep(c(paste0("All TFBS (",length(distances.pre.nonNA),")"),
+                            paste0("Confirmed TFBS (",length(distances.post.taOrDn2.nonNA),")"),
+                            paste0("In Promoter (",length(distances.post.taOrDn.InPromoter2.nonNA),")")),
+                           c(length(distances.pre.nonNA), length(distances.post.taOrDn2.nonNA), length(distances.post.taOrDn.InPromoter2.nonNA))))
     )
 
     p <- ggplot(df, aes(x=Distance, fill=Group)) +
@@ -772,23 +876,108 @@ plot.distance.distribution.pre.post <- function(tf) {
         theme_minimal() +
         labs(title=paste("Distribution of TF ",prettyIdentifierJaspar(tf)," Distances", sep=""), x="Distance", y="Density")
     #ggsave(f,p,width=20,units="cm")
-    return(p)
+    print(p)
+
+    # TA and DN coverage plots
+
+    # Prepare data for TA coverage
+    df_ta <- data.frame(
+        Distance = distances.pre.nonNA,
+        Coverage = coverage.ta.nonNA
+    )
+
+    stopifnot(!any(is.na(df_ta$Distance)) & !any(is.na(df_ta$Coverage)))
+
+    plot.distance.distribution.pre.post.intern(df_ta,"TA")
+    
+    
+    # Prepare data for DN coverage
+    df_dn <- data.frame(
+        Distance = distances.pre.nonNA,
+        Coverage = coverage.dn.nonNA
+    )
+
+    stopifnot(!any(is.na(df_dn$Distance)) & !any(is.na(df_dn$Coverage)))
+
+    plot.distance.distribution.pre.post.intern(df_dn,"DN")
+
+
+    if (FALSE) {
+        p_ta <- ggplot(df_ta, aes(x=Distance, y=TA_Coverage)) +
+            geom_point(alpha=0.3, size=0.5) +
+            theme_minimal() +
+            labs(title=paste("TA CUT&RUN Coverage vs Distance for", prettyIdentifierJaspar(tf)),
+                x="Distance", y="TA CUT&RUN Coverage")
+        #print(p_ta)
+
+        p_dn <- ggplot(df_dn, aes(x=Distance, y=DN_Coverage)) +
+            geom_bin2d(bins = c(100, min(30,max(df_dn$DN_Coverage, na.rm = TRUE)))) +
+            scale_fill_gradient(low="white", high="red") +
+            theme_minimal() +
+            labs(title=paste("DN CUT&RUN Coverage vs Distance for", prettyIdentifierJaspar(tf)),
+                x="Distance", y="DN CUT&RUN Coverage")
+        #print(p_dn)
+    }
+    #invisible(list(p, p_ta, p_dn))
+    invisible(NULL)
 }
 
-tf.of.interest <- c("TP73_MA0861.1","TP63_MA0525.2","TP53_MA0106.3","SP1_MA0079.5","RELA_MA0107.1","REST_MA0138.2",
-                    "NFKB2_MA0778.1","KLF15_MA1513.1","PATZ1_MA1961.1","KLF13_MA0657.1","HES7_MA0822.1","NFKB1_MA0105.4",
-                    "PLAG1_MA0163.1","BACH2_MA1470.1","E2F7_MA0758.1","JUND_MA0492.1","POU2F2_MA0507.2","POU1F1_MA0784.2",
-                    "NFIX_MA1528.1","PPARG_MA0066.1","MYBL2_MA0777.1","GATA5_MA0766.2","RXRB_MA0855.1","NRL_MA0842.2",
-                    "FOXF2_MA0030.1","FOXP2_MA0593.1","JDP2_MA0656.1","ATF7_MA0834.1","DBP_MA0639.1","DMRT3_MA0610.1",
-                    "SPDEF_MA0686.1","EVT2_MA0762.1","ELK4_MA0076.2","PROX1_MA0794.1")
+tf.of.interest <- c(# JASPAR TFs from EMT heatmap
+                    "TP73_MA0861.1","TP63_MA0525.2","TP53_MA0106.3",
+                    "ATF7_MA0834.1",
+                    "BACH2_MA1470.1",
+                    "DBP_MA0639.1","DMRT3_MA0610.1",
+                    "E2F7_MA0758.1","ETV2_MA0762.1","ELK4_MA0076.2","ESR1_MA0112.3",
+                    "FOXF2_MA0030.1","FOXP2_MA0593.1","GFI1_MA0038.2","GATA5_MA0766.2",
+                    "HES7_MA0822.1","HOXC9_MA0485.2","HOXC11_MA0651.2",
+                    "JDP2_MA0656.1","JUND_MA0492.1",
+                    "KLF13_MA0657.1","KLF15_MA1513.1",
+                    "LMX1B_MA0703.2",
+                    "MEF2B_MA0660.1","MEF2D_MA0773.1","MYBL2_MA0777.1",
+                    "NFKB1_MA0105.4","NFKB2_MA0778.1","NFIX_MA1528.1","NRL_MA0842.2",
+                    "ONECUT2_MA0756.2","OVOL2_MA1545.1",
+                    "PATZ1_MA1961.1",
+                    "PLAG1_MA0163.1",
+                    "POU2F2_MA0507.2","POU1F1_MA0784.2","PPARG_MA0066.1","PROX1_MA0794.1",
+                    "RELA_MA0107.1","REST_MA0138.2","RXRB_MA0855.1",
+                    "SPDEF_MA0686.1",
+                    "ZBTB32_MA1580.1",
+                    # Prominent in global assessment
+                    "CDX4_MA1473.1",
+                    "HEY1_MA0823.1",
+                    "HOXD11_MA0908.1",
+                    "KLF1_MA0493.2",
+                    "KLF7_MA1959.1",
+                    "KLF12_MA0742.2",
+                    "PLAGL2_MA1548.1",
+                    "TEF_MA0843.1",
+                    #"TFAP2A", # multiple, check ID
+                    #"TFAP2B", # multiple, check ID
+                    #"TFAP2C", # multiple, check ID
+                    "TFAP2E_MA1569.1",
+                    # Figure 3 - Enriched for TAp73a
+                    "PAX1_MA0779.1",
+                    #"CEBPB", # multiple, check ID
+                    #"CEBPE", # multiple, check ID
+                    #"GLI3", # multiple, check ID
+                    #"SP3", # multiple, check ID
+                    #"KLF10", # multiple, check ID
+                    "MTF1_MA0863.1",
+                    # Figure 3 - Enriched for DNp73a
+                    #"NR1D2 ", # multiple, check ID
+                    "MAZ_MA1522.1",
+                    # Others
+                    "SP1_MA0079.5","TBP_MA0108.2","YY1-2_MA1927.1",
+                    "RORA_MA0071.1",
+                    "RORA_MA0072.1"
+)
 f <- "distances.pdf"
 pdf(f)
 for(tf in tf.of.interest) {
     cat("I: Plotting distance distribution for TF '",tf,"'...\n",sep="")
-    p <- plot.distance.distribution.pre.post(tf)
+    p.list <- plot.distance.distribution.pre.post(tf)
     if (is.null(p)) next();
-    #if (is.na(p)) next();
-    print(p)
+    for(p in p.list) print(p)
 }
 dev.off()
 cat("I: Image stored at '",Sys.info()["effective_user"],"@",Sys.info()["nodename"],":",getwd(),"/",f,"\n",sep="")
