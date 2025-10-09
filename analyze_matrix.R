@@ -65,7 +65,7 @@ if (!meta.from.scratch && file.exists(m.context.filename) && file.exists(m.findi
         m.contexts[[i]] <- m
 
         m <- create.lists.for.chromosome(m)
-        m.findings[[i]] <- attributes(m)sc  
+        m.findings[[i]] <- attributes(m)
 
         # Clean up
         rm(m)
@@ -156,7 +156,7 @@ if (!meta.from.scratch && file.exists("combined.expression.data.RData")) {
     rownames(list.of.all.promoters.plus.utr.aggregated) <- list.of.all.promoters.plus.utr.aggregated$Gene
     list.of.all.promoters.plus.utr.aggregated[,-1] <- round(list.of.all.promoters.plus.utr.aggregated[,-1], digits=2)
     write.table(list.of.all.promoters.plus.utr.aggregated, file="all.genes.all.promoters.and.utr.cutandrun.tp73bs.aggregated.tsv", row.names=FALSE, col.names=TRUE, sep="\t", quote=FALSE,na="")
-    
+
     max.binding.for.gene <- as.data.frame(matrix(NA, nrow=length(expressionData.symbols), ncol=1+17+3+1))
     colnames(max.binding.for.gene) <- c(colnames(m.contexts[[1]])[1:18],"DN Max Methylation 500 + 500", "GFP Max Methylation 500 + 500", "TA Max Methylation 500 + 500", "PromoterOfWhichGene")
     colnames(max.binding.for.gene)[4:6] <- c("TF","TF.Score","TF.Strand")
@@ -195,7 +195,7 @@ if (!meta.from.scratch && file.exists("combined.expression.data.RData")) {
         colnames(gene.promoter.location.utr) <- c("Chr","From","To","Gene","Strand")
 
         stopifnot(all(gene.promoter.location.promoters$promoter.Chr == gene.promoter.location.utr$utr.Chr))
-        
+
         if (debug) print(gene.promoter.location)
 
         chr <- unique(gene.promoter.location.promoters$Chr)
@@ -717,10 +717,10 @@ transcript.associated.with <- function(chr, start, end) {
      return(NA)
    }
 }
-#   combined.expression.data[combined.expression.data$Chr==chr & combined.expression.data$From>=start & combined.expression.data$To<=end, ]  
+#   combined.expression.data[combined.expression.data$Chr==chr & combined.expression.data$From>=start & combined.expression.data$To<=end, ]
 
 
-# Genes with more than 10 p73 binding sites in 500 bp promoter 
+# Genes with more than 10 p73 binding sites in 500 bp promoter
 for(i in chromosomes) {
     cat("Chr ",i,": ",sep="")
     i.max <- max(m.contexts[[i]][m.contexts[[i]]$InPromoter, ]$"TP73_MA0861.1_NumInWindow")
@@ -746,12 +746,15 @@ for(i in chromosomes) {
 }
 
 
-plot.distance.distribution.pre.post.intern <- function(d,name) {
+plot.distance.distribution.pre.post.intern <- function(d,name, scaling="logarithmic") {
 
+    if (! scaling %in% c("linear","logarithmic")) {
+        stop("E: scaling must be 'linear' or 'logarithmic'.")
+    }
     stopifnot(!any(is.na(d$Distance)) & !any(is.na(d$Coverage)))
 
     m.rect.y <- min(100,max(d$Coverage, na.rm = TRUE))
-    m.rect <- matrix(0, nrow=100+1+100, ncol=m.rect.y+1)
+    m.rect <- matrix(NA, nrow=100+1+100, ncol=m.rect.y+1)
     for(i in 1:nrow(d)) {
         x <- d[i,"Distance"]
         stopifnot(-100 <= x & x <= 100)
@@ -766,20 +769,33 @@ plot.distance.distribution.pre.post.intern <- function(d,name) {
         y.bin <- y + 1
         # Ensure indices are within bounds
         if (x.bin >= 1 && x.bin <= nrow(m.rect) && y.bin >= 1 && y.bin <= ncol(m.rect) ) {
-            m.rect[x.bin, y.bin] <- m.rect[x.bin, y.bin] + 1
+            if (is.na(m.rect[x.bin, y.bin])) {
+                m.rect[x.bin, y.bin] <- 1
+            } else {
+                m.rect[x.bin, y.bin] <- m.rect[x.bin, y.bin] + 1
+            }
         } else {
             cat("W: Skipping out-of-bounds index: x.bin=", x.bin, ", y=", y, "\n")
         }
     }
 
     for(j in (ncol(m.rect)-1):1) {
-        m.rect[,j] <- m.rect[,j] + m.rect[,j+1]
+        m.rect[,j] <- apply(cbind(m.rect[,j],m.rect[,j+1]), 1, sum, na.rm=TRUE)
     }
-    
-    sum.rect.rows <- apply(m.rect, 2, sum)
+
     max.rect.rows <- apply(m.rect, 2, max)
-    for(j in ncol(m.rect):1) {
-        m.rect[,j] <- m.rect[,j] / max.rect.rows[j]
+    sum.rect.rows <- apply(m.rect, 2, sum)
+
+    if (scaling=="logarithmic") {
+        m.rect <- log2(m.rect + 1)
+        m.rect <- sweep(m.rect, 2, log2(max.rect.rows+1), FUN="/")
+
+    } else if (scaling=="linear") {
+
+        #for(j in ncol(m.rect):1) {
+        #    m.rect[,j] <- m.rect[,j] / max.rect.rows[j]
+        #}
+        sweep(m.rect, 2, max.rect.rows, FUN="/")
     }
 
     # Plot m.rect as an image with values as intensities
@@ -789,14 +805,16 @@ plot.distance.distribution.pre.post.intern <- function(d,name) {
 
     image(
         z = m.rect * 256,
-        col = c(0, colorRampPalette(c("blue", "red"))(255)),
+        #col = c(0, colorRampPalette(c("blue", "red"))(255)),
+        col = gray.colors(256, start = 1, end = 0),
         axes = FALSE,
         main = paste(name, " Coverage Heatmap for ", prettyIdentifierJaspar(tf), sep = ""),
-        xlab = "Distance (bin)", ylab = "TA Coverage (bin)"
+        xlab = "Distance (bp)", ylab = paste(name,"Coverage (# reads)",sep=" ")
     )
     axis(1, at = seq(0, 1, length.out = 5), labels = seq(-100, 100, length.out = 5))
     axis(2, at = seq(0, 1, length.out = 5), labels = seq(0, m.rect.y, length.out = 5))
     axis(4, at = seq(0, 1, length.out = ncol(m.rect)), labels = sum.rect.rows, las = 2)
+    mtext("# p73 binding sites", side = 4, line = 5, cex = 1)
     box()
 
     par(mar = old.mar)  # restore original margins
@@ -840,7 +858,7 @@ plot.distance.distribution.pre.post <- function(tf,chr=chromosomes) {
 
     # Now filter for non-NA values to constrain on TF's presence
     distances.pre.nonNA <- distances.pre[!is.na(distances.pre)]
-    coverage.ta.nonNA <- coverage.ta[!is.na(distances.pre)] 
+    coverage.ta.nonNA <- coverage.ta[!is.na(distances.pre)]
     coverage.dn.nonNA <- coverage.dn[!is.na(distances.pre)]
     inPromoter.nonNA <- inPromoter[!is.na(distances.pre)]
 
@@ -875,7 +893,6 @@ plot.distance.distribution.pre.post <- function(tf,chr=chromosomes) {
         geom_density(alpha=0.5, position="identity") +
         theme_minimal() +
         labs(title=paste("Distribution of TF ",prettyIdentifierJaspar(tf)," Distances", sep=""), x="Distance", y="Density")
-    #ggsave(f,p,width=20,units="cm")
     print(p)
 
     # TA and DN coverage plots
@@ -889,8 +906,8 @@ plot.distance.distribution.pre.post <- function(tf,chr=chromosomes) {
     stopifnot(!any(is.na(df_ta$Distance)) & !any(is.na(df_ta$Coverage)))
 
     plot.distance.distribution.pre.post.intern(df_ta,"TA")
-    
-    
+
+
     # Prepare data for DN coverage
     df_dn <- data.frame(
         Distance = distances.pre.nonNA,
@@ -934,7 +951,9 @@ tf.of.interest <- c(# JASPAR TFs from EMT heatmap
                     "KLF13_MA0657.1","KLF15_MA1513.1",
                     "LMX1B_MA0703.2",
                     "MEF2B_MA0660.1","MEF2D_MA0773.1","MYBL2_MA0777.1",
-                    "NFKB1_MA0105.4","NFKB2_MA0778.1","NFIX_MA1528.1","NRL_MA0842.2",
+                    "NFKB1_MA0105.4","NFKB2_MA0778.1",
+                    "NFIC_MA0161.1","NFIC_MA0161.2","NFIC_MA1527.1",
+                    "NFIX_MA1528.1","NRL_MA0842.2",
                     "ONECUT2_MA0756.2","OVOL2_MA1545.1",
                     "PATZ1_MA1961.1",
                     "PLAG1_MA0163.1",
@@ -967,9 +986,22 @@ tf.of.interest <- c(# JASPAR TFs from EMT heatmap
                     #"NR1D2 ", # multiple, check ID
                     "MAZ_MA1522.1",
                     # Others
-                    "SP1_MA0079.5","TBP_MA0108.2","YY1-2_MA1927.1",
+                    "IRF1_MA0050.1","IRF1_MA0050.2","IRF2_MA0051.1","IRF3_MA1418.1","IRF4_MA1419.1","IRF5_MA1420.1",
+                    "IRF6_MA1509.1","IRF7_MA0772.1","IRF8_MA0652.1","IRF9_MA0653.1",
+                    "OVOL1_MA1544.1",
                     "RORA_MA0071.1",
-                    "RORA_MA0072.1"
+                    "RORA_MA0072.1",
+                    "RUNX2_MA0511.2",
+                    "SATB1_MA1963.1",
+                    "STAT1_MA0137.1","STAT1_MA0137.2","STAT1_MA0137.3",
+                    "SP1_MA0079.5",
+                    "TBP_MA0108.2",
+                    "YY1-2_MA1927.1",
+                    "BCL6_MA0463.2",
+                    "BCL6_MA0463.3",
+                    "BCL6B_MA0731.1",
+                    # Other species
+                    "YAP1_MA0415.1"
 )
 f <- "distances.pdf"
 pdf(f)
