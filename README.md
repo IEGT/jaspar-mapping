@@ -7,7 +7,9 @@ Applied on the melanoma cell line SK-Mel-29 we thus determined
  - is beneficial or detrimental to see the JASPAR-predicted theoretical binding site confirmed by the experimental CUT&RUN data,
  - and how this differs upon overexpression of the full length variant TAp73α of p73, the cancer-specific DNp73β and endogenous levels.
 
-![Conceptualization of input driving the differential analysis of cofactors contributing to the binding of transcription factors](images/concept_overview.jpg "Conceptualization of input driving the differential analysis of cofactors contributing to the binding of transcription factors")
+
+![Conceptualization of input driving the differential analysis of cofactors contributing to the binding of transcription factors](images/concept_overview.jpg "Conceptualization of input driving the differential analysis of cofactors contributing to the binding of transcription factors"){ width=150px }
+
 
 Besides helping with reproduction of our findings, we anticipate
 the here outlined approach to be adapted (and improved) for other transcription factors. Please get in touch.
@@ -75,5 +77,3 @@ Associate all filtered matches of your transcription factor's predicted binding 
     for i in $(seq 1 22) X Y; do echo $i; make CHR=$i TP73_MA0861.1_bidirect_$i.combined.bed.gz; done
     which internally invokes "bedtools map" with the output 0 when no map is possible.
 
---
-  Steffen Möller, IEGT, 2024-25
