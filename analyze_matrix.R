@@ -25,7 +25,6 @@ source("analyze_matrix_function_lists.R")
 source("analyze_matrix_function_distances.R")
 source("analyze_matrix_function_promoters.R")
 source("analyze_matrix_function_helper.R")
-source("analyze_matrix_function_retrieve_context.R")
 
 m.findings.filename <- "m.findings.RData"
 m.context.filename <- "m.contexts.RData"
@@ -80,6 +79,8 @@ if (!meta.from.scratch && file.exists(m.context.filename) && file.exists(m.findi
     cat("I: ... saved findings successfully.\n")
 
 }
+
+gc()
 
 expressionData.dir <- "."
 expressionData.comparison.filename <- "SkMel29_GFP_TAa_DNb_2x3x2_ohne_Filter_20.05.2025.tsv"
@@ -287,6 +288,7 @@ if (!meta.from.scratch && file.exists("combined.expression.data.RData")) {
     cat("I: Saved combined expression data to 'combined.expression.data.RData' and 'combined.expression.data.xlsx'.\n")
 }
 
+gc()
 
 # Classify all TFBS in m.contexts for being in promoter regions
 cat("I: Classifying TFBS in promoter regions...\n")
@@ -336,6 +338,7 @@ if (!meta.from.scratch && file.exists("tfbs.in.promoter.list.RData")) {
     save(tfbs.in.promoter.list, file="tfbs.in.promoter.list.RData")
 }
 
+gc()
 
 # Assigning the promoter classification to all TFBS in m.contexts
 
@@ -359,6 +362,26 @@ for (i in names(m.contexts)) {
     stopifnot(nrow(m.contexts[[i]]) == length(tfbs.in.promoter.list[[i]][["all.promoter.bed"]]))
     m.contexts[[i]]$InPromoter <- tfbs.in.promoter.list[[i]][["all.promoter.bed"]]
 }
+
+gc()
+
+m.contexts.annotated.filename.RData <- "m.contexts.with.promoter.info.RData"
+cat("I: Saving annotated contexts with promoter info to '",m.contexts.annotated.filename.RData,"'...\n",sep="")
+save(m.contexts, file=m.contexts.annotated.filename.RData)
+cat("I: ... saved annotated contexts successfully.\n")
+m.contexts.annotated.dirname.tsv <-  gsub(x=m.contexts.annotated.filename.RData,"RData","tsv")
+dir.create(m.contexts.annotated.dirname.tsv, showWarnings=FALSE)
+for(chr in names(m.contexts)) {
+    f <- file.path(m.contexts.annotated.dirname.tsv, paste0("Chr=",chr,".tsv.gz"))
+    cat("I: Writing annotated context for chromosome ",chr," to TSV at ",f,"...\n",sep="")
+    write.table(m.contexts[[chr]], file=gzfile(f), sep="\t", row.names=FALSE, col.names=TRUE, quote=FALSE, na="")
+}
+gc()
+
+
+
+source("analyze_matrix_function_retrieve_context.R")  # Needs Context with InPromoter column
+
 
 
 # Series of analyses across chromosomes on absolute and relative abundances of TFBS with/without CUT&RUN data confirmation
