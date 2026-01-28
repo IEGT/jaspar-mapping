@@ -16,6 +16,7 @@ require(xlsx)
 require(gplots)
 require(ggplot2)
 require(data.table)
+require(arrow)
 
 jaspar.human <- read.delim("jaspar_homo.tsv",row.names=1,col.names=FALSE)
 
@@ -26,363 +27,413 @@ source("analyze_matrix_function_distances.R")
 source("analyze_matrix_function_promoters.R")
 source("analyze_matrix_function_helper.R")
 
-m.findings.filename <- "m.findings.RData"
-m.context.filename <- "m.contexts.RData"
+m.contexts.annotated.filename.RData <- "m.contexts.with.promoter.info.RData"
 
 #meta.from.scratch <- TRUE
 meta.from.scratch <- FALSE
 
-if (!meta.from.scratch && file.exists(m.context.filename) && file.exists(m.findings.filename)) {
+if (!meta.from.scratch && file.exists(m.contexts.annotated.filename.RData) ) {
 
-    cat("Loading '",m.context.filename,"'\n",sep="")
-    load(file=m.context.filename, verbose=TRUE)
-    cat("Loading '",m.findings.filename,"'\n",sep="")
-    load(file=m.findings.filename,verbose=TRUE)
+    cat("Loading '",m.contexts.annotated.filename.RData,"'\n",sep="")
+    load(file=m.contexts.annotated.filename.RData, verbose=TRUE)
+    cat("Done loading '",m.contexts.annotated.filename.RData,"'\n",sep="")
 
 } else {
 
-    m.findings <- vector("list", length(chromosomes))
-    m.contexts <- vector("list", length(chromosomes))
-    names(m.findings) <- names(m.contexts) <- chromosomes
+    m.findings.filename <- "m.findings.RData"
+    m.context.filename <- "m.contexts.RData"
 
-    for(i in chromosomes) {
-        cat("I: processing chromosome ",i,"...\n",sep="")
-        m <- read.data.table.for.chromosome(i)
+    if (!meta.from.scratch && file.exists(m.context.filename) && file.exists(m.findings.filename)) {
 
-        if (is.null(m)) {
-            cat("E: No data for chromosome ",i," - skipping\n",sep="")
-            next
-        }
+        cat("Loading '",m.context.filename,"'\n",sep="")
+        load(file=m.context.filename, verbose=TRUE)
+        cat("Loading '",m.findings.filename,"'\n",sep="")
+        load(file=m.findings.filename,verbose=TRUE)
 
-        if ("Feature" %in% colnames(m)) {
-            cat("W: Found 'Feature' for chromosome ",i," - renaming to 'Name'\n",sep="")
-            m.colnames.which <- which(colnames(m)=="Feature")
-            colnames(m)[m.colnames.which] <- "Name"
-        }
-
-        # Store context
-        m.contexts[[i]] <- m
-
-        m <- create.lists.for.chromosome(m)
-        m.findings[[i]] <- attributes(m)
-
-        # Clean up
-        rm(m)
-        gc()
-    }
-
-    # Save the findings for each chromosome
-    cat("I: saving p73 contexts for each chromosome...\n")
-    save(m.contexts, file="m.contexts.RData")
-    cat("I: ... saved contexts, now saving findings...\n")
-    save(m.findings, file="m.findings.RData")
-    cat("I: ... saved findings successfully.\n")
-
-}
-
-gc()
-
-expressionData.dir <- "."
-expressionData.comparison.filename <- "SkMel29_GFP_TAa_DNb_2x3x2_ohne_Filter_20.05.2025.tsv"
-
-num.skipped.because.of.gene.name.ambiguity <- NA
-num.skipped.because.of.gene.name.unknown <- NA
-
-if (!meta.from.scratch && file.exists("combined.expression.data.RData")) {
-
-    cat("I: Loading existing combined expression data from 'combined.expression.data.RData'...\n")
-    load("combined.expression.data.RData", verbose=TRUE)
-    if (!exists("combined.expression.data")) {
-        stop("E: 'combined.expression.data' not found in 'combined.expression.data.RData'.")
-    }
-    cat("I: Found ",nrow(combined.expression.data)," rows in combined expression data.\n",sep="")
-    print(head(combined.expression.data))
-
-
-    load("max.binding.for.gene.RData", verbose=TRUE)
-    # Check if max.binding.for.gene is available
-    if (exists("max.binding.for.gene")) {
-        cat("I: Found max.binding.for.gene with ",nrow(max.binding.for.gene)," rows.\n",sep="")
-        print(head(max.binding.for.gene))
     } else {
-        cat("W: max.binding.for.gene not found in 'combined.expression.data.RData'.\n")
-    }
 
-} else {
+        m.findings <- vector("list", length(chromosomes))
+        m.contexts <- vector("list", length(chromosomes))
+        names(m.findings) <- names(m.contexts) <- chromosomes
 
-    require(openxlsx) # at the end to write the results to an Excel file
+        for(i in chromosomes) {
+            cat("I: processing chromosome ",i,"...\n",sep="")
+            m <- read.data.table.for.chromosome(i)
 
-    num.skipped.because.of.gene.name.ambiguity <- 0
-    num.skipped.because.of.gene.name.unknown <- 0
-
-    # Load the expression data
-    expressionData <- fread(file.path(expressionData.dir,expressionData.comparison.filename), sep="\t", header=TRUE, stringsAsFactors=FALSE)
-    # Caveat: Expression data have duplicated gene symbols
-    expressionData.symbols <- expressionData$"Gene Symbol"
-
-    # Iteratate over genes in expression data to retrieve promoter locations and find max binding
-    list.of.all.promoters <- promoterBedTables[["all.promoter.sorted.cutandrun.tp73bs.bed"]]
-    if (is.null(list.of.all.promoters)) {
-        stop("E: 'all.promoter.cutandrun.tp73bs.bed' not found in promoterBedTables.")
-    }
-    list.of.all.utr <- utrBedTables[["all.utr.sorted.cutandrun.tp73bs.bed"]]
-    if (is.null(list.of.all.utr)) {
-        stop("E: 'all.utr.cutandrun.tp73bs.bed' not found in utrBedTables.")
-    }
-    # Check if the promoter and UTR data have the same number of columns
-    if (ncol(list.of.all.promoters) != ncol(list.of.all.utr)) {
-        stop("E: 'all.promoter.cutandrun.tp73bs.bed' and 'all.utr.cutandrun.tp73bs.bed' have different number of columns.")
-    }
-    if (nrow(list.of.all.promoters) != nrow(list.of.all.utr)) {
-        stop("E: 'all.promoter.cutandrun.tp73bs.bed' and 'all.utr.cutandrun.tp73bs.bed' have different number of rows")
-    }
-
-    list.sum <- list.of.all.utr[,-(1:6)] + list.of.all.promoters[,-(1:6)]
-    colnames(list.of.all.promoters) <- paste("promoter", colnames(list.of.all.promoters), sep=".")
-    colnames(list.of.all.utr) <- paste("utr", colnames(list.of.all.utr), sep=".")
-    colnames(list.sum) <- paste("sum", colnames(list.sum), sep=".")
-
-    list.of.all.promoters.plus.utr <- cbind(list.of.all.promoters[,1],
-                                            apply(cbind(list.of.all.promoters[,2],list.of.all.utr[,2]), 1, min),
-                                            apply(cbind(list.of.all.promoters[,3],list.of.all.utr[,3]), 1, max),
-                                            list.of.all.promoters[,4:6],
-                                            list.sum,
-                                            list.of.all.promoters[,-(1:6)],
-                                            list.of.all.utr[,-(1:6)])
-    colnames(list.of.all.promoters.plus.utr)[1:6] <- c("Chr","From","To","Gene","Score","Strand")
-    #write.xlsx(list.of.all.promoters.plus.utr, file="all.promoter.and.utr.cutandrun.tp73bs.xlsx", row.names=FALSE)
-    write.table(list.of.all.promoters.plus.utr, file="all.genes.all.promoters.and.utr.cutandrun.tp73bs.tsv", row.names=FALSE,col.names=TRUE, sep="\t", quote=FALSE,na="")
-
-    list.of.all.promoters.plus.utr.aggregated = aggregate(list.of.all.promoters.plus.utr[,-c(1:6)], by=list("Gene"=list.of.all.promoters.plus.utr$Gene), FUN = mean, na.rm = TRUE)
-    rownames(list.of.all.promoters.plus.utr.aggregated) <- list.of.all.promoters.plus.utr.aggregated$Gene
-    list.of.all.promoters.plus.utr.aggregated[,-1] <- round(list.of.all.promoters.plus.utr.aggregated[,-1], digits=2)
-    write.table(list.of.all.promoters.plus.utr.aggregated, file="all.genes.all.promoters.and.utr.cutandrun.tp73bs.aggregated.tsv", row.names=FALSE, col.names=TRUE, sep="\t", quote=FALSE,na="")
-
-    max.binding.for.gene <- as.data.frame(matrix(NA, nrow=length(expressionData.symbols), ncol=1+17+3+1))
-    colnames(max.binding.for.gene) <- c(colnames(m.contexts[[1]])[1:18],"DN Max Methylation 500 + 500", "GFP Max Methylation 500 + 500", "TA Max Methylation 500 + 500", "PromoterOfWhichGene")
-    colnames(max.binding.for.gene)[4:6] <- c("TF","TF.Score","TF.Strand")
-
-    debug <- FALSE
-    columns.with.methylation.of.interest <- c("pos_skmel29_2_DN","pos_skmel29_2_GFP","pos_skmel29_2_TA")
-    columns.with.methylation.of.interest.promoters <- paste("promoter", columns.with.methylation.of.interest,sep=".")
-    columns.with.methylation.of.interest.utr <- paste("utr", columns.with.methylation.of.interest,sep=".")
-
-
-    #ed.rowno <- 57
-    for(ed.rowno in 1:nrow(expressionData)) {
-
-        #if (ed.rowno>500) {
-        #    cat("I: Stopping after 500 genes processed.\n")
-        #    break
-        #}
-
-        gene <- expressionData.symbols[ed.rowno]
-        cat(ed.rowno,": ",gene,"\n",sep="")
-
-        # Check if promoter region of gene is known in promoters
-        gene.in.promoter.rows <- (gene == list.of.all.promoters$"promoter.Gene")
-
-        if (!any(gene.in.promoter.rows)) {
-            cat("E: Gene ",gene," not found in promoter data\n",sep="")
-            max.binding.for.gene[ed.rowno,] <- c(NA,rep(NA,17+3),gene)
-            num.skipped.because.of.gene.name.unknown <- num.skipped.because.of.gene.name.unknown + 1
-            next
-        }
-
-        # Get the promoter location
-        gene.promoter.location.promoters <- list.of.all.promoters[gene.in.promoter.rows,c("promoter.Chr","promoter.From","promoter.To","promoter.Gene","promoter.Strand"),drop=F]
-        colnames(gene.promoter.location.promoters) <- c("Chr","From","To","Gene","Strand")
-        gene.promoter.location.utr <- list.of.all.utr[gene.in.promoter.rows,c("utr.Chr","utr.From","utr.To","utr.Gene","utr.Strand"),drop=F]
-        colnames(gene.promoter.location.utr) <- c("Chr","From","To","Gene","Strand")
-
-        stopifnot(all(gene.promoter.location.promoters$promoter.Chr == gene.promoter.location.utr$utr.Chr))
-
-        if (debug) print(gene.promoter.location)
-
-        chr <- unique(gene.promoter.location.promoters$Chr)
-        stopifnot(!is.null(chr))
-
-        if (length(chr) != 1) {
-            cat("E: Found ",length(chr)," chromosomes for gene ",gene," - skipping\n",sep="")
-            max.binding.for.gene[ed.rowno,] <- c(paste(chr,collapse="+",sep=""),rep(NA,17+3),gene)
-            num.skipped.because.of.gene.name.ambiguity <- num.skipped.because.of.gene.name.ambiguity + 1
-            next
-        }
-
-        if (is.null(m.contexts[[chr]])) {
-            cat("W: No data for chromosome ",chr," - skipping\n",sep="")
-            max.binding.for.gene[ed.rowno,] <- c(NA,rep(NA,17+3),gene)
-            num.skipped.because.of.gene.name.unknown <- num.skipped.because.of.gene.name.unknown + 1
-            next
-        }
-
-        cat("Chromosome: ",chr,"\n",sep="")
-        overlap.index.of.m.chr.promoters <- checkBedOverlaps(gene.promoter.location.promoters[,1:3],m.contexts[[chr]][,1:3])
-        overlap.index.of.m.chr.utr <- checkBedOverlaps(gene.promoter.location.utr[,1:3],m.contexts[[chr]][,1:3])
-
-
-        if (0 < length(overlap.index.of.m.chr.promoters)) {
-
-            cat("I: Found ",length(overlap.index.of.m.chr.promoters)," overlaps for gene ",gene," in chromosome ",chr,"\n",sep="")
-            # Get the promoter location
-            gene.promoter.location.promoters <- m.contexts[[chr]][overlap.index.of.m.chr.promoters,1:18]
-            if (debug) print(gene.promoter.location.promoters)
-            val <- gene.promoter.location.promoters$"tp73_skmel29_2_DN" + gene.promoter.location.promoters$"tp73_skmel29_2_TA"
-            stopifnot(!is.null(val))
-            val.max <- max(val)
-            which.max.val <- which(val==val.max)
-            select.line <- which.max.val
-            if (length(select.line) > 1) {
-                val.pos <- gene.promoter.location.promoters$"pos_skmel29_2_DN" + gene.promoter.location.promoters$"pos_skmel29_2_TA"
-                stopifnot(!is.null(val.pos))
-                val.pos[val != val.max] <- NA
-                val.pos.max <- max(val.pos, na.rm=TRUE)
-                select.line <- which(val.pos==val.pos.max)
-                if (length(select.line) > 1) {
-                    val.score <- gene.promoter.location.promoters$Score
-                    val.score[val.pos != val.pos.max] <- NA
-                    val.score[val != val.max] <- NA
-                    val.score.max <- max(val.score, na.rm=TRUE)
-                    select.line <- which.max(val.score)
-                }
+            if (is.null(m)) {
+                cat("E: No data for chromosome ",i," - skipping\n",sep="")
+                next
             }
 
-            cat("I: Found max binding for gene ",gene," in chromosome ",chr," at line ",select.line," with value ",val.max,".\n",sep="")
-            methylation.data.of.interest.promoter <- list.of.all.promoters[gene.in.promoter.rows,,drop=F][select.line,..columns.with.methylation.of.interest.promoters,drop=F]
-            methylation.data.of.interest.utr <- list.of.all.utr[gene.in.promoter.rows,,drop=F][select.line,..columns.with.methylation.of.interest.utr,drop=F]
-            methylation.data.of.interest.sum <- methylation.data.of.interest.promoter + methylation.data.of.interest.utr
-            max.binding.for.gene[ed.rowno,] <- c(gene.promoter.location.promoters[select.line,],methylation.data.of.interest.sum,PromotorOfWhichGene=gene)
-            #break;
+            if ("Feature" %in% colnames(m)) {
+                cat("W: Found 'Feature' for chromosome ",i," - renaming to 'Name'\n",sep="")
+                m.colnames.which <- which(colnames(m)=="Feature")
+                colnames(m)[m.colnames.which] <- "Name"
+            }
+
+            # Store context
+            m.contexts[[i]] <- m
+
+            m <- create.lists.for.chromosome(m)
+            m.findings[[i]] <- attributes(m)
+
+            # Clean up
+            rm(m)
+            gc()
+        }
+
+        # Save the findings for each chromosome
+        cat("I: saving p73 contexts for each chromosome...\n")
+        save(m.contexts, file="m.contexts.RData")
+        cat("I: ... saved contexts, now saving findings...\n")
+        save(m.findings, file="m.findings.RData")
+        cat("I: ... saved findings successfully.\n")
+
+    }
+
+    gc()
+
+    expressionData.dir <- "."
+    expressionData.comparison.filename <- "SkMel29_GFP_TAa_DNb_2x3x2_ohne_Filter_20.05.2025.tsv"
+
+    num.skipped.because.of.gene.name.ambiguity <- NA
+    num.skipped.because.of.gene.name.unknown <- NA
+
+    if (!meta.from.scratch && file.exists("combined.expression.data.RData")) {
+
+        cat("I: Loading existing combined expression data from 'combined.expression.data.RData'...\n")
+        load("combined.expression.data.RData", verbose=TRUE)
+        if (!exists("combined.expression.data")) {
+            stop("E: 'combined.expression.data' not found in 'combined.expression.data.RData'.")
+        }
+        cat("I: Found ",nrow(combined.expression.data)," rows in combined expression data.\n",sep="")
+        print(head(combined.expression.data))
+
+
+        load("max.binding.for.gene.RData", verbose=TRUE)
+        # Check if max.binding.for.gene is available
+        if (exists("max.binding.for.gene")) {
+            cat("I: Found max.binding.for.gene with ",nrow(max.binding.for.gene)," rows.\n",sep="")
+            print(head(max.binding.for.gene))
         } else {
-            if (sum(list.of.all.promoters[gene.in.promoter.rows,"promoter.num.tfbs"])>0) {
-                stop("E: Discrepancy - gene ",gene," has promoter regions in all.promoter.sorted.cutandrun.tp73bs.bed but no overlaps found in m.contexts for chromosome ",chr,".\n",sep="")
-            }
-            mean.methylation.for.gene.promoter <- colSums(list.of.all.promoters[gene.in.promoter.rows,..columns.with.methylation.of.interest.promoters,drop=F], na.rm=TRUE)/length(gene.in.promoter.rows)
-            names(mean.methylation.for.gene.promoter) <- paste0("mean.500bp.promoter.",names(mean.methylation.for.gene.promoter))
-            mean.methylation.for.gene.utr <- colSums(list.of.all.promoters[gene.in.promoter.rows,..columns.with.methylation.of.interest.promoters,drop=F], na.rm=TRUE)/length(gene.in.promoter.rows)
-            names(mean.methylation.for.gene.utr) <- paste0("mean.500bp.utr.",names(mean.methylation.for.gene.utr))
-            mean.methylation.for.gene.joint <- mean.methylation.for.gene.utr+mean.methylation.for.gene.promoter
-            names(mean.methylation.for.gene.joint) <- paste0("mean.1000bp.",names(mean.methylation.for.gene.utr))
-            max.binding.for.gene[ed.rowno,] <- c(chr,rep(NA,17),round(mean.methylation.for.gene.joint,2),"PromoterOfWhichGene"=gene)
-            cat("E: No overlaps found for gene ",gene," in chromosome ",chr,"\n",sep="")
+            cat("W: max.binding.for.gene not found in 'combined.expression.data.RData'.\n")
         }
-    }
-    rm(ed.rowno)
 
-    save(max.binding.for.gene, num.skipped.because.of.gene.name.ambiguity, num.skipped.because.of.gene.name.unknown,
-         file="max.binding.for.gene.RData")
-
-    # Check the dimensions of the max.binding.for.gene
-    if(!all(max.binding.for.gene$"Gene" == expressionData.symbols)) {
-        cat("E: Found ",sum(max.binding.for.gene$"Gene" != expressionData.symbols)," mismatches in gene names\n",sep="")
-        print(max.binding.for.gene[max.binding.for.gene$"Gene" != expressionData.symbols,])
     } else {
-        cat("I: Found all ",length(expressionData.symbols)," genes in max.binding.for.gene\n",sep="")
+
+        require(openxlsx) # at the end to write the results to an Excel file
+
+        num.skipped.because.of.gene.name.ambiguity <- 0
+        num.skipped.because.of.gene.name.unknown <- 0
+
+        # Load the expression data
+        expressionData <- fread(file.path(expressionData.dir,expressionData.comparison.filename), sep="\t", header=TRUE, stringsAsFactors=FALSE)
+        # Caveat: Expression data have duplicated gene symbols
+        expressionData.symbols <- expressionData$"Gene Symbol"
+
+        # Iteratate over genes in expression data to retrieve promoter locations and find max binding
+        list.of.all.promoters <- promoterBedTables[["all.promoter.sorted.cutandrun.tp73bs.bed"]]
+        if (is.null(list.of.all.promoters)) {
+            stop("E: 'all.promoter.cutandrun.tp73bs.bed' not found in promoterBedTables.")
+        }
+        list.of.all.utr <- utrBedTables[["all.utr.sorted.cutandrun.tp73bs.bed"]]
+        if (is.null(list.of.all.utr)) {
+            stop("E: 'all.utr.cutandrun.tp73bs.bed' not found in utrBedTables.")
+        }
+        # Check if the promoter and UTR data have the same number of columns
+        if (ncol(list.of.all.promoters) != ncol(list.of.all.utr)) {
+            stop("E: 'all.promoter.cutandrun.tp73bs.bed' and 'all.utr.cutandrun.tp73bs.bed' have different number of columns.")
+        }
+        if (nrow(list.of.all.promoters) != nrow(list.of.all.utr)) {
+            stop("E: 'all.promoter.cutandrun.tp73bs.bed' and 'all.utr.cutandrun.tp73bs.bed' have different number of rows")
+        }
+
+        list.sum <- list.of.all.utr[,-(1:6)] + list.of.all.promoters[,-(1:6)]
+        colnames(list.of.all.promoters) <- paste("promoter", colnames(list.of.all.promoters), sep=".")
+        colnames(list.of.all.utr) <- paste("utr", colnames(list.of.all.utr), sep=".")
+        colnames(list.sum) <- paste("sum", colnames(list.sum), sep=".")
+
+        list.of.all.promoters.plus.utr <- cbind(list.of.all.promoters[,1],
+                                                apply(cbind(list.of.all.promoters[,2],list.of.all.utr[,2]), 1, min),
+                                                apply(cbind(list.of.all.promoters[,3],list.of.all.utr[,3]), 1, max),
+                                                list.of.all.promoters[,4:6],
+                                                list.sum,
+                                                list.of.all.promoters[,-(1:6)],
+                                                list.of.all.utr[,-(1:6)])
+        colnames(list.of.all.promoters.plus.utr)[1:6] <- c("Chr","From","To","Gene","Score","Strand")
+        #write.xlsx(list.of.all.promoters.plus.utr, file="all.promoter.and.utr.cutandrun.tp73bs.xlsx", row.names=FALSE)
+        write.table(list.of.all.promoters.plus.utr, file="all.genes.all.promoters.and.utr.cutandrun.tp73bs.tsv", row.names=FALSE,col.names=TRUE, sep="\t", quote=FALSE,na="")
+
+        list.of.all.promoters.plus.utr.aggregated = aggregate(list.of.all.promoters.plus.utr[,-c(1:6)], by=list("Gene"=list.of.all.promoters.plus.utr$Gene), FUN = mean, na.rm = TRUE)
+        rownames(list.of.all.promoters.plus.utr.aggregated) <- list.of.all.promoters.plus.utr.aggregated$Gene
+        list.of.all.promoters.plus.utr.aggregated[,-1] <- round(list.of.all.promoters.plus.utr.aggregated[,-1], digits=2)
+        write.table(list.of.all.promoters.plus.utr.aggregated, file="all.genes.all.promoters.and.utr.cutandrun.tp73bs.aggregated.tsv", row.names=FALSE, col.names=TRUE, sep="\t", quote=FALSE,na="")
+
+        max.binding.for.gene <- as.data.frame(matrix(NA, nrow=length(expressionData.symbols), ncol=1+17+3+1))
+        colnames(max.binding.for.gene) <- c(colnames(m.contexts[[1]])[1:18],"DN Max Methylation 500 + 500", "GFP Max Methylation 500 + 500", "TA Max Methylation 500 + 500", "PromoterOfWhichGene")
+        colnames(max.binding.for.gene)[4:6] <- c("TF","TF.Score","TF.Strand")
+
+        debug <- FALSE
+        columns.with.methylation.of.interest <- c("pos_skmel29_2_DN","pos_skmel29_2_GFP","pos_skmel29_2_TA")
+        columns.with.methylation.of.interest.promoters <- paste("promoter", columns.with.methylation.of.interest,sep=".")
+        columns.with.methylation.of.interest.utr <- paste("utr", columns.with.methylation.of.interest,sep=".")
+
+
+        #ed.rowno <- 57
+        for(ed.rowno in 1:nrow(expressionData)) {
+
+            #if (ed.rowno>500) {
+            #    cat("I: Stopping after 500 genes processed.\n")
+            #    break
+            #}
+
+            gene <- expressionData.symbols[ed.rowno]
+            cat(ed.rowno,": ",gene,"\n",sep="")
+
+            # Check if promoter region of gene is known in promoters
+            gene.in.promoter.rows <- (gene == list.of.all.promoters$"promoter.Gene")
+
+            if (!any(gene.in.promoter.rows)) {
+                cat("E: Gene ",gene," not found in promoter data\n",sep="")
+                max.binding.for.gene[ed.rowno,] <- c(NA,rep(NA,17+3),gene)
+                num.skipped.because.of.gene.name.unknown <- num.skipped.because.of.gene.name.unknown + 1
+                next
+            }
+
+            # Get the promoter location
+            gene.promoter.location.promoters <- list.of.all.promoters[gene.in.promoter.rows,c("promoter.Chr","promoter.From","promoter.To","promoter.Gene","promoter.Strand"),drop=F]
+            colnames(gene.promoter.location.promoters) <- c("Chr","From","To","Gene","Strand")
+            gene.promoter.location.utr <- list.of.all.utr[gene.in.promoter.rows,c("utr.Chr","utr.From","utr.To","utr.Gene","utr.Strand"),drop=F]
+            colnames(gene.promoter.location.utr) <- c("Chr","From","To","Gene","Strand")
+
+            stopifnot(all(gene.promoter.location.promoters$promoter.Chr == gene.promoter.location.utr$utr.Chr))
+
+            if (debug) print(gene.promoter.location)
+
+            chr <- unique(gene.promoter.location.promoters$Chr)
+            stopifnot(!is.null(chr))
+
+            if (length(chr) != 1) {
+                cat("E: Found ",length(chr)," chromosomes for gene ",gene," - skipping\n",sep="")
+                max.binding.for.gene[ed.rowno,] <- c(paste(chr,collapse="+",sep=""),rep(NA,17+3),gene)
+                num.skipped.because.of.gene.name.ambiguity <- num.skipped.because.of.gene.name.ambiguity + 1
+                next
+            }
+
+            if (is.null(m.contexts[[chr]])) {
+                cat("W: No data for chromosome ",chr," - skipping\n",sep="")
+                max.binding.for.gene[ed.rowno,] <- c(NA,rep(NA,17+3),gene)
+                num.skipped.because.of.gene.name.unknown <- num.skipped.because.of.gene.name.unknown + 1
+                next
+            }
+
+            cat("Chromosome: ",chr,"\n",sep="")
+            overlap.index.of.m.chr.promoters <- checkBedOverlaps(gene.promoter.location.promoters[,1:3],m.contexts[[chr]][,1:3])
+            overlap.index.of.m.chr.utr <- checkBedOverlaps(gene.promoter.location.utr[,1:3],m.contexts[[chr]][,1:3])
+
+
+            if (0 < length(overlap.index.of.m.chr.promoters)) {
+
+                cat("I: Found ",length(overlap.index.of.m.chr.promoters)," overlaps for gene ",gene," in chromosome ",chr,"\n",sep="")
+                # Get the promoter location
+                gene.promoter.location.promoters <- m.contexts[[chr]][overlap.index.of.m.chr.promoters,1:18]
+                if (debug) print(gene.promoter.location.promoters)
+                val <- gene.promoter.location.promoters$"tp73_skmel29_2_DN" + gene.promoter.location.promoters$"tp73_skmel29_2_TA"
+                stopifnot(!is.null(val))
+                val.max <- max(val)
+                which.max.val <- which(val==val.max)
+                select.line <- which.max.val
+                if (length(select.line) > 1) {
+                    val.pos <- gene.promoter.location.promoters$"pos_skmel29_2_DN" + gene.promoter.location.promoters$"pos_skmel29_2_TA"
+                    stopifnot(!is.null(val.pos))
+                    val.pos[val != val.max] <- NA
+                    val.pos.max <- max(val.pos, na.rm=TRUE)
+                    select.line <- which(val.pos==val.pos.max)
+                    if (length(select.line) > 1) {
+                        val.score <- gene.promoter.location.promoters$Score
+                        val.score[val.pos != val.pos.max] <- NA
+                        val.score[val != val.max] <- NA
+                        val.score.max <- max(val.score, na.rm=TRUE)
+                        select.line <- which.max(val.score)
+                    }
+                }
+
+                cat("I: Found max binding for gene ",gene," in chromosome ",chr," at line ",select.line," with value ",val.max,".\n",sep="")
+                methylation.data.of.interest.promoter <- list.of.all.promoters[gene.in.promoter.rows,,drop=F][select.line,..columns.with.methylation.of.interest.promoters,drop=F]
+                methylation.data.of.interest.utr <- list.of.all.utr[gene.in.promoter.rows,,drop=F][select.line,..columns.with.methylation.of.interest.utr,drop=F]
+                methylation.data.of.interest.sum <- methylation.data.of.interest.promoter + methylation.data.of.interest.utr
+                max.binding.for.gene[ed.rowno,] <- c(gene.promoter.location.promoters[select.line,],methylation.data.of.interest.sum,PromotorOfWhichGene=gene)
+                #break;
+            } else {
+                if (sum(list.of.all.promoters[gene.in.promoter.rows,"promoter.num.tfbs"])>0) {
+                    stop("E: Discrepancy - gene ",gene," has promoter regions in all.promoter.sorted.cutandrun.tp73bs.bed but no overlaps found in m.contexts for chromosome ",chr,".\n",sep="")
+                }
+                mean.methylation.for.gene.promoter <- colSums(list.of.all.promoters[gene.in.promoter.rows,..columns.with.methylation.of.interest.promoters,drop=F], na.rm=TRUE)/length(gene.in.promoter.rows)
+                names(mean.methylation.for.gene.promoter) <- paste0("mean.500bp.promoter.",names(mean.methylation.for.gene.promoter))
+                mean.methylation.for.gene.utr <- colSums(list.of.all.promoters[gene.in.promoter.rows,..columns.with.methylation.of.interest.promoters,drop=F], na.rm=TRUE)/length(gene.in.promoter.rows)
+                names(mean.methylation.for.gene.utr) <- paste0("mean.500bp.utr.",names(mean.methylation.for.gene.utr))
+                mean.methylation.for.gene.joint <- mean.methylation.for.gene.utr+mean.methylation.for.gene.promoter
+                names(mean.methylation.for.gene.joint) <- paste0("mean.1000bp.",names(mean.methylation.for.gene.utr))
+                max.binding.for.gene[ed.rowno,] <- c(chr,rep(NA,17),round(mean.methylation.for.gene.joint,2),"PromoterOfWhichGene"=gene)
+                cat("E: No overlaps found for gene ",gene," in chromosome ",chr,"\n",sep="")
+            }
+        }
+        rm(ed.rowno)
+
+        save(max.binding.for.gene, num.skipped.because.of.gene.name.ambiguity, num.skipped.because.of.gene.name.unknown,
+            file="max.binding.for.gene.RData")
+
+        # Check the dimensions of the max.binding.for.gene
+        if(!all(max.binding.for.gene$"Gene" == expressionData.symbols)) {
+            cat("E: Found ",sum(max.binding.for.gene$"Gene" != expressionData.symbols)," mismatches in gene names\n",sep="")
+            print(max.binding.for.gene[max.binding.for.gene$"Gene" != expressionData.symbols,])
+        } else {
+            cat("I: Found all ",length(expressionData.symbols)," genes in max.binding.for.gene\n",sep="")
+        }
+
+        combined.expression.data <- cbind(max.binding.for.gene,expressionData)
+        save(combined.expression.data, file="combined.expression.data.RData")
+        require(xlsx)
+        xlsx::write.xlsx(combined.expression.data, file="combined.expression.data.xlsx", row.names=FALSE)
+        write.table(combined.expression.data, file="combined.expression.data.tsv", sep="\t", row.names=FALSE, col.names=TRUE, na="", quote=FALSE, dec=",")
+        cat("I: Saved combined expression data to 'combined.expression.data.RData' and 'combined.expression.data.xlsx'.\n")
     }
 
-    combined.expression.data <- cbind(max.binding.for.gene,expressionData)
-    save(combined.expression.data, file="combined.expression.data.RData")
-    require(xlsx)
-    xlsx::write.xlsx(combined.expression.data, file="combined.expression.data.xlsx", row.names=FALSE)
-    write.table(combined.expression.data, file="combined.expression.data.tsv", sep="\t", row.names=FALSE, col.names=TRUE, na="", quote=FALSE, dec=",")
-    cat("I: Saved combined expression data to 'combined.expression.data.RData' and 'combined.expression.data.xlsx'.\n")
-}
+    gc()
 
-gc()
+    # Classify all TFBS in m.contexts for being in promoter regions
+    cat("I: Classifying TFBS in promoter regions...\n")
 
-# Classify all TFBS in m.contexts for being in promoter regions
-cat("I: Classifying TFBS in promoter regions...\n")
+    if (!meta.from.scratch && file.exists("tfbs.in.promoter.list.RData")) {
 
-if (!meta.from.scratch && file.exists("tfbs.in.promoter.list.RData")) {
+        cat("I: Loading existing TFBS in promoter regions from 'tfbs.in.promoter.list.RData'...\n")
+        load("tfbs.in.promoter.list.RData")
+        if (!exists("tfbs.in.promoter.list")) {
+            stop("E: 'tfbs.in.promoter.list' not found in 'tfbs.in.promoter.list.RData'.")
+        }
+        cat("I: Found ",length(tfbs.in.promoter.list)," chromosomes in tfbs.in.promoter.list.\n",sep="")
 
-    cat("I: Loading existing TFBS in promoter regions from 'tfbs.in.promoter.list.RData'...\n")
-    load("tfbs.in.promoter.list.RData")
-    if (!exists("tfbs.in.promoter.list")) {
-        stop("E: 'tfbs.in.promoter.list' not found in 'tfbs.in.promoter.list.RData'.")
+    } else {
+
+        tfbs.in.promoter.list <- lapply(names(m.contexts), function(i) {
+            cat("I: processing chromosome ",i,"...\n",sep="")
+            if (is.null(m.contexts[[i]])) {
+                cat("E: No data for chromosome ",i," - skipping\n",sep="")
+                return(NULL)
+            }
+            # Process overlaps
+
+            m.promoters.index <- lapply(promoterBedTables, function(x) {
+                checkBedOverlaps(x,m.contexts[[i]])
+            })
+
+            tfbs.is.in.promoter.list<-lapply(names(m.promoters.index),function(x) {
+                cat("Analyzing TFBS in promoter regions for ",x," in chromosome ",i,"...\n",sep="")
+                tfbs.in.promoter <- rep(FALSE, nrow(m.contexts[[i]]))
+                for(j in m.promoters.index[[x]]) {
+                    if (is.na(j) || j < 1 || j > nrow(m.contexts[[i]])) {
+                        stop("E: Invalid index ",j," for chromosome ",i," - skipping\n",sep="")
+                    }
+                    tfbs.in.promoter[j] <- TRUE
+                }
+                cat("I: Found ",sum(tfbs.in.promoter)," TFBS in promoter regions for ",x," in chromosome ",i,".\n",sep="")
+                return(tfbs.in.promoter)
+            })
+            names(tfbs.is.in.promoter.list) <- names(m.promoters.index)
+
+            cat("I: Found ",sum(m.contexts[[i]]$InPromoter)," TFBS in promoter regions for chromosome ",i,".\n",sep="")
+            return(tfbs.is.in.promoter.list)
+        })
+        names(tfbs.in.promoter.list) <- names(m.contexts)
+
+        save(tfbs.in.promoter.list, file="tfbs.in.promoter.list.RData")
     }
-    cat("I: Found ",length(tfbs.in.promoter.list)," chromosomes in tfbs.in.promoter.list.\n",sep="")
 
-} else {
+    gc()
 
-    tfbs.in.promoter.list <- lapply(names(m.contexts), function(i) {
+    # Assigning the promoter classification to all TFBS in m.contexts
+
+    for (i in names(m.contexts)) {
         cat("I: processing chromosome ",i,"...\n",sep="")
         if (is.null(m.contexts[[i]])) {
             cat("E: No data for chromosome ",i," - skipping\n",sep="")
-            return(NULL)
+            next
         }
-        # Process overlaps
+        if (!"InPromoter" %in% colnames(m.contexts[[i]])) {
+            m.contexts[[i]]$InPromoter <- NA
+        }
+        if (is.null(tfbs.in.promoter.list[[i]])) {
+            cat("E: No TFBS in promoter regions found for chromosome ",i," - skipping\n",sep="")
+            next
+        }
+        if(is.null(tfbs.in.promoter.list[[i]][["all.promoter.bed"]])) {
+            cat("E: List of all promoter regions not found for chromosome ",i," - skipping\n",sep="")
+            next
+        }
+        stopifnot(nrow(m.contexts[[i]]) == length(tfbs.in.promoter.list[[i]][["all.promoter.bed"]]))
+        m.contexts[[i]]$InPromoter <- tfbs.in.promoter.list[[i]][["all.promoter.bed"]]
+    }
 
-        m.promoters.index <- lapply(promoterBedTables, function(x) {
-            checkBedOverlaps(x,m.contexts[[i]])
-        })
+    gc()
 
-        tfbs.is.in.promoter.list<-lapply(names(m.promoters.index),function(x) {
-            cat("Analyzing TFBS in promoter regions for ",x," in chromosome ",i,"...\n",sep="")
-            tfbs.in.promoter <- rep(FALSE, nrow(m.contexts[[i]]))
-            for(j in m.promoters.index[[x]]) {
-                if (is.na(j) || j < 1 || j > nrow(m.contexts[[i]])) {
-                    stop("E: Invalid index ",j," for chromosome ",i," - skipping\n",sep="")
-                }
-                tfbs.in.promoter[j] <- TRUE
-            }
-            cat("I: Found ",sum(tfbs.in.promoter)," TFBS in promoter regions for ",x," in chromosome ",i,".\n",sep="")
-            return(tfbs.in.promoter)
-        })
-        names(tfbs.is.in.promoter.list) <- names(m.promoters.index)
-
-        cat("I: Found ",sum(m.contexts[[i]]$InPromoter)," TFBS in promoter regions for chromosome ",i,".\n",sep="")
-        return(tfbs.is.in.promoter.list)
-    })
-    names(tfbs.in.promoter.list) <- names(m.contexts)
-
-    save(tfbs.in.promoter.list, file="tfbs.in.promoter.list.RData")
+    cat("I: Saving annotated contexts with promoter info to '",m.contexts.annotated.filename.RData,"'...\n",sep="")
+    save(m.contexts, file=m.contexts.annotated.filename.RData)
+    cat("I: ... saved annotated contexts successfully.\n")
+    m.contexts.annotated.dirname.tsv <-  gsub(x=m.contexts.annotated.filename.RData,"RData","tsv")
+    dir.create(m.contexts.annotated.dirname.tsv, showWarnings=FALSE)
+    for(chr in names(m.contexts)) {
+        f <- file.path(m.contexts.annotated.dirname.tsv, paste0("Chr=",chr,".tsv.gz"))
+        cat("I: Writing annotated context for chromosome ",chr," to TSV at ",f,"...\n",sep="")
+        write.table(m.contexts[[chr]], file=gzfile(f), sep="\t", row.names=FALSE, col.names=TRUE, quote=FALSE, na="")
+    }
+    gc()
 }
 
+# Convert m.contexts to Arrow Table for efficient processing and storage
+arrow_schema_ref <- schema(arrow_table(m.contexts[[1]]))
+m.contexts.arrow <- NULL
 gc()
-
-# Assigning the promoter classification to all TFBS in m.contexts
-
-for (i in names(m.contexts)) {
-    cat("I: processing chromosome ",i,"...\n",sep="")
-    if (is.null(m.contexts[[i]])) {
-        cat("E: No data for chromosome ",i," - skipping\n",sep="")
+for(i in seq_along(m.contexts)) {
+    m.m <- m.contexts[[i]]
+    if (21 == i || 24 == i) {
+        cat("Special treatment for chr ",i," to convert NR1H2--RXRA_MA0115.1_Shift to integer...\n",sep="")
+        m.m$"NR1H2--RXRA_MA0115.1_Shift" <- as.integer(m.m$"NR1H2--RXRA_MA0115.1_Shift")
+        m.m$"NR1H2--RXRA_MA0115.1_Score" <- as.double(m.m$"NR1H2--RXRA_MA0115.1_Score")
+        m.m$"NR1H2--RXRA_MA0115.1_StrandEqual" <- as.integer(m.m$"NR1H2--RXRA_MA0115.1_StrandEqual")
+    }
+    if (24 == i) {
+        cat("Special treatment for chr ",i," to convert AT4G12670_MA1354.1_Shift to integer...\n",sep="")
+        m.m$"AT4G12670_MA1354.1_Shift" <- as.integer(m.m$"AT4G12670_MA1354.1_Shift")
+        m.m$"AT4G12670_MA1354.1_Score" <- as.double(m.m$"AT4G12670_MA1354.1_Score")
+        m.m$"AT4G12670_MA1354.1_StrandEqual" <- as.integer(m.m$"AT4G12670_MA1354.1_StrandEqual")
+    }
+    a <- arrow_table(m.m, schema=arrow_schema_ref)
+    #a.cheating <- as_arrow_table(m.m)
+    if (1 == i) {
+        cat("I: Initializing Arrow Table with chromosome ",i,"...\n",sep="")
+        m.contexts.arrow <- a
         next
+    } else {
+        cat("I: Concatenating chromosome ",i," into Arrow Table...\n",sep="")   
+        m.contexts.arrow <- concat_tables(m.contexts.arrow, a)
     }
-    if (!"InPromoter" %in% colnames(m.contexts[[i]])) {
-        m.contexts[[i]]$InPromoter <- NA
-    }
-    if (is.null(tfbs.in.promoter.list[[i]])) {
-        cat("E: No TFBS in promoter regions found for chromosome ",i," - skipping\n",sep="")
-        next
-    }
-    if(is.null(tfbs.in.promoter.list[[i]][["all.promoter.bed"]])) {
-        cat("E: List of all promoter regions not found for chromosome ",i," - skipping\n",sep="")
-        next
-    }
-    stopifnot(nrow(m.contexts[[i]]) == length(tfbs.in.promoter.list[[i]][["all.promoter.bed"]]))
-    m.contexts[[i]]$InPromoter <- tfbs.in.promoter.list[[i]][["all.promoter.bed"]]
+    gc()
 }
 
-gc()
-
-m.contexts.annotated.filename.RData <- "m.contexts.with.promoter.info.RData"
-cat("I: Saving annotated contexts with promoter info to '",m.contexts.annotated.filename.RData,"'...\n",sep="")
-save(m.contexts, file=m.contexts.annotated.filename.RData)
-cat("I: ... saved annotated contexts successfully.\n")
-m.contexts.annotated.dirname.tsv <-  gsub(x=m.contexts.annotated.filename.RData,"RData","tsv")
-dir.create(m.contexts.annotated.dirname.tsv, showWarnings=FALSE)
-for(chr in names(m.contexts)) {
-    f <- file.path(m.contexts.annotated.dirname.tsv, paste0("Chr=",chr,".tsv.gz"))
-    cat("I: Writing annotated context for chromosome ",chr," to TSV at ",f,"...\n",sep="")
-    write.table(m.contexts[[chr]], file=gzfile(f), sep="\t", row.names=FALSE, col.names=TRUE, quote=FALSE, na="")
-}
-gc()
-
-
+# To avoid too much memory overhead during writing, limit the number of threads used by Arrow
+Sys.setenv(ARROW_NUM_THREADS = 1)
+write_dataset(
+  m.contexts.arrow,
+  path = "m.contexts.with.promoter.info.arrow/",
+  format = "parquet",
+  partitioning = "Chr",
+  compression = "zstd",
+  compression_level = 5,
+  max_rows_per_group = 20000,
+  existing_data_behavior = "overwrite"
+)
 
 source("analyze_matrix_function_retrieve_context.R")  # Needs Context with InPromoter column
-
-
 
 # Series of analyses across chromosomes on absolute and relative abundances of TFBS with/without CUT&RUN data confirmation
 
