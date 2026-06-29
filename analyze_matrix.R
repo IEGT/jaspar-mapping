@@ -18,7 +18,7 @@ require(ggplot2)
 require(data.table)
 require(arrow)
 
-jaspar.human <- read.delim("jaspar_homo.tsv",row.names=1,col.names=FALSE)
+jaspar.human <- read.delim("jaspar_homo.tsv",row.names=1,col.names=c("id","species"),header=FALSE)
 
 # Import series of functions and basic data
 source("analyze_matrix_parameters.R")
