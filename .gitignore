@@ -1,4 +1,5 @@
 .vscode
+.DS_Store
 .depend
 *.fasta
 *.fa
@@ -18,3 +19,4 @@ context
 *.png
 *.svg
 *.jpg
+*.dSYM/

@@ -9,10 +9,9 @@ gene.positions <- data.table(
     strand     = c("-",       "-",       "+",                "+",                "-",                "+",       "-",       "+",   "+",      "-",      "-",     "+",       "+",     "+",      "+",       "-",       "+",       "-",       "+",       "-")
 )
 
-/* Convert gene region to promoter region.
-   upstream: distance upstream of TSS to include in promoter region.
-   intragenic: distance downstream of TSS to include in promoter region.
-*/
+# Convert gene region to promoter region.
+# upstream: distance upstream of TSS to include in promoter region.
+# intragenic: distance downstream of TSS to include in promoter region.
 gene_region_to_promoter_region  <-  function(gene_region, upstream = 2000, intragenic = 2000) {
 
     r <- list()
@@ -36,7 +35,7 @@ gene_region_to_promoter_region  <-  function(gene_region, upstream = 2000, intra
 }   
 
 
-/* Example usage: Retrieve gene regions for IL10, TGFB1, and CD274 */
+# Example usage: Retrieve gene regions for IL10, TGFB1, and CD274
 get_gene_region <- function(gene_name) {
     gene_info <- gene.positions[gene == gene_name]
     if (nrow(gene_info) == 0) {
