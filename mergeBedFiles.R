@@ -13,7 +13,7 @@ updateDataDir <- "."
 
 mergeTwoBedFiles <- function(chr) {
     file1.name <- file.path(prevDataTableDir,paste0("TP73_datatable_",chr,".bed.gz"))
-    file2.name <- file.path(updateDataDir,paste0("TP73_MA0861.1_bidirect_",chr,".combined.bed"))
+    file2.name <- file.path(updateDataDir,paste0("TP73_MA0861.2_bidirect_",chr,".combined.bed"))
     outputFile.name <- file.path(outputDataDir,paste0("TP73_datatable_",chr,".bed.gz"))
 
     if (file.exists(outputFile.name)) {

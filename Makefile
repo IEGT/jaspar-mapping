@@ -12,11 +12,32 @@ LDFLAGS += -lm
 SCRATCHDIR=/tmp
 SRCS=$(wildcard *.cpp)
 CHR=unset
-OUTPUTDIR=output_RelativeRisk_20250217
+SCORE_MODE?=log2_relative_risk
+OUTPUTDIR?=$(if $(filter log2_relative_risk,$(SCORE_MODE)),output_RelativeRisk_20250217,output_$(SCORE_MODE)_20250217)
 
-JASPAR=JASPAR2022_CORE_non-redundant_pfms_jaspar.txt
+JASPAR_VERSION=2026
+JASPAR_DIR=.
+JASPAR_BASENAME=JASPAR$(JASPAR_VERSION)_CORE_non-redundant_pfms_jaspar.txt
+JASPAR=$(JASPAR_DIR)/$(JASPAR_BASENAME)
+JASPAR_URL=https://jaspar.elixir.no/download/data/$(JASPAR_VERSION)/CORE/$(JASPAR_BASENAME)
 GENOME=Homo_sapiens.GRCh38.dna.primary_assembly.fasta
 GENOMEGZ=Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz
+TP73_MOTIF_ID?=$(if $(filter 2022,$(JASPAR_VERSION)),MA0861.1,MA0861.2)
+TP73_MOTIF=TP73_$(TP73_MOTIF_ID)
+TP73_BIDIRECT=$(TP73_MOTIF)_bidirect_$(CHR)
+TP73_BIDIRECT_GZ=$(OUTPUTDIR)/$(CHR)/$(TP73_BIDIRECT).bed.gz
+TP73_COMBINED_BED=$(TP73_BIDIRECT).combined.bed
+TEST_REFERENCE_OUTPUTDIR=output_test_reference_chr1
+TEST_REFERENCE_CHR=1
+TEST_REFERENCE_FROM=3651800
+TEST_REFERENCE_TO=3652600
+TEST_REFERENCE_THRESHOLD=0
+TEST_REFERENCE_MOTIFS=MA0024.3 MA0106.3 MA0525.2 $(TP73_MOTIF_ID)
+TEST_REFERENCE_E2F1_POSITIVE=$(TEST_REFERENCE_OUTPUTDIR)/E2F1_MA0024.3_positive_$(TEST_REFERENCE_CHR)_$(TEST_REFERENCE_FROM)-$(TEST_REFERENCE_TO).bed
+TEST_REFERENCE_E2F1_NEGATIVE=$(TEST_REFERENCE_OUTPUTDIR)/E2F1_MA0024.3_negative_$(TEST_REFERENCE_CHR)_$(TEST_REFERENCE_FROM)-$(TEST_REFERENCE_TO).bed
+DISTRIBUTION_CHR=1
+DISTRIBUTION_BIN_WIDTH?=adaptive
+DISTRIBUTIONDIR?=score_distributions_$(SCORE_MODE)_bins_$(DISTRIBUTION_BIN_WIDTH)_JASPAR$(JASPAR_VERSION)_chr$(DISTRIBUTION_CHR)
 
 .SUFFIXES: .gz .bed.gz .cpp .o .fasta .fa.gz _positive_$(CHR).bed _positive_$(CHR).bed.gz _negative_$(CHR).bed _negative_$(CHR).bed.gz _bidirect_$(CHR).bed.gz .bed .bedGraph .combined.bed
 
@@ -43,7 +64,8 @@ distclean:
 	$(RM) -f $(BINARIES) *.o
 
 $(JASPAR):
-	wget https://jaspar2022.genereg.net/download/data/2022/CORE/JASPAR2022_CORE_non-redundant_pfms_jaspar.txt
+	mkdir -p $(dir $@)
+	wget -O $@ $(JASPAR_URL)
 jaspar: $(JASPAR)
 
 $(GENOMEGZ):
@@ -57,32 +79,46 @@ genomegz: $(GENOMEGZ)
 
 # Define the pattern rule for generating .bed files
 $(OUTPUTDIR)/$(CHR)/%_negative_$(CHR).bed $(OUTPUTDIR)/$(CHR)/%_positive_$(CHR).bed:
+	mkdir -p $(OUTPUTDIR)/$(CHR)
 	echo $*
 	NAME=$(shell echo $* | sed -e 's/_MA.*$$//') ; \
 	ACC=$(shell echo $* | tr "_" "\n" |grep -E "^MA[0-9][0-9][0-9][0-9]" |head -n 1) ; \
 	echo "NAME=$$NAME ACC=$$ACC" ; \
 	if [ ! -f $(OUTPUTDIR)/$(CHR)/$${NAME}_$${ACC}_positive_$(CHR).bed ] ; then \
 	    echo "Missing: $(OUTPUTDIR)/$(CHR)/$${NAME}_$${ACC}_positive_$(CHR).bed" ; \
-	    ./pssm_scan --outdir $(OUTPUTDIR)/$(CHR) --genome $(GENOME) -l 0 -m $$ACC --chr $(CHR) ; \
+	    ./pssm_scan --outdir $(OUTPUTDIR)/$(CHR) --genome $(GENOME) --pssm $(JASPAR) --score-mode $(SCORE_MODE) -l 0 -m $$ACC --chr $(CHR) ; \
 	elif [ ! -f $(OUTPUTDIR)/$(CHR)/$${NAME}_$${ACC}_negative_$(CHR).bed ]; then \
 	    echo "Missing: sort -k 1,1 -k2,2n" ; \
-	   ./pssm_scan --outdir $(OUTPUTDIR)/$(CHR) --genome $(GENOME) -l 0 -m $$ACC --chr $(CHR) ; \
+	    ./pssm_scan --outdir $(OUTPUTDIR)/$(CHR) --genome $(GENOME) --pssm $(JASPAR) --score-mode $(SCORE_MODE) -l 0 -m $$ACC --chr $(CHR) ; \
 	fi
 
-#$(OUTPUTDIR)/%_bidirect_$(CHR).bed.gz: $(OUTPUTDIR)/%_negative_$(CHR).bed.gz $(OUTPUTDIR)/%_positive_$(CHR).bed.gz
-#	zcat $^ | sort -S 2G -k 1,1 -k2,2n | gzip -9 -n -c > $@
+$(OUTPUTDIR)/%_bidirect_$(CHR).bed.gz: $(OUTPUTDIR)/%_negative_$(CHR).bed.gz $(OUTPUTDIR)/%_positive_$(CHR).bed.gz
+	zcat $^ | sort -S 2G -k 1,1 -k2,2n | gzip -9 -n -c > $@
 
 %.bed.gz: %.bed
 	gzip -9 -n $<
 
 # Generate the list of targets
 SHELL=bash
-BED_FILES := $(shell grep "^>" JASPAR2022_CORE_non-redundant_pfms_jaspar.txt | sed -e 's%[/:()]%-%g' | awk '{print $$NF "_" $$1 "_positive_$(CHR).bed.gz"}' | sed -e 's/[>]//')
-BIDIRECT_FILES := $(shell grep "^>" JASPAR2022_CORE_non-redundant_pfms_jaspar.txt | sed -e 's%[/:()]%-%g' | awk '{print $$NF "_" $$1 "_bidirect_$(CHR).bed.gz"}' | sed -e 's/[>]//')
+BED_FILES := $(shell if [ -f "$(JASPAR)" ]; then grep "^>" "$(JASPAR)" | sed -e 's%[/:()]%-%g' | awk '{print $$NF "_" $$1 "_positive_$(CHR).bed.gz"}' | sed -e 's/[>]//'; fi)
+BIDIRECT_FILES := $(shell if [ -f "$(JASPAR)" ]; then grep "^>" "$(JASPAR)" | sed -e 's%[/:()]%-%g' | awk '{print $$NF "_" $$1 "_bidirect_$(CHR).bed.gz"}' | sed -e 's/[>]//'; fi)
+SCORE_DISTRIBUTION_FILES := $(shell if [ -f "$(JASPAR)" ]; then grep "^>" "$(JASPAR)" | sed -e 's%[/:()]%-%g' | awk '{print "$(DISTRIBUTIONDIR)/" $$NF "_" $$1 "_score_distribution_$(SCORE_MODE)_bins_$(DISTRIBUTION_BIN_WIDTH)_positive_$(DISTRIBUTION_CHR).tsv"}' | sed -e 's/[>]//'; fi)
 echo_bed:
 	@echo $(BED_FILES)|sort -S 2G
 echo_bidirect:
 	@echo $(BIDIRECT_FILES)|sort -S 2G
+echo_score_distributions:
+	@echo $(SCORE_DISTRIBUTION_FILES)|sort -S 2G
+
+score_distributions_chr1: $(SCORE_DISTRIBUTION_FILES)
+
+$(DISTRIBUTIONDIR)/%_score_distribution_$(SCORE_MODE)_bins_$(DISTRIBUTION_BIN_WIDTH)_positive_$(DISTRIBUTION_CHR).tsv: pssm_scan $(JASPAR) $(GENOME)
+	mkdir -p $(DISTRIBUTIONDIR)
+	echo $*
+	NAME=$(shell echo $* | sed -e 's/_MA.*$$//') ; \
+	ACC=$(shell echo $* | tr "_" "\n" |grep -E "^MA[0-9][0-9][0-9][0-9]" |head -n 1) ; \
+	echo "NAME=$$NAME ACC=$$ACC" ; \
+	./pssm_scan --score-distribution --distribution-bin-width $(DISTRIBUTION_BIN_WIDTH) --outdir $(DISTRIBUTIONDIR) --genome $(GENOME) --pssm $(JASPAR) --score-mode $(SCORE_MODE) --motif $$ACC --chr $(DISTRIBUTION_CHR)
 
 $(shell basename $(GENOME) .fasta )_top500000.fasta: $(GENOME)
 	head -n 500000 $< > Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta
@@ -97,16 +133,39 @@ testGTF: gtf_file_region_retrieval
 	echo "TP73" |  ./gtf_file_region_retrieval
 
 test: pssm_scan Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta Homo_sapiens.GRCh38.dna.primary_assembly_bottom500000.fasta
-	#./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta -l -5400 --verbose -m MA0861.1 --chr $(CHR) --from 100000 --to 103000 --help
-	./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta -l 0 --verbose -m MA0059.1 --chr $(CHR) --from 100001 --to 103001 -s
+	#./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta -l -5400 --verbose -m $(TP73_MOTIF_ID) --chr $(CHR) --from 100000 --to 103000 --help
+	./pssm_scan --pssm $(JASPAR) --genome Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta --score-mode $(SCORE_MODE) -l 0 --verbose -m MA0059.1 --chr $(CHR) --from 100001 --to 103001 -s
 	#./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta -l 0 --verbose -m MA0019.1 --chr $(CHR) --from 100000 --to 130000
 	#./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta -l -500 --verbose -m MA1001.3 --chr $(CHR) --from 100000 --to 130000
-	#./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta -l -500 --verbose -m MA0861.1 --chr $(CHR) --from 100001 --to 103001 -s
+	#./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta -l -500 --verbose -m $(TP73_MOTIF_ID) --chr $(CHR) --from 100001 --to 103001 -s
 	#./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_bottom500000.fasta -l -500 --verbose -o output_bottom --chr 44 --from 100000 --to 103000
 	#./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_bottom500000.fasta -l -500 --verbose -o output_bottom --from 100000 --to 103000
 
-.PHONY: test all $(OUTPUTDIR)/$(CHR) jaspar genome genomegz genome_testdata count datatables files_cutandrun_clean TP73_datatable
-.PRECIOUS: $(GENOME) $(GENOMEGZ)
+test_reference_tp73_promoter_chr1: pssm_scan $(JASPAR) $(GENOME)
+	@if [ "$(TEST_REFERENCE_THRESHOLD)" != "0" ]; then \
+	    echo "E: test_reference_tp73_promoter_chr1 expects TEST_REFERENCE_THRESHOLD=0 because pssm_scan changes output filenames for non-zero thresholds." ; \
+	    exit 1 ; \
+	fi
+	mkdir -p $(TEST_REFERENCE_OUTPUTDIR)
+	for motif in $(TEST_REFERENCE_MOTIFS); do \
+	    ./pssm_scan --outdir $(TEST_REFERENCE_OUTPUTDIR) --genome $(GENOME) --pssm $(JASPAR) --score-mode $(SCORE_MODE) --motif $$motif --chr $(TEST_REFERENCE_CHR) --from $(TEST_REFERENCE_FROM) --to $(TEST_REFERENCE_TO) --threshold $(TEST_REFERENCE_THRESHOLD) --show-sequence ; \
+	done
+	for file in "$(TEST_REFERENCE_E2F1_POSITIVE)" "$(TEST_REFERENCE_E2F1_NEGATIVE)"; do \
+	    if [ ! -f "$$file" ]; then \
+	        echo "E: Expected E2F1 reference output '$$file' was not created." ; \
+	        exit 1 ; \
+	    fi ; \
+	done ; \
+	hits=$$(awk 'FNR > 1 { count++ } END { print count + 0 }' "$(TEST_REFERENCE_E2F1_POSITIVE)" "$(TEST_REFERENCE_E2F1_NEGATIVE)") ; \
+	if [ "$$hits" -lt 1 ]; then \
+	    echo "E: Expected E2F1 hits in TP73 promoter reference window; see PMC1531693." ; \
+	    exit 1 ; \
+	fi ; \
+	echo "I: E2F1 hits in TP73 promoter reference window: $$hits"
+
+.PHONY: test all $(OUTPUTDIR)/$(CHR) jaspar genome genomegz genome_testdata count datatables files_cutandrun_clean TP73_datatable test_reference_tp73_promoter_chr1 score_distributions_chr1
+.PRECIOUS: $(GENOME) $(GENOMEGZ) %.bed %.bed.gz
+.SECONDARY:
 
 #PATH_CUTNRUN=cutandrun_20240313_nodupes
 #PATH_CUTNRUN=cutandrun_20250516_withDuplicates
@@ -127,11 +186,11 @@ FILES_CUTNRUN= $(PATH_CUTNRUN)/pos_saos2_DN_R1.clipped.clean.bed \
 # Derives .bed files from the bedGraphs
 files_cutandrun_clean: $(FILES_CUTNRUN)
 
-#test2: $(OUTPUTDIR)/$(CHR)/TP73_MA0861.1_bidirect_$(CHR).combined.bed.gz
-#$(OUTPUTDIR)/$(CHR)/TP73_MA0861.1_bidirect_$(CHR).combined.bed.gz: $(OUTPUTDIR)/$(CHR)/TP73_MA0861.1_bidirect_$(CHR).bed.gz
-#	ls $(OUTPUTDIR)/$(CHR)/TP73_MA0861.1_bidirect_$(CHR).bed.gz
+#test2: $(TP73_COMBINED_BED).gz
+#$(TP73_COMBINED_BED).gz: $(TP73_BIDIRECT_GZ)
+#	ls $(TP73_BIDIRECT_GZ)
 
-%_$(CHR).combined.bed: $(OUTPUTDIR)/$(CHR)/TP73_MA0861.1_bidirect_$(CHR).bed.gz $(FILES_CUTNRUN)
+%_$(CHR).combined.bed: $(TP73_BIDIRECT_GZ) $(FILES_CUTNRUN)
 	if ! which bedtools; then echo "E: Need bedtools in path."; exit 1; fi
 
 	#echo -n "Chr\tFrom\tTo\tName\tScore\tStrand" > "$$a_tmp"
@@ -140,9 +199,9 @@ files_cutandrun_clean: $(FILES_CUTNRUN)
 	a_tmp=$(shell mktemp -p . -u --suffix="_a_tmp_Chr_$(CHR).bed") ; \
 	b_tmp=$(shell mktemp -p . -u --suffix="_b_tmp_Chr_$(CHR).bed") ; \
 	i_tmp=$(shell mktemp -p . -u --suffix="_i_tmp_Chr_$(CHR).bed") ; \
-	TP73_refgz="$(OUTPUTDIR)/$(CHR)/TP73_MA0861.1_bidirect_$(CHR).bed.gz" ; \
+	TP73_refgz="$(TP73_BIDIRECT_GZ)" ; \
 	zcat "$$TP73_refgz" | grep -vi ^Chr >> "$$a_tmp" ; \
-	outputfile="TP73_MA0861.1_bidirect_$(CHR).combined.bed" ; \
+	outputfile="$(TP73_COMBINED_BED)" ; \
 	echo -e -n "Chr\tFrom\tTo\tName\tScore\tStrand" > "$$outputfile" ; \
 	\
 	for i in $(FILES_CUTNRUN); do \
@@ -188,7 +247,7 @@ datatables: context
 
 TP73_datatable.bed.gz: TP73_datatable_$(CHR).bed.gz
 
-TP73_datatable_$(CHR).bed.gz: TP73_MA0861.1_bidirect_$(CHR).combined.bed.gz
+TP73_datatable_$(CHR).bed.gz: $(TP73_COMBINED_BED).gz
 	./context $< $(OUTPUTDIR)/$(CHR)/*bidirect*.bed.gz | gzip -9 -n -c > $@ || echo "I: Check ulimit -n 3000 if failing to open files"
 
 
@@ -206,4 +265,3 @@ count:
 #	$(CC) $(CFLAGS) -MM $^ -MF "$@"
 
 #include .depend
-

@@ -797,15 +797,15 @@ transcript.associated.with <- function(chr, start, end) {
 # Genes with more than 10 p73 binding sites in 500 bp promoter
 for(i in chromosomes) {
     cat("Chr ",i,": ",sep="")
-    i.max <- max(m.contexts[[i]][m.contexts[[i]]$InPromoter, ]$"TP73_MA0861.1_NumInWindow")
+    i.max <- max(m.contexts[[i]][m.contexts[[i]]$InPromoter, ]$"TP73_MA0861.2_NumInWindow")
     cat("Max: ", i.max, "\n")
     if (i.max >= 10) {
-        i.m <- m.contexts[[i]][m.contexts[[i]]$InPromoter & m.contexts[[i]]$TP73_MA0861.1_NumInWindow>=10,
+        i.m <- m.contexts[[i]][m.contexts[[i]]$InPromoter & m.contexts[[i]]$TP73_MA0861.2_NumInWindow>=10,
             c("Chr","From","To","Score",
             "pos_saos2_DN","pos_saos2_GFP","pos_saos2_TA",
             "pos_skmel29_2_DN","pos_skmel29_2_GFP","pos_skmel29_2_TA",
             "tp73_saos2_DN","tp73_saos2_GFP","tp73_saos2_TA",
-            "tp73_skmel29_2_DN","tp73_skmel29_2_GFP","tp73_skmel29_2_TA","TP73_MA0861.1_NumInWindow") ]
+            "tp73_skmel29_2_DN","tp73_skmel29_2_GFP","tp73_skmel29_2_TA","TP73_MA0861.2_NumInWindow") ]
         genes <- c()
         for(i.n in 1:nrow(i.m)) {
             g <-transcript.associated.with(i.m[i.n,"Chr"],i.m[i.n,"From"],i.m[i.n,"To"])
@@ -1014,7 +1014,7 @@ plot.distance.distribution.pre.post <- function(tf,chr=chromosomes) {
 }
 
 tf.of.interest <- c(# JASPAR TFs from EMT heatmap
-                    "TP73_MA0861.1","TP63_MA0525.2","TP53_MA0106.3",
+                    "TP73_MA0861.2","TP63_MA0525.2","TP53_MA0106.3",
                     "ATF7_MA0834.1",
                     "BACH2_MA1470.1",
                     "DBP_MA0639.1","DMRT3_MA0610.1",
@@ -1140,7 +1140,7 @@ for (l in lists) {
 }
 
 
-motifs.of.interest <- c("TP73_MA0861.1","TP63_MA0525.2","TP53_MA0106.3", "CTCF_MA0139.1",
+motifs.of.interest <- c("TP73_MA0861.2","TP63_MA0525.2","TP53_MA0106.3", "CTCF_MA0139.1",
             "E2F1_MA0024.3", "E2F2_MA0864.2", "E2F4_MA0470.2", "E2F6_MA0471.2",
             "FOS_MA1951.1","FOSL1--JUN_MA1129.1",
             "FOXO4_MA0848.1","Foxq1_MA0040.1", "KLF14_MA0740.2","Klf15_MA1890.1","REL_MA0101.1", "PLAG1_MA0163.1","POU2F1--SOX2_MA1962.1", "PPARG_MA0066.1",
@@ -1194,4 +1194,3 @@ for (l.name in names(l)) {
         cat("\n")
     }
 }
-

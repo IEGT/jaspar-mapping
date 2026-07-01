@@ -84,9 +84,10 @@ class PSSM {
          * Background is presume to always be at 0.25, ignoring variations in the GC content. 
          */
         static inline double logOddsRatioACGT(const double& count, const double& colsum);
+        static std::string canonicalScoreModeName(const std::string& scoreMode);
 
-        // Normalize the PSSM by converting counts to log-odds scores
-        void normalizePSSM(const std::unordered_map<char, const double>& backgroundFrequencies);
+        // Normalize the PSSM by converting counts to the selected score mode.
+        void normalizePSSM(const std::unordered_map<char, const double>& backgroundFrequencies, const std::string& scoreMode = "log2_relative_risk");
 
         // Overload the << operator for PSSM
         friend std::ostream& operator<<(std::ostream& os, const PSSM& pssmObj) {

@@ -201,7 +201,7 @@ for(groupname in names(m.contexts.all) ) {
 }
 
 
-if (false) 
+if (FALSE) {
     m <- create.lists.for.chromosome(m)
     m.findings[[i]] <- attributes(m)
     m.findings[[i]]$promoterBedTables <- m.promoters.index
@@ -237,8 +237,8 @@ for (l in lists) {
     rownames(m.all.findings[[l]]) <- prettyIdentifierJaspar(rownames(m.all.findings[[l]]))
 }
 
-motifs.of.interest <- c("TP73_MA0861.1","TP63_MA0525.2","TP53_MA0106.3", "CTCF_MA0139.1",
-            "E2F1_MA0024.3", "E2F2_MA0864.2", "E2F4_MA0470.2", "E2F6_MA0471.2"
+motifs.of.interest <- c("TP73_MA0861.2","TP63_MA0525.2","TP53_MA0106.3", "CTCF_MA0139.1",
+            "E2F1_MA0024.3", "E2F2_MA0864.2", "E2F4_MA0470.2", "E2F6_MA0471.2",
             "FOS_MA1951.1","FOSL1--JUN_MA1129.1",
             "FOXO4_MA0848.1","Foxq1_MA0040.1", "KLF14_MA0740.2","Klf15_MA1890.1","REL_MA0101.1", "PLAG1_MA0163.1","POU2F1--SOX2_MA1962.1", "PPARG_MA0066.1",
             "RELA_MA0107.1","REST_MA0138.2", "RXRA--VDR_MA0074.1", "SP1_MA0079.5", "TBP_MA0108.2","YY1-2_MA1927.1",

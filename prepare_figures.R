@@ -2,7 +2,7 @@
 library(data.table)
 
 # Define the file path
-file_path <- "/home/moeller/GitHub/jaspar-mapping/output_Chr1/TP73_MA0861.1_positive_1.combined.bed"
+file_path <- "/home/moeller/GitHub/jaspar-mapping/output_Chr1/TP73_MA0861.2_positive_1.combined.bed"
 
 # Read the large tab-separated data file
 data <- fread(file_path, sep = "\t")
@@ -117,8 +117,8 @@ percentage_zeros_combined_long <- melt(percentage_zeros_combined[-1,], id.vars =
 # Create a line plot of the percentages against the score
 ggplot(percentage_zeros_combined_long,
     #aes(x = as.factor(as.character(bin)),
-    aes(as.numeric(gsub(pattern=",.*",replacement="",x=gsub(pattern="^[([]",replacement="",x=bin)))
-    y = Percentage, color = Type, shape = Type)) +
+    aes(x = as.numeric(gsub(pattern=",.*",replacement="",x=gsub(pattern="^[([]",replacement="",x=bin))),
+        y = Percentage, color = Type, shape = Type)) +
     geom_line() +
     geom_point(size = dot.size) +
     theme_minimal() +

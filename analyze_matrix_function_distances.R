@@ -27,7 +27,7 @@ require(ggplot2)
 
 plotShiftOfBinding <- function(m,
                                chromosome=NA,
-                               tf="TP73_MA0861.1",
+                               tf="TP73_MA0861.2",
                                tfbs.selection=NULL,
                                subset.name="unknown",
                                binwidth=2,
@@ -76,4 +76,4 @@ plotShiftOfBinding <- function(m,
     dir.create(output.dir, showWarnings = FALSE, recursive = TRUE)
     ggsave(paste(output.dir,paste("histogram_of_shift_for_tf_",tf,"_subset_",subset.name,".png",sep=""),sep="/"),
         plot=p, width=8, height=6, dpi=300)
-} 
+}

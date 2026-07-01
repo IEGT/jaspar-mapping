@@ -13,19 +13,20 @@
 #include <algorithm> // For removing brackets, replace
 #include <iomanip>   // For formatted output / setting precision
 #include <chrono>    // For progress timing
+#include <cctype>
 #include <math.h>
 
-/** \brief Function to calculate log-odds score for a given nucleotide at a position
+/** \brief Function to calculate log2(frequency/background) for one nucleotide.
  */
 double PSSM::logRelativeRisk(const double& frequency, const double& background) {
     if (frequency == 0) {
         return -1e9;  // Prevent log(0) by returning a large negative score for unobserved nucleotides
         //return -log2(1024*16);  // assume one of the next upcoming tests would have found that residue to avoid -inf
     }
-    return log2(frequency / background);  // log Risk Ratio
+    return log2(frequency / background);
 }
 
-/** \brief Function to calculate log-odds score for a given nucleotide at a position
+/** \brief Function to calculate log2(frequency/0.25) for one nucleotide.
  */
 double PSSM::logRelativeRiskACGT(const double& frequency) {
     const double log2Background = -2.0 ; // == log2(0.25);
@@ -33,7 +34,7 @@ double PSSM::logRelativeRiskACGT(const double& frequency) {
         return -1e9;  // Prevent log(0) by returning a large negative score for unobserved nucleotides
         //return -log2(1024*16);  // assume one of the next upcoming tests would have found that residue to avoid -inf
     }
-    return log2(frequency) - log2Background;  // log Risk Ratio
+    return log2(frequency) - log2Background;
 }
 
 double PSSM::logOddsRatioACGT(const double& count, const double& colsum) {
@@ -54,6 +55,22 @@ double PSSM::logOddsRatioACGT(const double& count, const double& colsum) {
         return +1e9;  // Prevent frequency/0 division by returning a large negative score for unobserved nucleotides
     }
     return log2(count / remainer) - log2BackgroundOdd;  // Log-odds ratio, assuming equal distribution as background
+}
+
+std::string PSSM::canonicalScoreModeName(const std::string& scoreMode) {
+    std::string mode = scoreMode;
+    std::transform(mode.begin(), mode.end(), mode.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    std::replace(mode.begin(), mode.end(), '-', '_');
+
+    if (mode == "log2_relative_risk" || mode == "log_relative_risk" || mode == "relative_risk" || mode == "log_ratio" || mode == "log2_ratio") {
+        return "log2_relative_risk";
+    }
+    if (mode == "log_odds" || mode == "log2_odds" || mode == "log_odds_ratio" || mode == "odds_ratio") {
+        return "log_odds";
+    }
+    return "";
 }
 
 /** \brief Function to trim whitespace from strings
@@ -186,11 +203,17 @@ int PSSM::parsePSSMFile(const std::string& pssmFile, pssm_list_type& pssm_list, 
     return 0;
 }
 
-/** \brief Normalize the PSSM by converting counts to log-odds scores
+/** \brief Normalize the PSSM by converting counts to the selected score mode.
  */
-void PSSM::normalizePSSM(const std::unordered_map<char, const double>& backgroundFrequencies) {
+void PSSM::normalizePSSM(const std::unordered_map<char, const double>& backgroundFrequencies, const std::string& scoreMode) {
 
-        std::cerr << "I: NormalizePSSM " << std::endl;
+        const std::string canonicalScoreMode = PSSM::canonicalScoreModeName(scoreMode);
+        if (canonicalScoreMode.empty()) {
+            std::cerr << "E: Unknown PSSM score mode '" << scoreMode << "'." << std::endl;
+            exit(-1);
+        }
+
+        std::cerr << "I: NormalizePSSM with score mode '" << canonicalScoreMode << "'" << std::endl;
         std::cerr << *this;
 
         for (auto& [nucleotide, counts] : this->pssm) {
@@ -215,12 +238,11 @@ void PSSM::normalizePSSM(const std::unordered_map<char, const double>& backgroun
                         }
 */
                         if (PSSM::debug) std::cerr << "I: Normalization of " << counts[i] << " counts at position " << i << " with column sum " << this->colsums[i] << " to ";
-            // log odds ratio, smoothed by avoiding complete coverage
-                        // logOdds
-                        // counts[i] = PSSM::logOddsRatioACGT(counts[i]+1, this->colsums[i]+4);
-                        // logRisk
-			//counts[i] = PSSM::logRelativeRiskACGT(counts[i]+1 / this->colsums[i]+4);
-			counts[i] = PSSM::logRelativeRiskACGT(counts[i] / this->colsums[i]);
+                        if (canonicalScoreMode == "log_odds") {
+                                counts[i] = PSSM::logOddsRatioACGT(counts[i]+1, this->colsums[i]+4);
+                        } else {
+                                counts[i] = PSSM::logRelativeRisk(counts[i] / this->colsums[i], background);
+                        }
                         if (PSSM::debug) std::cerr << counts[i] << std::endl;
 
 
