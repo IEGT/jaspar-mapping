@@ -64,11 +64,25 @@ To execute this program
     and
  3. unpack it by +
    `gunzip -c Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz > Homo_sapiens.GRCh38.dna.primary_assembly.fasta`
- 4. Download JASPAR with the Makefile default release, currently JASPAR 2026, by running +
+ 4. Optionally create a FASTA index with `make genome_index` or
+    `samtools faidx Homo_sapiens.GRCh38.dna.primary_assembly.fasta`.
+    `pssm_scan` automatically uses `${GENOME}.fai` for chromosome-restricted
+    scans. BGZF-compressed FASTA can also be accessed through matching `.fai`
+    and `.gzi` files; ordinary gzip remains a streaming fallback.
+ 5. Download JASPAR with the Makefile default release, currently JASPAR 2026, by running +
     `make jaspar`
- 5. Execute `./pssm_scan`, expect separate outputs for every motif and the respective positive and negative strands. The option "--help" provides extra details. The default score mode is `log2_relative_risk`, matching the publication-era behavior; use `--score-mode log_odds` or `make SCORE_MODE=log_odds ...` when running the alternative motif-score filter. Make keeps the historical `output_RelativeRisk_20250217` directory for the default mode and switches non-default score modes to separate output directories unless `OUTPUTDIR` is set explicitly.
+ 6. Execute `./pssm_scan`, expect separate outputs for every motif and the respective positive and negative strands. The option "--help" provides extra details. The default score mode is `log2_relative_risk`, matching the publication-era behavior; use `--score-mode log_odds` or `make SCORE_MODE=log_odds ...` when running the alternative motif-score filter. Make keeps the historical `output_RelativeRisk_20250217` directory for the default mode and switches non-default score modes to separate output directories unless `OUTPUTDIR` is set explicitly.
 
 Unconstrained, for the full genome, expect an output of ~30 GB for each of the ~2000 motifs of JASPAR. Options are provided to retrieve matches above a given threshold or for particular chromosomal regions. Scanner outputs include a `ScoreMode` column so downstream tables can distinguish sequence-level score filters from later contrast-level log ratios or log odds.
+
+Additional scanner controls now include `--strand +|-|both`,
+`--coordinate-mode legacy|bed`, and `--min-pwm-relative-score` /
+`--max-pwm-relative-score`. The PWM-relative score follows the JASPAR-style
+normalization `(score - min_possible_score) / (max_possible_score -
+min_possible_score)` for the selected `--score-mode` and is written as a
+`PWMRelativeScore` output column. The default coordinate mode remains `legacy`;
+use `--coordinate-mode bed` for 0-based, half-open BED-style coordinates in
+the first three output fields.
 
 To inspect subthreshold scores without writing one row per genomic window, use
 `./pssm_scan --score-distribution` or `make score_distributions_chr1`. The Make
@@ -81,6 +95,8 @@ fixed-width bins, or `SCORE_MODE=log_odds` to change the sequence-score mode.
 In unsmoothed `log2_relative_risk` mode, windows hitting zero-probability motif
 entries are counted as skipped sentinel windows; `log_odds` uses pseudocount
 smoothing and therefore keeps those windows in the histogram.
+Distribution TSVs also include an explicit `BinScheme=sentinel` row when such
+windows are present, with `ScoreBinStart=-Inf` and `ScoreBinEnd=-10000`.
 
 ## Automated reference checks
 

@@ -33,7 +33,7 @@ class PSSM {
         }
 
         PSSM(const PSSM& c) {
-            std::cerr << "D: PSSM:invoked copy constructor" << std::endl;
+            if (PSSM::debug) std::cerr << "D: PSSM: invoked copy constructor" << std::endl;
             this->motifID = c.motifID;
             this->motifName = c.motifName;
             this->motifLength = c.motifLength;
@@ -61,16 +61,16 @@ class PSSM {
                     this->colsums[i] += counts[i];
                 }
             }
-            std::cerr << "ColSums: " << std::endl;
-            for (int i = 0; i< motifLength; i++) {
-                std::cerr << "\t" << this->colsums[i];
+            if (PSSM::debug) {
+                std::cerr << "ColSums: " << std::endl;
+                for (int i = 0; i< motifLength; i++) {
+                    std::cerr << "\t" << this->colsums[i];
+                }
+                std::cerr << std::endl;
             }
-            std::cerr << std::endl;
         }
  
-        ~PSSM() {
-            std::cerr << "PSSM - deleting colsums[]" << std::endl;
-        }
+        ~PSSM() = default;
 
         static int parsePSSMFile(const std::string& pssmFile, std::unordered_map<std::string, PSSM>& pssm_list, const std::string& targetMotifID, const int& beVerbose=0);
         static std::string trim(const std::string& str);

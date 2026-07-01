@@ -95,7 +95,9 @@ std::string PSSM::trim(const std::string& str) {
  */
 int PSSM::parsePSSMFile(const std::string& pssmFile, pssm_list_type& pssm_list, const std::string& targetMotifID, const int& beVerbose) {
 
-    std::cerr << "D: Parsing file '" << pssmFile << "' aiming at target MotifID '" << targetMotifID << "' with verbosity level " << beVerbose << std::endl;
+    if (beVerbose > 1 || PSSM::debug) {
+        std::cerr << "D: Parsing file '" << pssmFile << "' aiming at target MotifID '" << targetMotifID << "' with verbosity level " << beVerbose << std::endl;
+    }
 
     std::ifstream inFile(pssmFile);
     if (!inFile.is_open()) {
@@ -197,7 +199,9 @@ int PSSM::parsePSSMFile(const std::string& pssmFile, pssm_list_type& pssm_list, 
          }
     }
 
-    std::cerr << "I: Read " << numPSSMsRead << " PSSMs from file '" << pssmFile << "'" << std::endl;
+    if (beVerbose) {
+        std::cerr << "I: Read " << numPSSMsRead << " PSSMs from file '" << pssmFile << "'" << std::endl;
+    }
 
     inFile.close();
     return 0;
@@ -213,8 +217,10 @@ void PSSM::normalizePSSM(const std::unordered_map<char, const double>& backgroun
             exit(-1);
         }
 
-        std::cerr << "I: NormalizePSSM with score mode '" << canonicalScoreMode << "'" << std::endl;
-        std::cerr << *this;
+        if (PSSM::debug) {
+            std::cerr << "I: NormalizePSSM with score mode '" << canonicalScoreMode << "'" << std::endl;
+            std::cerr << *this;
+        }
 
         for (auto& [nucleotide, counts] : this->pssm) {
                 const auto background = backgroundFrequencies.at(nucleotide);

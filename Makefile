@@ -22,6 +22,7 @@ JASPAR=$(JASPAR_DIR)/$(JASPAR_BASENAME)
 JASPAR_URL=https://jaspar.elixir.no/download/data/$(JASPAR_VERSION)/CORE/$(JASPAR_BASENAME)
 GENOME=Homo_sapiens.GRCh38.dna.primary_assembly.fasta
 GENOMEGZ=Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz
+GENOME_INDEX=$(GENOME).fai
 TP73_MOTIF_ID?=$(if $(filter 2022,$(JASPAR_VERSION)),MA0861.1,MA0861.2)
 TP73_MOTIF=TP73_$(TP73_MOTIF_ID)
 TP73_BIDIRECT=$(TP73_MOTIF)_bidirect_$(CHR)
@@ -76,6 +77,11 @@ $(GENOME): $(GENOMEGZ)
 
 genome: $(GENOME)
 genomegz: $(GENOMEGZ)
+
+$(GENOME_INDEX): $(GENOME)
+	samtools faidx $<
+
+genome_index: $(GENOME_INDEX)
 
 # Define the pattern rule for generating .bed files
 $(OUTPUTDIR)/$(CHR)/%_negative_$(CHR).bed $(OUTPUTDIR)/$(CHR)/%_positive_$(CHR).bed:
@@ -163,7 +169,7 @@ test_reference_tp73_promoter_chr1: pssm_scan $(JASPAR) $(GENOME)
 	fi ; \
 	echo "I: E2F1 hits in TP73 promoter reference window: $$hits"
 
-.PHONY: test all $(OUTPUTDIR)/$(CHR) jaspar genome genomegz genome_testdata count datatables files_cutandrun_clean TP73_datatable test_reference_tp73_promoter_chr1 score_distributions_chr1
+.PHONY: test all $(OUTPUTDIR)/$(CHR) jaspar genome genomegz genome_index genome_testdata count datatables files_cutandrun_clean TP73_datatable test_reference_tp73_promoter_chr1 score_distributions_chr1
 .PRECIOUS: $(GENOME) $(GENOMEGZ) %.bed %.bed.gz
 .SECONDARY:
 
