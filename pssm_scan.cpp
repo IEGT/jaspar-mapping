@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <csignal>
 #include <limits>
 #include <map>
 #include <set>
@@ -37,6 +38,33 @@ static constexpr double SENTINEL_SCORE = -1e9;
 
 int beVerbose = 0;
 int showDebug = 0;
+volatile std::sig_atomic_t progressStatusRequested = 0;
+
+void handleProgressSignal(int) {
+    progressStatusRequested = 1;
+}
+
+void installProgressSignalHandler(const int signalNumber, const char* signalName) {
+    struct sigaction action;
+    std::memset(&action, 0, sizeof(action));
+    action.sa_handler = handleProgressSignal;
+    sigemptyset(&action.sa_mask);
+#ifdef SA_RESTART
+    action.sa_flags = SA_RESTART;
+#endif
+
+    if (sigaction(signalNumber, &action, nullptr) != 0) {
+        std::cerr << "W: Failed to install " << signalName << " progress handler: "
+                  << std::strerror(errno) << std::endl;
+    }
+}
+
+void installProgressSignalHandlers() {
+    installProgressSignalHandler(SIGUSR1, "SIGUSR1");
+#ifdef SIGINFO
+    installProgressSignalHandler(SIGINFO, "SIGINFO");
+#endif
+}
 
 // global variable to control verbosity
 std::unordered_map<char, const double> backgroundFrequencies = {
@@ -505,6 +533,41 @@ std::string formatDoubleForFileLabel(const double& value) {
     return label;
 }
 
+void maybePrintRequestedProgress(const char* operation, const PSSM& pssm,
+                                 const std::string& chromosome, const std::string& strand,
+                                 const size_t& posStart, const size_t& posEnd,
+                                 const size_t& motifLength, const size_t& currentPos) {
+    if (progressStatusRequested == 0) {
+        return;
+    }
+    progressStatusRequested = 0;
+
+    size_t totalWindows = 0;
+    if (posEnd >= motifLength && posStart <= posEnd - motifLength) {
+        totalWindows = posEnd - motifLength - posStart + 1;
+    }
+
+    size_t completedWindows = 0;
+    if (totalWindows > 0 && currentPos >= posStart) {
+        completedWindows = std::min(totalWindows, currentPos - posStart + 1);
+    }
+
+    const double progress = totalWindows == 0 ? 1.0 :
+        static_cast<double>(completedWindows) / static_cast<double>(totalWindows);
+
+    std::ostringstream message;
+    message << "\nI: progress request"
+            << " operation=" << operation
+            << " motif_id=" << pssm.motifID
+            << " motif_name=" << pssm.motifName
+            << " chr=" << chromosome
+            << " strand=" << strand
+            << " pos=" << currentPos
+            << " windows=" << completedWindows << "/" << totalWindows
+            << " progress=" << std::fixed << std::setprecision(3) << progress * 100.0 << "%";
+    std::cerr << message.str() << std::endl;
+}
+
 /** \brief Function to reverse complement a DNA sequence
  * Lowercase characters are transposed to upper case in the process
  * @param sequence - the DNA sequence to reverse complement
@@ -587,6 +650,7 @@ int scanSequence(const std::string& chromosome, const EncodedChromosome& encoded
         std::cerr << "E: Minus-strand scan requested, but chromosome " << chromosome << " lacks reverse-complement codes." << std::endl;
         return -1;
     }
+    const size_t statusCheckMask = 0x3fff;
     for (size_t i = posStart; i <= posEnd - motifLength; ++i) {
         const size_t codeStart = reverseComplementWindow ? sequenceLength - i - motifLength : i;
         const double score = calculateScoreAt(codes, codeStart, flatPssm);
@@ -602,6 +666,9 @@ int scanSequence(const std::string& chromosome, const EncodedChromosome& encoded
             //auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start).count();
             //std::cout << "Progress: " << std::fixed << std::setprecision(2) << progress * 100 << "% - Elapsed time: " << elapsed << " seconds\n";
             displayProgressBar(progress);
+        }
+        if (((i - posStart) & statusCheckMask) == 0) {
+            maybePrintRequestedProgress("scan", pssm, chromosome, strand, posStart, posEnd, motifLength, i);
         }
 
         if (score < threshold) {
@@ -631,6 +698,7 @@ int scanSequence(const std::string& chromosome, const EncodedChromosome& encoded
         outFile << '\n';
 
     }
+    maybePrintRequestedProgress("scan", pssm, chromosome, strand, posStart, posEnd, motifLength, posEnd - motifLength);
     return 0;
 }
 
@@ -670,6 +738,7 @@ int scanScoreDistribution(const std::string& chromosome, const EncodedChromosome
         std::cerr << "E: Minus-strand distribution requested, but chromosome " << chromosome << " lacks reverse-complement codes." << std::endl;
         return -1;
     }
+    const size_t statusCheckMask = 0x3fff;
     for (size_t i = posStart; i <= posEnd - motifLength; ++i) {
         const size_t codeStart = reverseComplementWindow ? sequenceLength - i - motifLength : i;
         const double score = calculateScoreAt(codes, codeStart, flatPssm);
@@ -680,8 +749,12 @@ int scanScoreDistribution(const std::string& chromosome, const EncodedChromosome
             const double progress = denominator == 0 ? 1.0 : static_cast<double>(i - posStart) / denominator;
             displayProgressBar(progress);
         }
+        if (((i - posStart) & statusCheckMask) == 0) {
+            maybePrintRequestedProgress("score_distribution", pssm, chromosome, strand, posStart, posEnd, motifLength, i);
+        }
     }
 
+    maybePrintRequestedProgress("score_distribution", pssm, chromosome, strand, posStart, posEnd, motifLength, posEnd - motifLength);
     return 0;
 }
 
@@ -1193,10 +1266,16 @@ void printHelp(const std::string& programName, const std::string& genomeFile, co
     std::cout << " --skip-N             Skip windows containing 'N'" << std::endl;
     std::cout << " --neutral-N          Treat 'N' as neutral (contribute 0 to the score)" << std::endl;
     std::cout << " -N, --skip-normalization Skip log-normalisation, will affect scoring." << std::endl;
+    std::cout << " SIGUSR1              Request one progress line on stderr from a running process, e.g. kill -USR1 <pid>" << std::endl;
+#ifdef SIGINFO
+    std::cout << " SIGINFO              Also requests one progress line where available, e.g. Ctrl-T on BSD/macOS" << std::endl;
+#endif
     std::cout << " -h, --help           Display this help message" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
+    installProgressSignalHandlers();
+
     // Default file names
     std::string genomeFile = "Homo_sapiens.GRCh38.dna.primary_assembly.fasta";
     std::string fastaIndexFile;

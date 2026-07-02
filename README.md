@@ -88,6 +88,12 @@ chromosome or motif-family fan-out remains the default parallelization strategy;
 compressed BED output are deliberate follow-up choices because they affect job
 sizing, log ordering, and downstream file handling.
 
+Long-running scans can report progress on demand without `-v`. Send `SIGUSR1`
+to the running process, for example `kill -USR1 <pid>`, and `pssm_scan` prints
+one status line to stderr with the current motif, chromosome, strand, position,
+window count, and percent complete. On platforms with `SIGINFO`, that signal
+requests the same report.
+
 Additional scanner controls now include `--strand +|-|both`,
 `--coordinate-mode legacy|bed`, and `--min-pwm-relative-score` /
 `--max-pwm-relative-score`. The PWM-relative score follows the JASPAR-style
