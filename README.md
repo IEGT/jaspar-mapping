@@ -75,6 +75,19 @@ To execute this program
 
 Unconstrained, for the full genome, expect an output of ~30 GB for each of the ~2000 motifs of JASPAR. Options are provided to retrieve matches above a given threshold or for particular chromosomal regions. Scanner outputs include a `ScoreMode` column so downstream tables can distinguish sequence-level score filters from later contrast-level log ratios or log odds.
 
+For production chromosome scans, prefer `make scan_chr_all_motifs CHR=1` over
+per-motif invocations. That path loads and encodes the chromosome once, parses
+the JASPAR file once, and then scans all motifs in one process. The scanner
+stores chromosomes as nucleotide codes and flattens each PSSM before scanning
+so the inner loop avoids per-base hash-map lookups. Cluster-specific compiler
+flags can be passed without editing the Makefile, for example
+`make CXXOPTFLAGS="-march=x86-64-v3"`. The chromosome-wide all-motif target
+defaults to BED coordinates plus matched sequences (`SCAN_CHR_FLAGS`), matching
+the Parquet schema and later half-site architecture derivation. Slurm-level
+chromosome or motif-family fan-out remains the default parallelization strategy; OpenMP and direct
+compressed BED output are deliberate follow-up choices because they affect job
+sizing, log ordering, and downstream file handling.
+
 Additional scanner controls now include `--strand +|-|both`,
 `--coordinate-mode legacy|bed`, and `--min-pwm-relative-score` /
 `--max-pwm-relative-score`. The PWM-relative score follows the JASPAR-style
@@ -82,7 +95,9 @@ normalization `(score - min_possible_score) / (max_possible_score -
 min_possible_score)` for the selected `--score-mode` and is written as a
 `PWMRelativeScore` output column. The default coordinate mode remains `legacy`;
 use `--coordinate-mode bed` for 0-based, half-open BED-style coordinates in
-the first three output fields.
+the first three output fields. The default `--skip-N` avoids reporting windows
+from long assembly gaps; use `--neutral-N` only for targeted diagnostics or
+with thresholds that cannot promote all-N windows.
 
 To inspect subthreshold scores without writing one row per genomic window, use
 `./pssm_scan --score-distribution` or `make score_distributions_chr1`. The Make
@@ -91,10 +106,12 @@ writes per-motif histograms, including negative scores. The default
 `DISTRIBUTION_BIN_WIDTH=adaptive` uses bins of 0.2 for scores >= -10, 1 for
 scores >= -50, 5 for scores >= -250, 10 for scores >= -1000, 100 for scores
 >= -10000, and 500 below that. Set a numeric `DISTRIBUTION_BIN_WIDTH=0.5` for
-fixed-width bins, or `SCORE_MODE=log_odds` to change the sequence-score mode.
-In unsmoothed `log2_relative_risk` mode, windows hitting zero-probability motif
-entries are counted as skipped sentinel windows; `log_odds` uses pseudocount
-smoothing and therefore keeps those windows in the histogram.
+fixed-width bins, `SCORE_MODE=log_odds` to change the sequence-score mode, or
+`PSEUDOCOUNT=1` / `--pseudocount 1` to smooth JASPAR zero counts before
+normalization. In unsmoothed `log2_relative_risk` mode, windows hitting
+zero-probability motif entries are counted as skipped sentinel windows;
+`log_odds` uses `--pseudocount 1` by default and therefore keeps those windows
+in the histogram.
 Distribution TSVs also include an explicit `BinScheme=sentinel` row when such
 windows are present, with `ScoreBinStart=-Inf` and `ScoreBinEnd=-10000`.
 

@@ -87,7 +87,7 @@ class PSSM {
         static std::string canonicalScoreModeName(const std::string& scoreMode);
 
         // Normalize the PSSM by converting counts to the selected score mode.
-        void normalizePSSM(const std::unordered_map<char, const double>& backgroundFrequencies, const std::string& scoreMode = "log2_relative_risk");
+        void normalizePSSM(const std::unordered_map<char, const double>& backgroundFrequencies, const std::string& scoreMode = "log2_relative_risk", const double& pseudocount = 0.0);
 
         // Overload the << operator for PSSM
         friend std::ostream& operator<<(std::ostream& os, const PSSM& pssmObj) {

@@ -42,7 +42,6 @@ double PSSM::logOddsRatioACGT(const double& count, const double& colsum) {
     const double log2BackgroundOdd = log2(1.0/(4.0-1.0));
 
     if (count == 0.0) {
-        // not expected to happen because of numbers "smoothed" by 1 added to all counts
         return -1e9;  // Prevent log(0) by returning a large negative score for unobserved nucleotides
     }
     const double remainer = colsum-count;
@@ -51,8 +50,7 @@ double PSSM::logOddsRatioACGT(const double& count, const double& colsum) {
         exit(-1);
     }
     if (remainer == 0.0) {
-        // not expected to happen because of numbers "smoothed" by 1 added to all counts
-        return +1e9;  // Prevent frequency/0 division by returning a large negative score for unobserved nucleotides
+        return +1e9;  // Prevent frequency/0 division by returning a large positive score for fixed nucleotides
     }
     return log2(count / remainer) - log2BackgroundOdd;  // Log-odds ratio, assuming equal distribution as background
 }
@@ -209,7 +207,7 @@ int PSSM::parsePSSMFile(const std::string& pssmFile, pssm_list_type& pssm_list, 
 
 /** \brief Normalize the PSSM by converting counts to the selected score mode.
  */
-void PSSM::normalizePSSM(const std::unordered_map<char, const double>& backgroundFrequencies, const std::string& scoreMode) {
+void PSSM::normalizePSSM(const std::unordered_map<char, const double>& backgroundFrequencies, const std::string& scoreMode, const double& pseudocount) {
 
         const std::string canonicalScoreMode = PSSM::canonicalScoreModeName(scoreMode);
         if (canonicalScoreMode.empty()) {
@@ -219,6 +217,7 @@ void PSSM::normalizePSSM(const std::unordered_map<char, const double>& backgroun
 
         if (PSSM::debug) {
             std::cerr << "I: NormalizePSSM with score mode '" << canonicalScoreMode << "'" << std::endl;
+            std::cerr << "I: Pseudocount=" << pseudocount << std::endl;
             std::cerr << *this;
         }
 
@@ -243,11 +242,13 @@ void PSSM::normalizePSSM(const std::unordered_map<char, const double>& backgroun
                                 continue;
                         }
 */
-                        if (PSSM::debug) std::cerr << "I: Normalization of " << counts[i] << " counts at position " << i << " with column sum " << this->colsums[i] << " to ";
+                        const double smoothedCount = counts[i] + pseudocount;
+                        const double smoothedColsum = this->colsums[i] + 4.0 * pseudocount;
+                        if (PSSM::debug) std::cerr << "I: Normalization of " << counts[i] << " counts at position " << i << " with column sum " << this->colsums[i] << " and pseudocount " << pseudocount << " to ";
                         if (canonicalScoreMode == "log_odds") {
-                                counts[i] = PSSM::logOddsRatioACGT(counts[i]+1, this->colsums[i]+4);
+                                counts[i] = PSSM::logOddsRatioACGT(smoothedCount, smoothedColsum);
                         } else {
-                                counts[i] = PSSM::logRelativeRisk(counts[i] / this->colsums[i], background);
+                                counts[i] = PSSM::logRelativeRisk(smoothedCount / smoothedColsum, background);
                         }
                         if (PSSM::debug) std::cerr << counts[i] << std::endl;
 

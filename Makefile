@@ -1,19 +1,26 @@
 
 CXX=g++
-CXXFLAGS= -std=c++23
-CXXFLAGS += -I/home/sm718/miniconda3/include
+CXXFLAGS?= -std=c++23
 CXXFLAGS += -g
 CXXFLAGS += -O3
+CXXFLAGS += -DNDEBUG
+CXXOPTFLAGS?=
+CXXFLAGS += $(CXXOPTFLAGS)
 #LDFLAGS=-lz -lbz2
 #LDFLAGS=/home/sm718/miniconda3/pkgs/zlib-1.3.1-h4ab18f5_1/lib/libz.a /home/sm718/miniconda3/pkgs/bzip2-1.0.8-h4bc722e_7/lib/libbz2.a
 LDFLAGS += -lz -lbz2
 LDFLAGS += -lm
+LDOPTFLAGS?=
+LDFLAGS += $(LDOPTFLAGS)
 
 SCRATCHDIR=/tmp
 SRCS=$(wildcard *.cpp)
 CHR=unset
 SCORE_MODE?=log2_relative_risk
 OUTPUTDIR?=$(if $(filter log2_relative_risk,$(SCORE_MODE)),output_RelativeRisk_20250217,output_$(SCORE_MODE)_20250217)
+PSEUDOCOUNT?=
+PSEUDOCOUNT_FLAG=$(if $(PSEUDOCOUNT),--pseudocount $(PSEUDOCOUNT),)
+SCAN_CHR_FLAGS?=--coordinate-mode bed --show-sequence $(PSEUDOCOUNT_FLAG)
 
 JASPAR_VERSION=2026
 JASPAR_DIR=.
@@ -38,7 +45,8 @@ TEST_REFERENCE_E2F1_POSITIVE=$(TEST_REFERENCE_OUTPUTDIR)/E2F1_MA0024.3_positive_
 TEST_REFERENCE_E2F1_NEGATIVE=$(TEST_REFERENCE_OUTPUTDIR)/E2F1_MA0024.3_negative_$(TEST_REFERENCE_CHR)_$(TEST_REFERENCE_FROM)-$(TEST_REFERENCE_TO).bed
 DISTRIBUTION_CHR=1
 DISTRIBUTION_BIN_WIDTH?=adaptive
-DISTRIBUTIONDIR?=score_distributions_$(SCORE_MODE)_bins_$(DISTRIBUTION_BIN_WIDTH)_JASPAR$(JASPAR_VERSION)_chr$(DISTRIBUTION_CHR)
+DISTRIBUTION_PSEUDOCOUNT_LABEL=$(if $(PSEUDOCOUNT),_pseudocount_$(PSEUDOCOUNT),)
+DISTRIBUTIONDIR?=score_distributions_$(SCORE_MODE)_bins_$(DISTRIBUTION_BIN_WIDTH)_JASPAR$(JASPAR_VERSION)_chr$(DISTRIBUTION_CHR)$(DISTRIBUTION_PSEUDOCOUNT_LABEL)
 
 .SUFFIXES: .gz .bed.gz .cpp .o .fasta .fa.gz _positive_$(CHR).bed _positive_$(CHR).bed.gz _negative_$(CHR).bed _negative_$(CHR).bed.gz _bidirect_$(CHR).bed.gz .bed .bedGraph .combined.bed
 
@@ -83,6 +91,10 @@ $(GENOME_INDEX): $(GENOME)
 
 genome_index: $(GENOME_INDEX)
 
+scan_chr_all_motifs: pssm_scan $(JASPAR) $(GENOME) $(GENOME_INDEX)
+	mkdir -p $(OUTPUTDIR)/$(CHR)
+	./pssm_scan --outdir $(OUTPUTDIR)/$(CHR) --genome $(GENOME) --pssm $(JASPAR) --score-mode $(SCORE_MODE) -l 0 --chr $(CHR) $(SCAN_CHR_FLAGS)
+
 # Define the pattern rule for generating .bed files
 $(OUTPUTDIR)/$(CHR)/%_negative_$(CHR).bed $(OUTPUTDIR)/$(CHR)/%_positive_$(CHR).bed:
 	mkdir -p $(OUTPUTDIR)/$(CHR)
@@ -108,7 +120,7 @@ $(OUTPUTDIR)/%_bidirect_$(CHR).bed.gz: $(OUTPUTDIR)/%_negative_$(CHR).bed.gz $(O
 SHELL=bash
 BED_FILES := $(shell if [ -f "$(JASPAR)" ]; then grep "^>" "$(JASPAR)" | sed -e 's%[/:()]%-%g' | awk '{print $$NF "_" $$1 "_positive_$(CHR).bed.gz"}' | sed -e 's/[>]//'; fi)
 BIDIRECT_FILES := $(shell if [ -f "$(JASPAR)" ]; then grep "^>" "$(JASPAR)" | sed -e 's%[/:()]%-%g' | awk '{print $$NF "_" $$1 "_bidirect_$(CHR).bed.gz"}' | sed -e 's/[>]//'; fi)
-SCORE_DISTRIBUTION_FILES := $(shell if [ -f "$(JASPAR)" ]; then grep "^>" "$(JASPAR)" | sed -e 's%[/:()]%-%g' | awk '{print "$(DISTRIBUTIONDIR)/" $$NF "_" $$1 "_score_distribution_$(SCORE_MODE)_bins_$(DISTRIBUTION_BIN_WIDTH)_positive_$(DISTRIBUTION_CHR).tsv"}' | sed -e 's/[>]//'; fi)
+SCORE_DISTRIBUTION_FILES := $(shell if [ -f "$(JASPAR)" ]; then grep "^>" "$(JASPAR)" | sed -e 's%[/:()]%-%g' | awk '{print "$(DISTRIBUTIONDIR)/" $$NF "_" $$1 "_score_distribution_$(SCORE_MODE)_bins_$(DISTRIBUTION_BIN_WIDTH)_positive_$(DISTRIBUTION_CHR)$(DISTRIBUTION_PSEUDOCOUNT_LABEL).tsv"}' | sed -e 's/[>]//'; fi)
 echo_bed:
 	@echo $(BED_FILES)|sort -S 2G
 echo_bidirect:
@@ -118,13 +130,13 @@ echo_score_distributions:
 
 score_distributions_chr1: $(SCORE_DISTRIBUTION_FILES)
 
-$(DISTRIBUTIONDIR)/%_score_distribution_$(SCORE_MODE)_bins_$(DISTRIBUTION_BIN_WIDTH)_positive_$(DISTRIBUTION_CHR).tsv: pssm_scan $(JASPAR) $(GENOME)
+$(DISTRIBUTIONDIR)/%_score_distribution_$(SCORE_MODE)_bins_$(DISTRIBUTION_BIN_WIDTH)_positive_$(DISTRIBUTION_CHR)$(DISTRIBUTION_PSEUDOCOUNT_LABEL).tsv: pssm_scan $(JASPAR) $(GENOME)
 	mkdir -p $(DISTRIBUTIONDIR)
 	echo $*
 	NAME=$(shell echo $* | sed -e 's/_MA.*$$//') ; \
 	ACC=$(shell echo $* | tr "_" "\n" |grep -E "^MA[0-9][0-9][0-9][0-9]" |head -n 1) ; \
 	echo "NAME=$$NAME ACC=$$ACC" ; \
-	./pssm_scan --score-distribution --distribution-bin-width $(DISTRIBUTION_BIN_WIDTH) --outdir $(DISTRIBUTIONDIR) --genome $(GENOME) --pssm $(JASPAR) --score-mode $(SCORE_MODE) --motif $$ACC --chr $(DISTRIBUTION_CHR)
+	./pssm_scan --score-distribution --distribution-bin-width $(DISTRIBUTION_BIN_WIDTH) --outdir $(DISTRIBUTIONDIR) --genome $(GENOME) --pssm $(JASPAR) --score-mode $(SCORE_MODE) $(PSEUDOCOUNT_FLAG) --motif $$ACC --chr $(DISTRIBUTION_CHR)
 
 $(shell basename $(GENOME) .fasta )_top500000.fasta: $(GENOME)
 	head -n 500000 $< > Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta
@@ -169,7 +181,7 @@ test_reference_tp73_promoter_chr1: pssm_scan $(JASPAR) $(GENOME)
 	fi ; \
 	echo "I: E2F1 hits in TP73 promoter reference window: $$hits"
 
-.PHONY: test all $(OUTPUTDIR)/$(CHR) jaspar genome genomegz genome_index genome_testdata count datatables files_cutandrun_clean TP73_datatable test_reference_tp73_promoter_chr1 score_distributions_chr1
+.PHONY: test all $(OUTPUTDIR)/$(CHR) jaspar genome genomegz genome_index scan_chr_all_motifs genome_testdata count datatables files_cutandrun_clean TP73_datatable test_reference_tp73_promoter_chr1 score_distributions_chr1
 .PRECIOUS: $(GENOME) $(GENOMEGZ) %.bed %.bed.gz
 .SECONDARY:
 
