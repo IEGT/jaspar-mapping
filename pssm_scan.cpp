@@ -1579,7 +1579,15 @@ int main(int argc, char* argv[]) {
         }
 
         pssm_type pssm = pssm_object_copy.pssm;
-        if (beVerbose) std::cerr << "I: Found motif length to be " << pssm.begin()->second.size() << " but maybe better is " << pssm_object.motifLength << std::endl;
+        const size_t inferredMotifLength = pssm.begin()->second.size();
+        if (inferredMotifLength != pssm_object.motifLength) {
+            std::cerr << "W: Motif " << motifID << " length mismatch: first matrix row has "
+                      << inferredMotifLength << " bp, parsed motif length is "
+                      << pssm_object.motifLength << " bp." << std::endl;
+        } else if (beVerbose) {
+            std::cerr << "I: Motif " << motifID << " (" << pssm_object.motifName
+                      << ") length: " << pssm_object.motifLength << " bp" << std::endl;
+        }
 
         if ( motifID != pssm_object.motifID ) {
             std::cerr << "E: Mismatch in motif ID." << std::endl;
