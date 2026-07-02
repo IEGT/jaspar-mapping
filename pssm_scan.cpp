@@ -533,6 +533,60 @@ std::string formatDoubleForFileLabel(const double& value) {
     return label;
 }
 
+std::string motifBaseID(const std::string& motifID) {
+    const size_t versionSeparator = motifID.find('.');
+    return versionSeparator == std::string::npos ? motifID : motifID.substr(0, versionSeparator);
+}
+
+std::string joinStrings(const std::vector<std::string>& values, const std::string& separator) {
+    std::ostringstream joined;
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i > 0) {
+            joined << separator;
+        }
+        joined << values[i];
+    }
+    return joined.str();
+}
+
+std::vector<std::string> findMotifVersionsInPSSMFile(const std::string& pssmFile, const std::string& targetMotifID) {
+    std::vector<std::string> matches;
+    const std::string targetBaseID = motifBaseID(targetMotifID);
+    if (targetBaseID.empty()) {
+        return matches;
+    }
+
+    std::ifstream inFile(pssmFile);
+    if (!inFile.is_open()) {
+        return matches;
+    }
+
+    std::string line;
+    while (std::getline(inFile, line)) {
+        line = PSSM::trim(line);
+        if (line.empty() || line[0] != '>') {
+            continue;
+        }
+
+        std::stringstream header(line.substr(1));
+        std::string motifID;
+        std::string motifName;
+        header >> motifID >> motifName;
+        if (motifID.empty() || motifID == targetMotifID || motifBaseID(motifID) != targetBaseID) {
+            continue;
+        }
+
+        std::ostringstream label;
+        label << motifID;
+        if (!motifName.empty()) {
+            label << " (" << motifName << ")";
+        }
+        matches.push_back(label.str());
+    }
+
+    return matches;
+}
+
 void maybePrintRequestedProgress(const char* operation, const PSSM& pssm,
                                  const std::string& chromosome, const std::string& strand,
                                  const size_t& posStart, const size_t& posEnd,
@@ -1550,7 +1604,19 @@ int main(int argc, char* argv[]) {
     }
     if (showDebug) std::cerr << "D: Read " << pssm_list.size() << " PSSMs from file '" << pssmFile << "'" << std::endl;
     if (pssm_list.empty()) {
-        std::cerr << "E: PSSM sucessfully parsed but nonetheless empty." << std::endl;
+        if (!targetMotifID.empty()) {
+            std::cerr << "E: Target motif " << targetMotifID << " was not found in PSSM file '"
+                      << pssmFile << "'." << std::endl;
+            const std::vector<std::string> availableVersions = findMotifVersionsInPSSMFile(pssmFile, targetMotifID);
+            if (!availableVersions.empty()) {
+                std::cerr << "I: Available motif version(s) with base ID "
+                          << motifBaseID(targetMotifID) << ": "
+                          << joinStrings(availableVersions, ", ") << std::endl;
+            }
+        } else {
+            std::cerr << "E: PSSM file '" << pssmFile
+                      << "' parsed successfully but no motifs were loaded." << std::endl;
+        }
         return 1;
     }
 
