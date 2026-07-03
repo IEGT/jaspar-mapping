@@ -33,6 +33,13 @@ struct FlatPSSM {
     std::vector<double> scores;
 };
 
+struct ScoreBlock {
+    size_t blockStart = 0;
+    std::vector<double> scores;
+    std::uint64_t validWindows = 0;
+    std::uint64_t skippedWindows = 0;
+};
+
 struct ScoreBin {
     double start;
     double end;
@@ -63,7 +70,14 @@ char complementBase(const char& base);
 bool parseDoubleStrict(const char* text, double& value);
 std::uint8_t codeForBase(const char& base);
 std::uint8_t complementCode(const std::uint8_t& code);
+bool isSkippedScore(const double& score);
 double calculateScoreAt(const std::vector<std::uint8_t>& codes, const size_t& start, const FlatPSSM& pssm);
+double calculateScoreAtGenomicStart(const std::vector<std::uint8_t>& codes, const size_t& sequenceLength,
+                                    const bool reverseComplementWindow, const size_t& genomicStart,
+                                    const FlatPSSM& pssm);
+ScoreBlock calculateScoreBlock(const std::vector<std::uint8_t>& codes, const size_t& sequenceLength,
+                               const bool reverseComplementWindow, const size_t& blockStart,
+                               const size_t& windowCount, const FlatPSSM& pssm);
 double calculateScore(const std::string& window, const pssm_type& pssm, bool skipN);
 FlatPSSM flattenPSSM(const PSSM& pssm, const bool skipN);
 std::string reverseComplement(const std::string& sequence);

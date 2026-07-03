@@ -44,9 +44,10 @@ SELECT
     matched_seq           -- nullable; present only if scanned with --show-sequence
 FROM read_parquet('tables/jaspar2026/motif_hit/*/*.parquet', hive_partitioning = 1);
 
--- Dense per-base score blocks for calibration runs. Physical Parquet stores
--- only block_start and a FLOAT[] score vector; identity lives in hive
--- partitions: motif_id, score_mode, pseudocount, chrom, strand.
+-- Dense per-window-start score blocks for calibration runs. Physical Parquet
+-- stores only block_start and a FLOAT[] score vector; skipped/sentinel windows
+-- are NULL list elements. Identity lives in hive partitions: motif_id,
+-- score_mode, pseudocount, chrom, strand.
 CREATE OR REPLACE VIEW motif_score_dense_block AS
 SELECT
     motif_id,

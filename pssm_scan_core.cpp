@@ -67,6 +67,10 @@ std::uint8_t complementCode(const std::uint8_t& code) {
     }
 }
 
+bool isSkippedScore(const double& score) {
+    return !std::isfinite(score) || score < SENTINEL_SCORE / 10.0;
+}
+
 double calculateScoreAt(const std::vector<std::uint8_t>& codes, const size_t& start, const FlatPSSM& pssm) {
     double score = 0.0;
 
@@ -75,6 +79,44 @@ double calculateScoreAt(const std::vector<std::uint8_t>& codes, const size_t& st
     }
 
     return score;
+}
+
+double calculateScoreAtGenomicStart(const std::vector<std::uint8_t>& codes, const size_t& sequenceLength,
+                                    const bool reverseComplementWindow, const size_t& genomicStart,
+                                    const FlatPSSM& pssm) {
+    if (pssm.motifLength == 0 || genomicStart > sequenceLength ||
+        pssm.motifLength > sequenceLength - genomicStart) {
+        return SENTINEL_SCORE;
+    }
+
+    const size_t codeStart = reverseComplementWindow ?
+        sequenceLength - genomicStart - pssm.motifLength :
+        genomicStart;
+    if (codeStart > codes.size() || pssm.motifLength > codes.size() - codeStart) {
+        return SENTINEL_SCORE;
+    }
+    return calculateScoreAt(codes, codeStart, pssm);
+}
+
+ScoreBlock calculateScoreBlock(const std::vector<std::uint8_t>& codes, const size_t& sequenceLength,
+                               const bool reverseComplementWindow, const size_t& blockStart,
+                               const size_t& windowCount, const FlatPSSM& pssm) {
+    ScoreBlock block;
+    block.blockStart = blockStart;
+    block.scores.reserve(windowCount);
+
+    for (size_t offset = 0; offset < windowCount; ++offset) {
+        const double score = calculateScoreAtGenomicStart(
+            codes, sequenceLength, reverseComplementWindow, blockStart + offset, pssm);
+        block.scores.push_back(score);
+        if (isSkippedScore(score)) {
+            block.skippedWindows++;
+        } else {
+            block.validWindows++;
+        }
+    }
+
+    return block;
 }
 
 double calculateScore(const std::string& window, const pssm_type& pssm, bool skipN) {
@@ -214,7 +256,7 @@ double ScoreDistribution::binWidthForScore(const double& score) const {
 }
 
 void ScoreDistribution::add(const double& score) {
-    if (!std::isfinite(score) || score < SENTINEL_SCORE / 10.0) {
+    if (isSkippedScore(score)) {
         skippedWindows++;
         return;
     }

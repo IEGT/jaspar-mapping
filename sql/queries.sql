@@ -80,7 +80,7 @@ FROM ml_ta_vs_dn m
 JOIN gene_set s ON s.gene_id = m.gene_id
 WHERE s.set_name = $set_name AND m.cell_line = $cell_line;
 
--- Q7. Dense score slice — reconstruct per-base rows from dense score blocks
+-- Q7. Dense score slice — reconstruct per-window-start rows from dense score blocks
 --     for a small genomic interval. Params: $motif_id, $chrom, $strand,
 --     $score_mode, $pseudocount, $start, $end
 SELECT chrom, start, "end", motif_id, motif_name, strand,

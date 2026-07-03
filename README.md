@@ -122,6 +122,27 @@ in the histogram.
 Distribution TSVs also include an explicit `BinScheme=sentinel` row when such
 windows are present, with `ScoreBinStart=-Inf` and `ScoreBinEnd=-10000`.
 
+For dense chr1 calibration against CUT&RUN coverage, use `--dense-scores` with
+one motif and one chromosome. Dense mode writes every motif-window start as
+block TSV under a hive-style path such as
+`tables/jaspar2026/motif_score_dense/motif_id=MA0861.2/score_mode=.../chrom=1/strand=plus/part-000000.tsv`.
+Skipped windows, including unsmoothed zero-count sentinels and assembly gaps
+under `--skip-N`, are stored as `NULL` elements in the score vector. Convert
+the TSV blocks to Parquet with the local DuckDB helper:
+
+```
+./pssm_scan --dense-scores --dense-block-size 65536 \
+  --outdir dense_tp73_chr1_log_ratio \
+  --genome Homo_sapiens.GRCh38.dna.primary_assembly.fasta \
+  --pssm JASPAR2026_CORE_non-redundant_pfms_jaspar.txt \
+  --motif MA0861.2 --chr 1 --strand both \
+  --score-mode log2_relative_risk --pseudocount 1
+scripts/dense_tsv_to_parquet.sh dense_tp73_chr1_log_ratio/tables/jaspar2026/motif_score_dense
+```
+
+Repeat the same command with `--score-mode log_odds` and a different `--outdir`
+for the second TP73 calibration run.
+
 ## Automated reference checks
 
 The target `make test_reference_tp73_promoter_chr1` scans E2F1 and the TP53

@@ -190,6 +190,50 @@ void testCalculateScoreAt() {
     expectNear(calculateScoreAt(codes, 1, flat), 6.0, 1e-12, "calculateScoreAt offset window");
 }
 
+void testGenomicScoreBlocks() {
+    FlatPSSM flat;
+    flat.motifLength = 2;
+    flat.scores.assign(flat.motifLength * BASE_CODE_COUNT, 0.0);
+    flat.scores[0 * BASE_CODE_COUNT + BASE_A] = 1.0;
+    flat.scores[0 * BASE_CODE_COUNT + BASE_C] = 2.0;
+    flat.scores[0 * BASE_CODE_COUNT + BASE_G] = 3.0;
+    flat.scores[0 * BASE_CODE_COUNT + BASE_T] = 4.0;
+    flat.scores[0 * BASE_CODE_COUNT + BASE_N] = SENTINEL_SCORE;
+    flat.scores[1 * BASE_CODE_COUNT + BASE_A] = 10.0;
+    flat.scores[1 * BASE_CODE_COUNT + BASE_C] = 20.0;
+    flat.scores[1 * BASE_CODE_COUNT + BASE_G] = 30.0;
+    flat.scores[1 * BASE_CODE_COUNT + BASE_T] = 40.0;
+    flat.scores[1 * BASE_CODE_COUNT + BASE_N] = SENTINEL_SCORE;
+
+    std::vector<std::uint8_t> plusCodes = {
+        codeForBase('A'), codeForBase('A'), codeForBase('C'), codeForBase('G')
+    };
+    std::vector<std::uint8_t> minusCodes(plusCodes.size());
+    for (size_t i = 0; i < plusCodes.size(); ++i) {
+        minusCodes[plusCodes.size() - 1 - i] = complementCode(plusCodes[i]);
+    }
+
+    expectNear(calculateScoreAtGenomicStart(plusCodes, plusCodes.size(), false, 1, flat),
+               21.0, 1e-12, "plus genomic-start score");
+    expectNear(calculateScoreAtGenomicStart(minusCodes, plusCodes.size(), true, 1, flat),
+               43.0, 1e-12, "minus genomic-start score");
+
+    const ScoreBlock plusBlock = calculateScoreBlock(plusCodes, plusCodes.size(), false, 0, 3, flat);
+    expectEqual(plusBlock.blockStart, static_cast<size_t>(0), "score block start");
+    expectEqual(plusBlock.scores.size(), static_cast<size_t>(3), "score block size");
+    expectNear(plusBlock.scores[0], 11.0, 1e-12, "first dense block score");
+    expectNear(plusBlock.scores[1], 21.0, 1e-12, "second dense block score");
+    expectNear(plusBlock.scores[2], 32.0, 1e-12, "third dense block score");
+    expectEqual(plusBlock.validWindows, static_cast<std::uint64_t>(3), "score block valid count");
+    expectEqual(plusBlock.skippedWindows, static_cast<std::uint64_t>(0), "score block skipped count");
+
+    std::vector<std::uint8_t> codesWithN = {codeForBase('A'), codeForBase('N')};
+    const ScoreBlock skippedBlock = calculateScoreBlock(codesWithN, codesWithN.size(), false, 0, 1, flat);
+    expectTrue(isSkippedScore(skippedBlock.scores[0]), "N-containing dense score skipped");
+    expectEqual(skippedBlock.validWindows, static_cast<std::uint64_t>(0), "skipped block valid count");
+    expectEqual(skippedBlock.skippedWindows, static_cast<std::uint64_t>(1), "skipped block skipped count");
+}
+
 void testScoreRangeAndPWMRelativeScore() {
     PSSM pssm = makeRangeTestPSSM();
     const ScoreRange range = scoreRangeForPSSM(pssm);
@@ -252,6 +296,7 @@ int main() {
     testNormalizePSSM();
     testBaseCodesAndReverseComplement();
     testCalculateScoreAt();
+    testGenomicScoreBlocks();
     testScoreRangeAndPWMRelativeScore();
     testCoordinateModeOffsets();
     testScoreDistribution();

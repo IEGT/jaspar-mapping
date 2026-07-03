@@ -33,6 +33,7 @@ typedef std::set<std::string> chromosome_set_type;
 int beVerbose = 0;
 int showDebug = 0;
 volatile std::sig_atomic_t progressStatusRequested = 0;
+static constexpr size_t DEFAULT_SCORE_BLOCK_SIZE = 65536;
 
 void handleProgressSignal(int) {
     progressStatusRequested = 1;
@@ -292,6 +293,41 @@ std::string formatDoubleForFileLabel(const double& value) {
     return label;
 }
 
+std::string strandPartitionLabel(const std::string& strand) {
+    return strand == "-" ? "minus" : "plus";
+}
+
+std::filesystem::path denseScoreOutputPath(const std::string& outdir, const PSSM& pssm,
+                                           const std::string& scoreMode, const double& pseudocount,
+                                           const std::string& chromosome, const std::string& strand) {
+    std::filesystem::path outputPath = outdir;
+    outputPath /= "tables";
+    outputPath /= "jaspar2026";
+    outputPath /= "motif_score_dense";
+    outputPath /= "motif_id=" + pssm.motifID;
+    outputPath /= "score_mode=" + scoreMode;
+    outputPath /= "pseudocount=" + formatDoubleForFileLabel(pseudocount);
+    outputPath /= "chrom=" + chromosome;
+    outputPath /= "strand=" + strandPartitionLabel(strand);
+    outputPath /= "part-000000.tsv";
+    return outputPath;
+}
+
+void writeDenseScoreBlock(std::ostream& outFile, const ScoreBlock& block) {
+    outFile << block.blockStart << "\t[";
+    for (size_t i = 0; i < block.scores.size(); ++i) {
+        if (i > 0) {
+            outFile << ",";
+        }
+        if (isSkippedScore(block.scores[i])) {
+            outFile << "NULL";
+        } else {
+            outFile << std::setprecision(9) << block.scores[i];
+        }
+    }
+    outFile << "]\n";
+}
+
 std::string motifBaseID(const std::string& motifID) {
     const size_t versionSeparator = motifID.find('.');
     return versionSeparator == std::string::npos ? motifID : motifID.substr(0, versionSeparator);
@@ -451,8 +487,7 @@ int scanSequence(const std::string& chromosome, const EncodedChromosome& encoded
     }
     const size_t statusCheckMask = 0x3fff;
     for (size_t i = posStart; i <= posEnd - motifLength; ++i) {
-        const size_t codeStart = reverseComplementWindow ? sequenceLength - i - motifLength : i;
-        const double score = calculateScoreAt(codes, codeStart, flatPssm);
+        const double score = calculateScoreAtGenomicStart(codes, sequenceLength, reverseComplementWindow, i, flatPssm);
         const double relativeScore = pwmRelativeScore(score, scoreRange);
         // Skip output if the window contained 'N' or invalid nucleotides
         // std::cerr << "D: Score: " << score << std::endl;
@@ -538,22 +573,103 @@ int scanScoreDistribution(const std::string& chromosome, const EncodedChromosome
         return -1;
     }
     const size_t statusCheckMask = 0x3fff;
-    for (size_t i = posStart; i <= posEnd - motifLength; ++i) {
-        const size_t codeStart = reverseComplementWindow ? sequenceLength - i - motifLength : i;
-        const double score = calculateScoreAt(codes, codeStart, flatPssm);
-        distribution.add(score);
+    const size_t lastWindowStart = posEnd - motifLength;
+    for (size_t blockStart = posStart; blockStart <= lastWindowStart; blockStart += DEFAULT_SCORE_BLOCK_SIZE) {
+        const size_t windowCount = std::min(DEFAULT_SCORE_BLOCK_SIZE, lastWindowStart - blockStart + 1);
+        const ScoreBlock block = calculateScoreBlock(codes, sequenceLength, reverseComplementWindow, blockStart, windowCount, flatPssm);
+        for (const double& score : block.scores) {
+            distribution.add(score);
+        }
 
-        if (beVerbose && i % reportInterval == 0) {
+        if (beVerbose && blockStart % reportInterval == 0) {
             const size_t denominator = posEnd - motifLength - posStart;
-            const double progress = denominator == 0 ? 1.0 : static_cast<double>(i - posStart) / denominator;
+            const double progress = denominator == 0 ? 1.0 : static_cast<double>(blockStart - posStart) / denominator;
             displayProgressBar(progress);
         }
-        if (((i - posStart) & statusCheckMask) == 0) {
-            maybePrintRequestedProgress("score_distribution", pssm, chromosome, strand, posStart, posEnd, motifLength, i);
+        if (((blockStart - posStart) & statusCheckMask) == 0) {
+            maybePrintRequestedProgress("score_distribution", pssm, chromosome, strand, posStart, posEnd, motifLength, blockStart);
         }
     }
 
     maybePrintRequestedProgress("score_distribution", pssm, chromosome, strand, posStart, posEnd, motifLength, posEnd - motifLength);
+    return 0;
+}
+
+/** \brief Slide the PSSM across one sequence and write dense score blocks.
+ */
+int scanDenseScores(const std::string& chromosome, const EncodedChromosome& encodedChromosome, const std::string& strand,
+                    const PSSM& pssm, const FlatPSSM& flatPssm, const long& from, const long& to,
+                    const size_t& denseBlockSize, const std::filesystem::path& outputFilePath) {
+    if (denseBlockSize == 0) {
+        std::cerr << "E: --dense-block-size must be greater than 0." << std::endl;
+        return -1;
+    }
+
+    const size_t motifLength = pssm.motifLength;
+    const std::string& sequence = encodedChromosome.sequence;
+    const size_t sequenceLength = sequence.size();
+    const size_t reportInterval = std::max<size_t>(1, sequenceLength / 100 / 10);
+
+    size_t posStart = 0L;
+    if (from > 0L) {
+        posStart = static_cast<size_t>(from);
+        if (beVerbose) std::cerr << "I: Writing dense scores on chromosome " << chromosome << " from position " << from << " for motif " << pssm.motifName << std::endl;
+    }
+
+    size_t posEnd = sequenceLength;
+    if (to > 0L && to < static_cast<long>(sequenceLength)) {
+        posEnd = static_cast<size_t>(to);
+        if (beVerbose) std::cerr << "I: Writing dense scores on chromosome " << chromosome << " up to position " << to << " for motif " << pssm.motifName << std::endl;
+    }
+
+    if (posEnd < motifLength || posStart > posEnd - motifLength) {
+        std::cerr << "W: Requested dense-score interval is shorter than motif " << pssm.motifName << "." << std::endl;
+        return 0;
+    }
+
+    const bool reverseComplementWindow = strand == "-";
+    const std::vector<std::uint8_t>& codes = reverseComplementWindow ? encodedChromosome.minusCodes : encodedChromosome.plusCodes;
+    if (reverseComplementWindow && codes.empty()) {
+        std::cerr << "E: Minus-strand dense-score scan requested, but chromosome " << chromosome << " lacks reverse-complement codes." << std::endl;
+        return -1;
+    }
+
+    std::filesystem::create_directories(outputFilePath.parent_path());
+    std::ofstream outFile(outputFilePath);
+    if (!outFile.is_open()) {
+        std::cerr << "E: Error opening dense score output file '" << outputFilePath.string() << "'." << std::endl;
+        return -1;
+    }
+    outFile << "block_start\tscores\n";
+
+    if (beVerbose) displayProgressBar(0.0);
+    const size_t statusCheckMask = 0x3fff;
+    const size_t lastWindowStart = posEnd - motifLength;
+    std::uint64_t validWindows = 0;
+    std::uint64_t skippedWindows = 0;
+    for (size_t blockStart = posStart; blockStart <= lastWindowStart; blockStart += denseBlockSize) {
+        const size_t windowCount = std::min(denseBlockSize, lastWindowStart - blockStart + 1);
+        const ScoreBlock block = calculateScoreBlock(codes, sequenceLength, reverseComplementWindow, blockStart, windowCount, flatPssm);
+        writeDenseScoreBlock(outFile, block);
+        validWindows += block.validWindows;
+        skippedWindows += block.skippedWindows;
+
+        if (beVerbose && blockStart % reportInterval == 0) {
+            const size_t denominator = posEnd - motifLength - posStart;
+            const double progress = denominator == 0 ? 1.0 : static_cast<double>(blockStart - posStart) / denominator;
+            displayProgressBar(progress);
+        }
+        if (((blockStart - posStart) & statusCheckMask) == 0) {
+            maybePrintRequestedProgress("dense_scores", pssm, chromosome, strand, posStart, posEnd, motifLength, blockStart);
+        }
+    }
+
+    maybePrintRequestedProgress("dense_scores", pssm, chromosome, strand, posStart, posEnd, motifLength, posEnd - motifLength);
+    if (beVerbose) {
+        std::cerr << "I: Dense score blocks saved to " << outputFilePath.string()
+                  << " (valid_windows=" << validWindows
+                  << ", skipped_windows=" << skippedWindows << ")." << std::endl;
+    }
     return 0;
 }
 
@@ -1038,8 +1154,8 @@ int readFastaFile(const std::string& fastaFile, genome_type& genome, const chrom
     return 0;
 }
 
-void printHelp(const std::string& programName, const std::string& genomeFile, const std::string& fastaIndexFile, const std::string& gzipIndexFile, const std::string& pssmFile, const std::string& targetMotifID, const double& threshold, const double& minPwmRelativeScore, const double& maxPwmRelativeScore, const double& pseudocount, const std::string& chromosome, const long& from, const long& to, const std::string& regions, const std::string& outdir, const bool& showSequence, const std::string& scoreMode, const bool& scoreDistribution, const std::string& distributionBinWidth, const StrandMode& strandMode, const CoordinateMode& coordinateMode) {
-    std::cout << "Usage: " << programName << " [-v] [-c chromosome] [-t toBp] [-f fromBp] [-g genome_file] [-p pssm_file] [-m motif_id] [--score-mode log2_relative_risk|log_odds] [--pseudocount value] [--strand +|-|both] [--coordinate-mode legacy|bed] [--score-distribution] [--distribution-bin-width adaptive|width] [--skip-N | --neutral-N] [--skip-normalization]" << std::endl;
+void printHelp(const std::string& programName, const std::string& genomeFile, const std::string& fastaIndexFile, const std::string& gzipIndexFile, const std::string& pssmFile, const std::string& targetMotifID, const double& threshold, const double& minPwmRelativeScore, const double& maxPwmRelativeScore, const double& pseudocount, const std::string& chromosome, const long& from, const long& to, const std::string& regions, const std::string& outdir, const bool& showSequence, const std::string& scoreMode, const bool& scoreDistribution, const std::string& distributionBinWidth, const bool& denseScores, const size_t& denseBlockSize, const StrandMode& strandMode, const CoordinateMode& coordinateMode) {
+    std::cout << "Usage: " << programName << " [-v] [-c chromosome] [-t toBp] [-f fromBp] [-g genome_file] [-p pssm_file] [-m motif_id] [--score-mode log2_relative_risk|log_odds] [--pseudocount value] [--strand +|-|both] [--coordinate-mode legacy|bed] [--score-distribution] [--distribution-bin-width adaptive|width] [--dense-scores] [--dense-block-size windows] [--skip-N | --neutral-N] [--skip-normalization]" << std::endl;
     std::cout << " -v, --verbose        Allow verbose output (set to " << beVerbose << ")" << std::endl;
     std::cout << " -d, --debug          Allow debug output (set to " << showDebug << ")" << std::endl;
     std::cout << " -g, --genome         Path to genome FASTA file (set to '" << genomeFile  << "')" << std::endl;
@@ -1062,6 +1178,8 @@ void printHelp(const std::string& programName, const std::string& genomeFile, co
     std::cout << " --coordinate-mode    Output coordinate convention: legacy or bed (set to '" << coordinateModeName(coordinateMode) << "')" << std::endl;
     std::cout << " --score-distribution Write a score histogram instead of BED hits; default strand is + unless --strand is set (set to " << scoreDistribution << ")" << std::endl;
     std::cout << " --distribution-bin-width Score histogram bin width or adaptive ladder (set to '" << distributionBinWidth << "')" << std::endl;
+    std::cout << " --dense-scores       Write dense score blocks as TSV for one motif and one chromosome (set to " << denseScores << ")" << std::endl;
+    std::cout << " --dense-block-size   Dense score windows per output block (set to " << denseBlockSize << ")" << std::endl;
     std::cout << " --skip-N             Skip windows containing 'N'" << std::endl;
     std::cout << " --neutral-N          Treat 'N' as neutral (contribute 0 to the score)" << std::endl;
     std::cout << " -N, --skip-normalization Skip log-normalisation, will affect scoring." << std::endl;
@@ -1098,6 +1216,8 @@ int main(int argc, char* argv[]) {
     std::string scoreMode = "log2_relative_risk";
     bool scoreDistribution = false;
     std::string distributionBinWidth = "adaptive";
+    bool denseScores = false;
+    size_t denseBlockSize = DEFAULT_SCORE_BLOCK_SIZE;
     StrandMode strandMode = StrandMode::Both;
     bool strandModeSet = false;
     CoordinateMode coordinateMode = CoordinateMode::Legacy;
@@ -1126,6 +1246,8 @@ int main(int argc, char* argv[]) {
         {"coordinate-mode", required_argument, 0, 0},
         {"score-distribution", no_argument, 0, 0},
         {"distribution-bin-width", required_argument, 0, 0},
+        {"dense-scores", no_argument, 0, 0},
+        {"dense-block-size", required_argument, 0, 0},
         {"skip-N", no_argument, 0, 0},
         {"neutral-N", no_argument, 0, 0},
         {"skip-normalization", no_argument, 0, 'N'},
@@ -1259,6 +1381,16 @@ int main(int argc, char* argv[]) {
                         std::cerr << "E: --distribution-bin-width must be 'adaptive' or greater than 0." << std::endl;
                         showHelp = 1;
                     }
+                } else if (std::string(long_options[option_index].name) == "dense-scores") {
+                    denseScores = true;
+                } else if (std::string(long_options[option_index].name) == "dense-block-size") {
+                    long parsedDenseBlockSize = 0;
+                    if (!parseLongStrict(optarg, parsedDenseBlockSize) || parsedDenseBlockSize <= 0L) {
+                        std::cerr << "E: --dense-block-size expects a positive integer, got '" << optarg << "'." << std::endl;
+                        showHelp = 1;
+                    } else {
+                        denseBlockSize = static_cast<size_t>(parsedDenseBlockSize);
+                    }
                 }
                 break;
             case 's':
@@ -1275,7 +1407,7 @@ int main(int argc, char* argv[]) {
 		showDebug = 1;
                 break;
             case 'h':
-                printHelp(argv[0],genomeFile,fastaIndexFile,gzipIndexFile,pssmFile,targetMotifID,threshold,minPwmRelativeScore,maxPwmRelativeScore,pseudocount,targetChromosome,targetFrom,targetTo,regionsFile,outdir,showSequence,scoreMode,scoreDistribution,distributionBinWidth,strandMode,coordinateMode);
+                printHelp(argv[0],genomeFile,fastaIndexFile,gzipIndexFile,pssmFile,targetMotifID,threshold,minPwmRelativeScore,maxPwmRelativeScore,pseudocount,targetChromosome,targetFrom,targetTo,regionsFile,outdir,showSequence,scoreMode,scoreDistribution,distributionBinWidth,denseScores,denseBlockSize,strandMode,coordinateMode);
                 return 0;
             default:
                 showHelp = 1;
@@ -1283,14 +1415,18 @@ int main(int argc, char* argv[]) {
         }
 
         if (showHelp) {
-            printHelp(argv[0],genomeFile,fastaIndexFile,gzipIndexFile,pssmFile,targetMotifID,threshold,minPwmRelativeScore,maxPwmRelativeScore,pseudocount,targetChromosome,targetFrom,targetTo,regionsFile,outdir,showSequence,scoreMode,scoreDistribution,distributionBinWidth,strandMode,coordinateMode);
+            printHelp(argv[0],genomeFile,fastaIndexFile,gzipIndexFile,pssmFile,targetMotifID,threshold,minPwmRelativeScore,maxPwmRelativeScore,pseudocount,targetChromosome,targetFrom,targetTo,regionsFile,outdir,showSequence,scoreMode,scoreDistribution,distributionBinWidth,denseScores,denseBlockSize,strandMode,coordinateMode);
             return 1;
         }
     }
 
     if (minPwmRelativeScore > maxPwmRelativeScore) {
         std::cerr << "E: --min-pwm-relative-score must not be greater than --max-pwm-relative-score." << std::endl;
-        printHelp(argv[0],genomeFile,fastaIndexFile,gzipIndexFile,pssmFile,targetMotifID,threshold,minPwmRelativeScore,maxPwmRelativeScore,pseudocount,targetChromosome,targetFrom,targetTo,regionsFile,outdir,showSequence,scoreMode,scoreDistribution,distributionBinWidth,strandMode,coordinateMode);
+        printHelp(argv[0],genomeFile,fastaIndexFile,gzipIndexFile,pssmFile,targetMotifID,threshold,minPwmRelativeScore,maxPwmRelativeScore,pseudocount,targetChromosome,targetFrom,targetTo,regionsFile,outdir,showSequence,scoreMode,scoreDistribution,distributionBinWidth,denseScores,denseBlockSize,strandMode,coordinateMode);
+        return 1;
+    }
+    if (scoreDistribution && denseScores) {
+        std::cerr << "E: --score-distribution and --dense-scores are separate output modes; choose one." << std::endl;
         return 1;
     }
 
@@ -1316,6 +1452,25 @@ int main(int argc, char* argv[]) {
     if (scoreDistribution && !strandModeSet) {
         strandMode = StrandMode::Plus;
     }
+    if (denseScores) {
+        if (targetMotifID.empty()) {
+            std::cerr << "E: --dense-scores requires a single --motif to avoid accidental all-motif dense output." << std::endl;
+            return 1;
+        }
+        if (targetChromosome.empty()) {
+            std::cerr << "E: --dense-scores requires a single --chr to avoid accidental whole-genome dense output." << std::endl;
+            return 1;
+        }
+        if (thresholdSet) {
+            std::cerr << "W: --dense-scores writes all window scores and ignores --threshold." << std::endl;
+        }
+        if (std::isfinite(minPwmRelativeScore) || std::isfinite(maxPwmRelativeScore)) {
+            std::cerr << "W: --dense-scores writes all window scores and ignores PWM-relative score filters." << std::endl;
+        }
+        if (showSequence) {
+            std::cerr << "W: --dense-scores ignores --show-sequence." << std::endl;
+        }
+    }
     const bool scanMinusStrandRequested = strandMode == StrandMode::Minus || strandMode == StrandMode::Both;
 
     if (!regionsFile.empty()) {
@@ -1328,6 +1483,10 @@ int main(int argc, char* argv[]) {
 
     if (!regions.empty() && (!targetChromosome.empty() || targetFrom > 0L || targetTo > 0L)) {
         std::cerr << "E: Cannot specify both individual chromosome options and a regions file." << std::endl;
+        return 1;
+    }
+    if (denseScores && !regions.empty()) {
+        std::cerr << "E: --dense-scores does not support --regions; use --chr with optional --from/--to." << std::endl;
         return 1;
     }
 
@@ -1495,6 +1654,40 @@ int main(int argc, char* argv[]) {
             writeScoreDistribution(outFileDistribution, distribution, pssm_object_copy, chromosomeLabel, distributionStrandLabel, effectiveScoreMode, effectivePseudocount);
             outFileDistribution.close();
             std::cout << "Score distribution saved to: " << outputFileNameDistribution << std::endl;
+            continue;
+        }
+
+        if (denseScores) {
+            auto chromosomeIt = encodedGenome.find(targetChromosome);
+            if (chromosomeIt == encodedGenome.end()) {
+                std::cerr << "E: Chromosome " << targetChromosome << " not found in encoded genome." << std::endl;
+                return 1;
+            }
+            const EncodedChromosome& encodedChromosome = chromosomeIt->second;
+
+            const bool scanPlusStrand = strandMode == StrandMode::Plus || strandMode == StrandMode::Both;
+            const bool scanMinusStrand = strandMode == StrandMode::Minus || strandMode == StrandMode::Both;
+
+            if (scanPlusStrand) {
+                const std::filesystem::path outputFilePath = denseScoreOutputPath(
+                    outdir, pssm_object_copy, effectiveScoreMode, effectivePseudocount, targetChromosome, "+");
+                if (scanDenseScores(targetChromosome, encodedChromosome, "+", pssm_object_copy, flatPssm,
+                                    targetFrom, targetTo, denseBlockSize, outputFilePath) != 0) {
+                    return 1;
+                }
+                std::cout << "Dense scores saved to: " << outputFilePath.string() << std::endl;
+            }
+
+            if (scanMinusStrand) {
+                const std::filesystem::path outputFilePath = denseScoreOutputPath(
+                    outdir, pssm_object_copy, effectiveScoreMode, effectivePseudocount, targetChromosome, "-");
+                if (scanDenseScores(targetChromosome, encodedChromosome, "-", pssm_object_copy, flatPssm,
+                                    targetFrom, targetTo, denseBlockSize, outputFilePath) != 0) {
+                    return 1;
+                }
+                std::cout << "Dense scores saved to: " << outputFilePath.string() << std::endl;
+            }
+
             continue;
         }
         
