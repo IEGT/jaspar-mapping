@@ -35,6 +35,7 @@ static constexpr std::uint8_t BASE_T = 3;
 static constexpr std::uint8_t BASE_N = 4;
 static constexpr size_t BASE_CODE_COUNT = 5;
 static constexpr double SENTINEL_SCORE = -1e9;
+static constexpr double SENTINEL_ABS_THRESHOLD = 1e8;
 
 int beVerbose = 0;
 int showDebug = 0;
@@ -396,8 +397,12 @@ ScoreRange scoreRangeForPSSM(const PSSM& pssm) {
             if (it == pssm.pssm.end() || static_cast<size_t>(i) >= it->second.size()) {
                 continue;
             }
-            columnMin = std::min(columnMin, it->second[i]);
-            columnMax = std::max(columnMax, it->second[i]);
+            const double score = it->second[i];
+            if (!std::isfinite(score) || std::abs(score) >= SENTINEL_ABS_THRESHOLD) {
+                continue;
+            }
+            columnMin = std::min(columnMin, score);
+            columnMax = std::max(columnMax, score);
         }
         if (std::isfinite(columnMin)) range.min += columnMin;
         if (std::isfinite(columnMax)) range.max += columnMax;
@@ -406,7 +411,7 @@ ScoreRange scoreRangeForPSSM(const PSSM& pssm) {
 }
 
 double pwmRelativeScore(const double& score, const ScoreRange& scoreRange) {
-    if (!std::isfinite(score) || score < -1e8 || scoreRange.max <= scoreRange.min) {
+    if (!std::isfinite(score) || score < -SENTINEL_ABS_THRESHOLD || scoreRange.max <= scoreRange.min) {
         return std::numeric_limits<double>::quiet_NaN();
     }
     return (score - scoreRange.min) / (scoreRange.max - scoreRange.min);

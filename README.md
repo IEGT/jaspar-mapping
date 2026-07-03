@@ -97,13 +97,14 @@ requests the same report.
 Additional scanner controls now include `--strand +|-|both`,
 `--coordinate-mode legacy|bed`, and `--min-pwm-relative-score` /
 `--max-pwm-relative-score`. The PWM-relative score follows the JASPAR-style
-normalization `(score - min_possible_score) / (max_possible_score -
-min_possible_score)` for the selected `--score-mode` and is written as a
-`PWMRelativeScore` output column. The default coordinate mode remains `legacy`;
-use `--coordinate-mode bed` for 0-based, half-open BED-style coordinates in
-the first three output fields. The default `--skip-N` avoids reporting windows
-from long assembly gaps; use `--neutral-N` only for targeted diagnostics or
-with thresholds that cannot promote all-N windows.
+normalization `(score - min_reachable_score) / (max_reachable_score -
+min_reachable_score)` over finite, non-sentinel motif scores for the selected
+`--score-mode` and is written as a `PWMRelativeScore` output column. The default
+coordinate mode remains `legacy`; use `--coordinate-mode bed` for 0-based,
+half-open BED-style coordinates in the first three output fields. The default
+`--skip-N` avoids reporting windows from long assembly gaps; use `--neutral-N`
+only for targeted diagnostics or with thresholds that cannot promote all-N
+windows.
 
 To inspect subthreshold scores without writing one row per genomic window, use
 `./pssm_scan --score-distribution` or `make score_distributions_chr1`. The Make
