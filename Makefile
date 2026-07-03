@@ -7,6 +7,10 @@ CXXFLAGS += -DNDEBUG
 CXXOPTFLAGS?=
 CXXFLAGS += $(CXXOPTFLAGS)
 TEST_CXXFLAGS?=$(filter-out -std=c++23 -O3 -g,$(CXXFLAGS)) -std=c++17 -O0
+LTO?=0
+ifeq ($(LTO),1)
+CXXFLAGS += -flto
+endif
 PKG_CONFIG?=pkg-config
 PARQUET?=0
 PARQUET_CXXFLAGS?=$(shell $(PKG_CONFIG) --cflags arrow parquet 2>/dev/null)
@@ -20,6 +24,9 @@ LDFLAGS += -lz -lbz2
 LDFLAGS += -lm
 LDOPTFLAGS?=
 LDFLAGS += $(LDOPTFLAGS)
+ifeq ($(LTO),1)
+LDFLAGS += -flto
+endif
 ifeq ($(PARQUET),1)
 LDFLAGS += $(PARQUET_LDFLAGS)
 endif

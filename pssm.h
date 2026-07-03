@@ -47,7 +47,7 @@ class PSSM {
          * @param motifName The motif's name
          * @param motifLength The motif's length
          */
-        PSSM(const pssm_type& pssm, const std::string& motifID, const std::string& motifName, const int& motifLength) {
+        PSSM(const pssm_type& pssm, const std::string& motifID, const std::string& motifName, int motifLength) {
             this->pssm = pssm;
             this->motifID = motifID;
             this->motifName = motifName;
@@ -72,22 +72,22 @@ class PSSM {
  
         ~PSSM() = default;
 
-        static int parsePSSMFile(const std::string& pssmFile, std::unordered_map<std::string, PSSM>& pssm_list, const std::string& targetMotifID, const int& beVerbose=0);
+        static int parsePSSMFile(const std::string& pssmFile, std::unordered_map<std::string, PSSM>& pssm_list, const std::string& targetMotifID, int beVerbose=0);
         static std::string trim(const std::string& str);
         /**
          * @brief returns log(frequency/background)
          */
-        static double logRelativeRisk(const double& frequency, const double& background);
-        static double logRelativeRiskACGT(const double& frequency);
+        static double logRelativeRisk(double frequency, double background);
+        static double logRelativeRiskACGT(double frequency);
         /**
          * @brief returns log(count/(colsum-count) minus log(background/(1-background))
          * Background is presume to always be at 0.25, ignoring variations in the GC content. 
          */
-        static double logOddsRatioACGT(const double& count, const double& colsum);
+        static double logOddsRatioACGT(double count, double colsum);
         static std::string canonicalScoreModeName(const std::string& scoreMode);
 
         // Normalize the PSSM by converting counts to the selected score mode.
-        void normalizePSSM(const std::unordered_map<char, const double>& backgroundFrequencies, const std::string& scoreMode = "log2_relative_risk", const double& pseudocount = 0.0);
+        void normalizePSSM(const std::unordered_map<char, const double>& backgroundFrequencies, const std::string& scoreMode = "log2_relative_risk", double pseudocount = 0.0);
 
         // Overload the << operator for PSSM
         friend std::ostream& operator<<(std::ostream& os, const PSSM& pssmObj) {

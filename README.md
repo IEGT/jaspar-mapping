@@ -81,7 +81,9 @@ the JASPAR file once, and then scans all motifs in one process. The scanner
 stores chromosomes as nucleotide codes and flattens each PSSM before scanning
 so the inner loop avoids per-base hash-map lookups. Cluster-specific compiler
 flags can be passed without editing the Makefile, for example
-`make CXXOPTFLAGS="-march=x86-64-v3"`. The chromosome-wide all-motif target
+`make CXXOPTFLAGS="-march=x86-64-v3"`. Link-time optimization is opt-in via
+`make LTO=1`, and can be combined with target-specific flags, for example
+`make LTO=1 CXXOPTFLAGS="-march=x86-64-v3"`. The chromosome-wide all-motif target
 defaults to BED coordinates plus matched sequences (`SCAN_CHR_FLAGS`), matching
 the Parquet schema and later half-site architecture derivation. Slurm-level
 chromosome or motif-family fan-out remains the default parallelization strategy; OpenMP and direct

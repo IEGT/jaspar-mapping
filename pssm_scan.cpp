@@ -35,6 +35,8 @@
 #include "pssm_scan_core.h"
 #include "compressed_file_reader.h"
 
+namespace {
+
 typedef std::unordered_map<std::string, std::string>   genome_type;  //< Map of chromosome ID to sequence
 typedef std::set<std::string> chromosome_set_type;
 
@@ -157,7 +159,7 @@ std::vector<Region> Region::parseRegionsFile(const std::string& regionsFile) {
     return regions;
 }
 
-std::string strandModeName(const StrandMode& strandMode) {
+std::string strandModeName(StrandMode strandMode) {
     switch (strandMode) {
         case StrandMode::Plus: return "+";
         case StrandMode::Minus: return "-";
@@ -166,7 +168,7 @@ std::string strandModeName(const StrandMode& strandMode) {
     return "both";
 }
 
-std::string strandModeFileLabel(const StrandMode& strandMode) {
+std::string strandModeFileLabel(StrandMode strandMode) {
     switch (strandMode) {
         case StrandMode::Plus: return "positive";
         case StrandMode::Minus: return "negative";
@@ -175,7 +177,7 @@ std::string strandModeFileLabel(const StrandMode& strandMode) {
     return "both";
 }
 
-std::string coordinateModeName(const CoordinateMode& coordinateMode) {
+std::string coordinateModeName(CoordinateMode coordinateMode) {
     switch (coordinateMode) {
         case CoordinateMode::Legacy: return "legacy";
         case CoordinateMode::Bed: return "bed";
@@ -226,11 +228,11 @@ bool parseLongStrict(const char* text, long& value) {
     return true;
 }
 
-EncodedChromosome encodeChromosome(std::string sequence, const bool includeMinusStrand) {
+EncodedChromosome encodeChromosome(std::string sequence, bool includeMinusStrand) {
     EncodedChromosome encoded;
     encoded.sequence = std::move(sequence);
     encoded.plusCodes.reserve(encoded.sequence.size());
-    for (const char& base : encoded.sequence) {
+    for (char base : encoded.sequence) {
         encoded.plusCodes.push_back(codeForBase(base));
     }
 
@@ -244,7 +246,7 @@ EncodedChromosome encodeChromosome(std::string sequence, const bool includeMinus
     return encoded;
 }
 
-encoded_genome_type encodeGenome(genome_type&& genome, const bool includeMinusStrand) {
+encoded_genome_type encodeGenome(genome_type&& genome, bool includeMinusStrand) {
     encoded_genome_type encodedGenome;
     encodedGenome.reserve(genome.size());
     for (auto& [chromosome, sequence] : genome) {
@@ -253,7 +255,7 @@ encoded_genome_type encodeGenome(genome_type&& genome, const bool includeMinusSt
     return encodedGenome;
 }
 
-std::string sequenceWindowForOutput(const std::string& sequence, const size_t& start, const size_t& motifLength, const bool reverseComplementWindow) {
+std::string sequenceWindowForOutput(const std::string& sequence, size_t start, size_t motifLength, bool reverseComplementWindow) {
     if (!reverseComplementWindow) {
         return sequence.substr(start, motifLength);
     }
@@ -265,7 +267,7 @@ std::string sequenceWindowForOutput(const std::string& sequence, const size_t& s
     return window;
 }
 
-std::string formatOptionalDouble(const double& value) {
+std::string formatOptionalDouble(double value) {
     if (!std::isfinite(value)) {
         return "NA";
     }
@@ -274,14 +276,14 @@ std::string formatOptionalDouble(const double& value) {
     return ss.str();
 }
 
-std::string formatScoreBoundForHelp(const double& value) {
+std::string formatScoreBoundForHelp(double value) {
     if (!std::isfinite(value)) {
         return "unbounded";
     }
     return formatOptionalDouble(value);
 }
 
-std::string formatPseudocountForHelp(const double& value) {
+std::string formatPseudocountForHelp(double value) {
     if (!std::isfinite(value)) {
         return "auto";
     }
@@ -292,7 +294,7 @@ double defaultPseudocountForScoreMode(const std::string& scoreMode) {
     return scoreMode == "log_odds" ? 1.0 : 0.0;
 }
 
-std::string formatDoubleForFileLabel(const double& value) {
+std::string formatDoubleForFileLabel(double value) {
     std::ostringstream ss;
     ss << std::setprecision(12) << value;
     std::string label = ss.str();
@@ -322,7 +324,7 @@ std::string denseScoreFormatName() {
 }
 
 std::filesystem::path denseScoreOutputPath(const std::string& outdir, const PSSM& pssm,
-                                           const std::string& scoreMode, const double& pseudocount,
+                                           const std::string& scoreMode, double pseudocount,
                                            const std::string& chromosome, const std::string& strand) {
     std::filesystem::path outputPath = outdir;
     outputPath /= "tables";
@@ -396,7 +398,7 @@ public:
         }
 
         auto* valueBuilder = static_cast<arrow::FloatBuilder*>(scoresBuilder_->value_builder());
-        for (const double& score : block.scores) {
+        for (double score : block.scores) {
             if (isSkippedScore(score)) {
                 status = valueBuilder->AppendNull();
             } else {
@@ -560,8 +562,8 @@ std::vector<std::string> findMotifVersionsInPSSMFile(const std::string& pssmFile
 
 void maybePrintRequestedProgress(const char* operation, const PSSM& pssm,
                                  const std::string& chromosome, const std::string& strand,
-                                 const size_t& posStart, const size_t& posEnd,
-                                 const size_t& motifLength, const size_t& currentPos) {
+                                 size_t posStart, size_t posEnd,
+                                 size_t motifLength, size_t currentPos) {
     if (progressStatusRequested == 0) {
         return;
     }
@@ -610,10 +612,10 @@ void maybePrintRequestedProgress(const char* operation, const PSSM& pssm,
  */
 int scanSequence(const std::string& chromosome, const EncodedChromosome& encodedChromosome, const std::string& strand,
                  const PSSM& pssm, const FlatPSSM& flatPssm,
-                 std::ofstream& outFile, const double& threshold, const double& minPwmRelativeScore,
-                 const double& maxPwmRelativeScore, const long& from, const long& to, const bool& showHeader,
-                 const bool& showSequence, const std::string& scoreMode, const double& pseudocount, const ScoreRange& scoreRange,
-                 const CoordinateMode& coordinateMode) {
+                 std::ofstream& outFile, double threshold, double minPwmRelativeScore,
+                 double maxPwmRelativeScore, long from, long to, bool showHeader,
+                 bool showSequence, const std::string& scoreMode, double pseudocount, const ScoreRange& scoreRange,
+                 CoordinateMode coordinateMode) {
     //size_t motifLength = pssm.begin()->second.size();
     const size_t motifLength = pssm.motifLength;
     const std::string& sequence = encodedChromosome.sequence;
@@ -715,7 +717,7 @@ int scanSequence(const std::string& chromosome, const EncodedChromosome& encoded
 /** \brief Slide the PSSM across one sequence and collect score distribution bins.
  */
 int scanScoreDistribution(const std::string& chromosome, const EncodedChromosome& encodedChromosome, const std::string& strand,
-                          const PSSM& pssm, const FlatPSSM& flatPssm, const long& from, const long& to,
+                          const PSSM& pssm, const FlatPSSM& flatPssm, long from, long to,
                           ScoreDistribution& distribution) {
     const size_t motifLength = pssm.motifLength;
     const std::string& sequence = encodedChromosome.sequence;
@@ -753,7 +755,7 @@ int scanScoreDistribution(const std::string& chromosome, const EncodedChromosome
     for (size_t blockStart = posStart; blockStart <= lastWindowStart; blockStart += DEFAULT_SCORE_BLOCK_SIZE) {
         const size_t windowCount = std::min(DEFAULT_SCORE_BLOCK_SIZE, lastWindowStart - blockStart + 1);
         const ScoreBlock block = calculateScoreBlock(codes, sequenceLength, reverseComplementWindow, blockStart, windowCount, flatPssm);
-        for (const double& score : block.scores) {
+        for (double score : block.scores) {
             distribution.add(score);
         }
 
@@ -774,8 +776,8 @@ int scanScoreDistribution(const std::string& chromosome, const EncodedChromosome
 /** \brief Slide the PSSM across one sequence and write dense score blocks.
  */
 int scanDenseScores(const std::string& chromosome, const EncodedChromosome& encodedChromosome, const std::string& strand,
-                    const PSSM& pssm, const FlatPSSM& flatPssm, const long& from, const long& to,
-                    const size_t& denseBlockSize, const std::filesystem::path& outputFilePath) {
+                    const PSSM& pssm, const FlatPSSM& flatPssm, long from, long to,
+                    size_t denseBlockSize, const std::filesystem::path& outputFilePath) {
     if (denseBlockSize == 0) {
         std::cerr << "E: --dense-block-size must be greater than 0." << std::endl;
         return -1;
@@ -876,7 +878,7 @@ int scanDenseScores(const std::string& chromosome, const EncodedChromosome& enco
 
 void writeScoreDistribution(std::ofstream& outFile, const ScoreDistribution& distribution, const PSSM& pssm,
                             const std::string& chromosome, const std::string& strand, const std::string& scoreMode,
-                            const double& pseudocount) {
+                            double pseudocount) {
     outFile << "MotifID\tMotifName\tChromosome\tStrand\tScoreMode\tPseudocount\tBinScheme\tBinWidth\tValidWindows\tSkippedWindows\tMinScore\tMaxScore\tMeanScore\tScoreBinStart\tScoreBinEnd\tBinCount\n";
     if (distribution.skippedWindows > 0) {
         outFile << pssm.motifID << "\t" << pssm.motifName << "\t" << chromosome << "\t" << strand << "\t" << scoreMode
@@ -991,7 +993,7 @@ int readGzipIndexFile(const std::string& indexFile, gzip_index_type& gzipIndex) 
     return 0;
 }
 
-GzipIndexEntry gzipAnchorForOffset(const gzip_index_type& gzipIndex, const std::uint64_t uncompressedOffset) {
+GzipIndexEntry gzipAnchorForOffset(const gzip_index_type& gzipIndex, std::uint64_t uncompressedOffset) {
     GzipIndexEntry selected{0, 0};
     for (const auto& entry : gzipIndex) {
         if (entry.uncompressedOffset > uncompressedOffset) {
@@ -1004,7 +1006,7 @@ GzipIndexEntry gzipAnchorForOffset(const gzip_index_type& gzipIndex, const std::
 
 class BgzfBlockReader {
 public:
-    BgzfBlockReader(const std::string& filename, const gzip_index_type& gzipIndex, const std::uint64_t startOffset) {
+    BgzfBlockReader(const std::string& filename, const gzip_index_type& gzipIndex, std::uint64_t startOffset) {
         file_.open(filename, std::ios::binary);
         if (!file_.is_open()) {
             throw std::runtime_error("Failed to open BGZF file: " + filename);
@@ -1355,7 +1357,7 @@ int readFastaFile(const std::string& fastaFile, genome_type& genome, const chrom
     return 0;
 }
 
-void printHelp(const std::string& programName, const std::string& genomeFile, const std::string& fastaIndexFile, const std::string& gzipIndexFile, const std::string& pssmFile, const std::string& targetMotifID, const double& threshold, const double& minPwmRelativeScore, const double& maxPwmRelativeScore, const double& pseudocount, const std::string& chromosome, const long& from, const long& to, const std::string& regions, const std::string& outdir, const bool& showSequence, const std::string& scoreMode, const bool& scoreDistribution, const std::string& distributionBinWidth, const bool& denseScores, const size_t& denseBlockSize, const StrandMode& strandMode, const CoordinateMode& coordinateMode) {
+void printHelp(const std::string& programName, const std::string& genomeFile, const std::string& fastaIndexFile, const std::string& gzipIndexFile, const std::string& pssmFile, const std::string& targetMotifID, double threshold, double minPwmRelativeScore, double maxPwmRelativeScore, double pseudocount, const std::string& chromosome, long from, long to, const std::string& regions, const std::string& outdir, bool showSequence, const std::string& scoreMode, bool scoreDistribution, const std::string& distributionBinWidth, bool denseScores, size_t denseBlockSize, StrandMode strandMode, CoordinateMode coordinateMode) {
     std::cout << "Usage: " << programName << " [-v] [-c chromosome] [-t toBp] [-f fromBp] [-g genome_file] [-p pssm_file] [-m motif_id] [--score-mode log2_relative_risk|log_odds] [--pseudocount value] [--strand +|-|both] [--coordinate-mode legacy|bed] [--score-distribution] [--distribution-bin-width adaptive|width] [--dense-scores] [--dense-block-size windows] [--skip-N | --neutral-N] [--skip-normalization]" << std::endl;
     std::cout << " -v, --verbose        Allow verbose output (set to " << beVerbose << ")" << std::endl;
     std::cout << " -d, --debug          Allow debug output (set to " << showDebug << ")" << std::endl;
@@ -1390,6 +1392,8 @@ void printHelp(const std::string& programName, const std::string& genomeFile, co
 #endif
     std::cout << " -h, --help           Display this help message" << std::endl;
 }
+
+} // namespace
 
 int main(int argc, char* argv[]) {
     installProgressSignalHandlers();

@@ -18,7 +18,7 @@
 
 /** \brief Function to calculate log2(frequency/background) for one nucleotide.
  */
-double PSSM::logRelativeRisk(const double& frequency, const double& background) {
+double PSSM::logRelativeRisk(double frequency, double background) {
     if (frequency == 0) {
         return -1e9;  // Prevent log(0) by returning a large negative score for unobserved nucleotides
         //return -log2(1024*16);  // assume one of the next upcoming tests would have found that residue to avoid -inf
@@ -28,7 +28,7 @@ double PSSM::logRelativeRisk(const double& frequency, const double& background) 
 
 /** \brief Function to calculate log2(frequency/0.25) for one nucleotide.
  */
-double PSSM::logRelativeRiskACGT(const double& frequency) {
+double PSSM::logRelativeRiskACGT(double frequency) {
     const double log2Background = -2.0 ; // == log2(0.25);
     if (frequency == 0) {
         return -1e9;  // Prevent log(0) by returning a large negative score for unobserved nucleotides
@@ -37,7 +37,7 @@ double PSSM::logRelativeRiskACGT(const double& frequency) {
     return log2(frequency) - log2Background;
 }
 
-double PSSM::logOddsRatioACGT(const double& count, const double& colsum) {
+double PSSM::logOddsRatioACGT(double count, double colsum) {
 
     const double log2BackgroundOdd = log2(1.0/(4.0-1.0));
 
@@ -91,7 +91,7 @@ std::string PSSM::trim(const std::string& str) {
  * @param targetMotifID - the motif ID to search for in the PSSM file, may be empty
  * @returns 0 upon success, else -1.
  */
-int PSSM::parsePSSMFile(const std::string& pssmFile, pssm_list_type& pssm_list, const std::string& targetMotifID, const int& beVerbose) {
+int PSSM::parsePSSMFile(const std::string& pssmFile, pssm_list_type& pssm_list, const std::string& targetMotifID, int beVerbose) {
 
     if (beVerbose > 1 || PSSM::debug) {
         std::cerr << "D: Parsing file '" << pssmFile << "' aiming at target MotifID '" << targetMotifID << "' with verbosity level " << beVerbose << std::endl;
@@ -207,7 +207,7 @@ int PSSM::parsePSSMFile(const std::string& pssmFile, pssm_list_type& pssm_list, 
 
 /** \brief Normalize the PSSM by converting counts to the selected score mode.
  */
-void PSSM::normalizePSSM(const std::unordered_map<char, const double>& backgroundFrequencies, const std::string& scoreMode, const double& pseudocount) {
+void PSSM::normalizePSSM(const std::unordered_map<char, const double>& backgroundFrequencies, const std::string& scoreMode, double pseudocount) {
 
         const std::string canonicalScoreMode = PSSM::canonicalScoreModeName(scoreMode);
         if (canonicalScoreMode.empty()) {

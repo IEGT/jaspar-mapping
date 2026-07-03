@@ -61,29 +61,29 @@ struct ScoreDistribution {
     double sumScore = 0.0;
     std::map<ScoreBin, std::uint64_t> bins;
 
-    double binWidthForScore(const double& score) const;
-    void add(const double& score);
+    double binWidthForScore(double score) const;
+    void add(double score);
     double meanScore() const;
 };
 
-char complementBase(const char& base);
+char complementBase(char base);
 bool parseDoubleStrict(const char* text, double& value);
-std::uint8_t codeForBase(const char& base);
-std::uint8_t complementCode(const std::uint8_t& code);
-bool isSkippedScore(const double& score);
-double calculateScoreAt(const std::vector<std::uint8_t>& codes, const size_t& start, const FlatPSSM& pssm);
-double calculateScoreAtGenomicStart(const std::vector<std::uint8_t>& codes, const size_t& sequenceLength,
-                                    const bool reverseComplementWindow, const size_t& genomicStart,
+std::uint8_t codeForBase(char base);
+std::uint8_t complementCode(std::uint8_t code);
+bool isSkippedScore(double score);
+double calculateScoreAt(const std::vector<std::uint8_t>& codes, size_t start, const FlatPSSM& pssm);
+double calculateScoreAtGenomicStart(const std::vector<std::uint8_t>& codes, size_t sequenceLength,
+                                    bool reverseComplementWindow, size_t genomicStart,
                                     const FlatPSSM& pssm);
-ScoreBlock calculateScoreBlock(const std::vector<std::uint8_t>& codes, const size_t& sequenceLength,
-                               const bool reverseComplementWindow, const size_t& blockStart,
-                               const size_t& windowCount, const FlatPSSM& pssm);
+ScoreBlock calculateScoreBlock(const std::vector<std::uint8_t>& codes, size_t sequenceLength,
+                               bool reverseComplementWindow, size_t blockStart,
+                               size_t windowCount, const FlatPSSM& pssm);
 double calculateScore(const std::string& window, const pssm_type& pssm, bool skipN);
-FlatPSSM flattenPSSM(const PSSM& pssm, const bool skipN);
+FlatPSSM flattenPSSM(const PSSM& pssm, bool skipN);
 std::string reverseComplement(const std::string& sequence);
 ScoreRange scoreRangeForPSSM(const PSSM& pssm);
-double pwmRelativeScore(const double& score, const ScoreRange& scoreRange);
-size_t outputStartForCoordinateMode(const CoordinateMode& coordinateMode, const size_t& windowStart);
-size_t outputEndForCoordinateMode(const CoordinateMode& coordinateMode, const size_t& windowStart, const size_t& motifLength);
+double pwmRelativeScore(double score, const ScoreRange& scoreRange);
+size_t outputStartForCoordinateMode(CoordinateMode coordinateMode, size_t windowStart);
+size_t outputEndForCoordinateMode(CoordinateMode coordinateMode, size_t windowStart, size_t motifLength);
 
 #endif

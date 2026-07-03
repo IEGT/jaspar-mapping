@@ -11,26 +11,7 @@
 #include <stdexcept>
 #include <utility>
 
-char complementBase(const char& base) {
-    switch (std::toupper(static_cast<unsigned char>(base))) {
-        case 'A': return 'T';
-        case 'T': return 'A';
-        case 'C': return 'G';
-        case 'G': return 'C';
-        default: return 'N';
-    }
-}
-
-bool parseDoubleStrict(const char* text, double& value) {
-    errno = 0;
-    char* end = nullptr;
-    const double parsed = std::strtod(text, &end);
-    if (errno != 0 || end == text || (end != nullptr && *end != '\0') || !std::isfinite(parsed)) {
-        return false;
-    }
-    value = parsed;
-    return true;
-}
+namespace {
 
 std::array<std::uint8_t, 256> buildBaseCodeTable() {
     std::array<std::uint8_t, 256> table{};
@@ -53,11 +34,34 @@ const std::array<std::uint8_t, 256>& baseCodeTable() {
     return table;
 }
 
-std::uint8_t codeForBase(const char& base) {
+} // namespace
+
+char complementBase(char base) {
+    switch (std::toupper(static_cast<unsigned char>(base))) {
+        case 'A': return 'T';
+        case 'T': return 'A';
+        case 'C': return 'G';
+        case 'G': return 'C';
+        default: return 'N';
+    }
+}
+
+bool parseDoubleStrict(const char* text, double& value) {
+    errno = 0;
+    char* end = nullptr;
+    const double parsed = std::strtod(text, &end);
+    if (errno != 0 || end == text || (end != nullptr && *end != '\0') || !std::isfinite(parsed)) {
+        return false;
+    }
+    value = parsed;
+    return true;
+}
+
+std::uint8_t codeForBase(char base) {
     return baseCodeTable()[static_cast<unsigned char>(base)];
 }
 
-std::uint8_t complementCode(const std::uint8_t& code) {
+std::uint8_t complementCode(std::uint8_t code) {
     switch (code) {
         case BASE_A: return BASE_T;
         case BASE_C: return BASE_G;
@@ -67,11 +71,11 @@ std::uint8_t complementCode(const std::uint8_t& code) {
     }
 }
 
-bool isSkippedScore(const double& score) {
+bool isSkippedScore(double score) {
     return !std::isfinite(score) || score < SENTINEL_SCORE / 10.0;
 }
 
-double calculateScoreAt(const std::vector<std::uint8_t>& codes, const size_t& start, const FlatPSSM& pssm) {
+double calculateScoreAt(const std::vector<std::uint8_t>& codes, size_t start, const FlatPSSM& pssm) {
     double score = 0.0;
 
     for (size_t i = 0; i < pssm.motifLength; ++i) {
@@ -81,8 +85,8 @@ double calculateScoreAt(const std::vector<std::uint8_t>& codes, const size_t& st
     return score;
 }
 
-double calculateScoreAtGenomicStart(const std::vector<std::uint8_t>& codes, const size_t& sequenceLength,
-                                    const bool reverseComplementWindow, const size_t& genomicStart,
+double calculateScoreAtGenomicStart(const std::vector<std::uint8_t>& codes, size_t sequenceLength,
+                                    bool reverseComplementWindow, size_t genomicStart,
                                     const FlatPSSM& pssm) {
     if (pssm.motifLength == 0 || genomicStart > sequenceLength ||
         pssm.motifLength > sequenceLength - genomicStart) {
@@ -98,9 +102,9 @@ double calculateScoreAtGenomicStart(const std::vector<std::uint8_t>& codes, cons
     return calculateScoreAt(codes, codeStart, pssm);
 }
 
-ScoreBlock calculateScoreBlock(const std::vector<std::uint8_t>& codes, const size_t& sequenceLength,
-                               const bool reverseComplementWindow, const size_t& blockStart,
-                               const size_t& windowCount, const FlatPSSM& pssm) {
+ScoreBlock calculateScoreBlock(const std::vector<std::uint8_t>& codes, size_t sequenceLength,
+                               bool reverseComplementWindow, size_t blockStart,
+                               size_t windowCount, const FlatPSSM& pssm) {
     ScoreBlock block;
     block.blockStart = blockStart;
     block.scores.reserve(windowCount);
@@ -131,13 +135,13 @@ double calculateScore(const std::string& window, const pssm_type& pssm, bool ski
     }
     std::vector<std::uint8_t> codes;
     codes.reserve(window.size());
-    for (const char& base : window) {
+    for (char base : window) {
         codes.push_back(codeForBase(base));
     }
     return calculateScoreAt(codes, 0, flatPssm);
 }
 
-FlatPSSM flattenPSSM(const PSSM& pssm, const bool skipN) {
+FlatPSSM flattenPSSM(const PSSM& pssm, bool skipN) {
     FlatPSSM flatPssm;
     flatPssm.motifLength = static_cast<size_t>(pssm.motifLength);
     flatPssm.scores.assign(flatPssm.motifLength * BASE_CODE_COUNT, skipN ? SENTINEL_SCORE : 0.0);
@@ -193,18 +197,18 @@ ScoreRange scoreRangeForPSSM(const PSSM& pssm) {
     return range;
 }
 
-double pwmRelativeScore(const double& score, const ScoreRange& scoreRange) {
+double pwmRelativeScore(double score, const ScoreRange& scoreRange) {
     if (!std::isfinite(score) || score < -SENTINEL_ABS_THRESHOLD || scoreRange.max <= scoreRange.min) {
         return std::numeric_limits<double>::quiet_NaN();
     }
     return (score - scoreRange.min) / (scoreRange.max - scoreRange.min);
 }
 
-size_t outputStartForCoordinateMode(const CoordinateMode& coordinateMode, const size_t& windowStart) {
+size_t outputStartForCoordinateMode(CoordinateMode coordinateMode, size_t windowStart) {
     return coordinateMode == CoordinateMode::Bed ? windowStart : windowStart + 1;
 }
 
-size_t outputEndForCoordinateMode(const CoordinateMode& coordinateMode, const size_t& windowStart, const size_t& motifLength) {
+size_t outputEndForCoordinateMode(CoordinateMode coordinateMode, size_t windowStart, size_t motifLength) {
     return coordinateMode == CoordinateMode::Bed ? windowStart + motifLength : windowStart + 1 + motifLength;
 }
 
@@ -233,7 +237,7 @@ ScoreDistribution::ScoreDistribution(const std::string& binWidthSpec)
     }
 }
 
-double ScoreDistribution::binWidthForScore(const double& score) const {
+double ScoreDistribution::binWidthForScore(double score) const {
     if (!useAdaptiveBins) {
         return fixedBinWidth;
     }
@@ -255,7 +259,7 @@ double ScoreDistribution::binWidthForScore(const double& score) const {
     return 500.0;
 }
 
-void ScoreDistribution::add(const double& score) {
+void ScoreDistribution::add(double score) {
     if (isSkippedScore(score)) {
         skippedWindows++;
         return;
