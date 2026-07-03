@@ -12,6 +12,7 @@
 *.png
 gtf_file_region_retrieval 
 pssm_scan
+pssm_scan_parquet
 context
 tests/test_pssm_scan
 *.gz

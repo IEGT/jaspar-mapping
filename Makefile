@@ -7,12 +7,22 @@ CXXFLAGS += -DNDEBUG
 CXXOPTFLAGS?=
 CXXFLAGS += $(CXXOPTFLAGS)
 TEST_CXXFLAGS?=$(filter-out -std=c++23 -O3 -g,$(CXXFLAGS)) -std=c++17 -O0
+PKG_CONFIG?=pkg-config
+PARQUET?=0
+PARQUET_CXXFLAGS?=$(shell $(PKG_CONFIG) --cflags arrow parquet 2>/dev/null)
+PARQUET_LDFLAGS?=$(shell $(PKG_CONFIG) --libs arrow parquet 2>/dev/null)
+ifeq ($(PARQUET),1)
+CXXFLAGS += -DPSSM_SCAN_WITH_PARQUET $(PARQUET_CXXFLAGS)
+endif
 #LDFLAGS=-lz -lbz2
 #LDFLAGS=/home/sm718/miniconda3/pkgs/zlib-1.3.1-h4ab18f5_1/lib/libz.a /home/sm718/miniconda3/pkgs/bzip2-1.0.8-h4bc722e_7/lib/libbz2.a
 LDFLAGS += -lz -lbz2
 LDFLAGS += -lm
 LDOPTFLAGS?=
 LDFLAGS += $(LDOPTFLAGS)
+ifeq ($(PARQUET),1)
+LDFLAGS += $(PARQUET_LDFLAGS)
+endif
 
 SCRATCHDIR=/tmp
 SRCS=$(wildcard *.cpp)
@@ -52,6 +62,7 @@ DISTRIBUTIONDIR?=score_distributions_$(SCORE_MODE)_bins_$(DISTRIBUTION_BIN_WIDTH
 .SUFFIXES: .gz .bed.gz .cpp .o .fasta .fa.gz _positive_$(CHR).bed _positive_$(CHR).bed.gz _negative_$(CHR).bed _negative_$(CHR).bed.gz _bidirect_$(CHR).bed.gz .bed .bedGraph .combined.bed
 
 BINARIES=pssm_scan gtf_file_region_retrieval context
+PARQUET_BINARIES=pssm_scan_parquet
 TEST_BINARIES=tests/test_pssm_scan
 
 all: $(BINARIES)
@@ -73,6 +84,9 @@ context: context.o compressed_file_reader.o
 pssm_scan: pssm_scan.cpp pssm.h pssm_scan_core.h progress.o pssm.o pssm_scan_core.o compressed_file_reader.o
 	$(CXX) $(CXXFLAGS) -o $@ pssm_scan.cpp progress.o pssm.o pssm_scan_core.o compressed_file_reader.o $(LDFLAGS)
 
+pssm_scan_parquet: pssm_scan.cpp pssm.h pssm_scan_core.h progress.o pssm.o pssm_scan_core.o compressed_file_reader.o
+	$(CXX) $(CXXFLAGS) -DPSSM_SCAN_WITH_PARQUET $(PARQUET_CXXFLAGS) -o $@ pssm_scan.cpp progress.o pssm.o pssm_scan_core.o compressed_file_reader.o $(LDFLAGS) $(PARQUET_LDFLAGS)
+
 tests/test_pssm_scan: tests/test_pssm_scan.cpp pssm_scan_core.h pssm.h pssm.o pssm_scan_core.o
 	$(CXX) $(TEST_CXXFLAGS) -o $@ tests/test_pssm_scan.cpp pssm.o pssm_scan_core.o
 
@@ -86,7 +100,7 @@ clean:
 	$(RM) -f *.o
 
 distclean:
-	$(RM) -f $(BINARIES) $(TEST_BINARIES) *.o
+	$(RM) -f $(BINARIES) $(PARQUET_BINARIES) $(TEST_BINARIES) *.o
 
 $(JASPAR):
 	mkdir -p $(dir $@)

@@ -124,24 +124,27 @@ windows are present, with `ScoreBinStart=-Inf` and `ScoreBinEnd=-10000`.
 
 For dense chr1 calibration against CUT&RUN coverage, use `--dense-scores` with
 one motif and one chromosome. Dense mode writes every motif-window start as
-block TSV under a hive-style path such as
-`tables/jaspar2026/motif_score_dense/motif_id=MA0861.2/score_mode=.../chrom=1/strand=plus/part-000000.tsv`.
+block Parquet when built with Arrow support, under a hive-style path such as
+`tables/jaspar2026/motif_score_dense/motif_id=MA0861.2/score_mode=.../chrom=1/strand=plus/part-000000.parquet`.
 Skipped windows, including unsmoothed zero-count sentinels and assembly gaps
-under `--skip-N`, are stored as `NULL` elements in the score vector. Convert
-the TSV blocks to Parquet with the local DuckDB helper:
+under `--skip-N`, are stored as `NULL` elements in the score vector. Build the
+direct Parquet scanner with Apache Arrow/Parquet C++ available through
+`pkg-config`:
 
 ```
-./pssm_scan --dense-scores --dense-block-size 65536 \
+make pssm_scan_parquet
+./pssm_scan_parquet --dense-scores --dense-block-size 65536 \
   --outdir dense_tp73_chr1_log_ratio \
   --genome Homo_sapiens.GRCh38.dna.primary_assembly.fasta \
   --pssm JASPAR2026_CORE_non-redundant_pfms_jaspar.txt \
   --motif MA0861.2 --chr 1 --strand both \
   --score-mode log2_relative_risk --pseudocount 1
-scripts/dense_tsv_to_parquet.sh dense_tp73_chr1_log_ratio/tables/jaspar2026/motif_score_dense
 ```
 
 Repeat the same command with `--score-mode log_odds` and a different `--outdir`
-for the second TP73 calibration run.
+for the second TP73 calibration run. The default dependency-free `pssm_scan`
+build still writes TSV blocks; `scripts/dense_tsv_to_parquet.sh` remains as a
+fallback converter for environments where Arrow is not installed.
 
 ## Automated reference checks
 

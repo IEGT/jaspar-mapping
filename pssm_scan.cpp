@@ -18,9 +18,17 @@
 #include <csignal>
 #include <limits>
 #include <map>
+#include <memory>
 #include <set>
 #include <stdexcept>
 #include <utility>
+
+#ifdef PSSM_SCAN_WITH_PARQUET
+#include <arrow/api.h>
+#include <arrow/io/api.h>
+#include <parquet/arrow/writer.h>
+#include <parquet/properties.h>
+#endif
 
 #include "progress.h"
 #include "pssm.h"
@@ -297,6 +305,22 @@ std::string strandPartitionLabel(const std::string& strand) {
     return strand == "-" ? "minus" : "plus";
 }
 
+std::string denseScoreOutputExtension() {
+#ifdef PSSM_SCAN_WITH_PARQUET
+    return ".parquet";
+#else
+    return ".tsv";
+#endif
+}
+
+std::string denseScoreFormatName() {
+#ifdef PSSM_SCAN_WITH_PARQUET
+    return "Parquet";
+#else
+    return "TSV";
+#endif
+}
+
 std::filesystem::path denseScoreOutputPath(const std::string& outdir, const PSSM& pssm,
                                            const std::string& scoreMode, const double& pseudocount,
                                            const std::string& chromosome, const std::string& strand) {
@@ -309,9 +333,161 @@ std::filesystem::path denseScoreOutputPath(const std::string& outdir, const PSSM
     outputPath /= "pseudocount=" + formatDoubleForFileLabel(pseudocount);
     outputPath /= "chrom=" + chromosome;
     outputPath /= "strand=" + strandPartitionLabel(strand);
-    outputPath /= "part-000000.tsv";
+    outputPath /= "part-000000" + denseScoreOutputExtension();
     return outputPath;
 }
+
+#ifdef PSSM_SCAN_WITH_PARQUET
+class DenseScoreParquetWriter {
+public:
+    explicit DenseScoreParquetWriter(const size_t blocksPerRecordBatch = 64)
+        : blocksPerRecordBatch_(std::max<size_t>(1, blocksPerRecordBatch)) {}
+
+    bool open(const std::filesystem::path& outputFilePath, std::string& error) {
+        schema_ = arrow::schema({
+            arrow::field("block_start", arrow::int64()),
+            arrow::field("scores", arrow::list(arrow::float32()))
+        });
+
+        auto outputResult = arrow::io::FileOutputStream::Open(outputFilePath.string());
+        if (!outputResult.ok()) {
+            error = "opening Parquet output: " + outputResult.status().ToString();
+            return false;
+        }
+        outputStream_ = *outputResult;
+
+        parquet::WriterProperties::Builder writerPropertiesBuilder;
+        writerPropertiesBuilder.compression(parquet::Compression::ZSTD);
+        auto writerProperties = writerPropertiesBuilder.build();
+
+        parquet::ArrowWriterProperties::Builder arrowPropertiesBuilder;
+        arrowPropertiesBuilder.store_schema();
+        auto arrowProperties = arrowPropertiesBuilder.build();
+
+        auto writerResult = parquet::arrow::FileWriter::Open(
+            *schema_, arrow::default_memory_pool(), outputStream_,
+            writerProperties, arrowProperties);
+        if (!writerResult.ok()) {
+            error = "opening Parquet writer: " + writerResult.status().ToString();
+            return false;
+        }
+        writer_ = std::move(writerResult).ValueOrDie();
+
+        resetBuilders();
+        return true;
+    }
+
+    bool writeBlock(const ScoreBlock& block, std::string& error) {
+        if (!writer_) {
+            error = "Parquet writer is not open.";
+            return false;
+        }
+
+        auto status = blockStartBuilder_->Append(static_cast<std::int64_t>(block.blockStart));
+        if (!status.ok()) {
+            error = "appending dense block start: " + status.ToString();
+            return false;
+        }
+
+        status = scoresBuilder_->Append();
+        if (!status.ok()) {
+            error = "appending dense score list: " + status.ToString();
+            return false;
+        }
+
+        auto* valueBuilder = static_cast<arrow::FloatBuilder*>(scoresBuilder_->value_builder());
+        for (const double& score : block.scores) {
+            if (isSkippedScore(score)) {
+                status = valueBuilder->AppendNull();
+            } else {
+                status = valueBuilder->Append(static_cast<float>(score));
+            }
+            if (!status.ok()) {
+                error = "appending dense score: " + status.ToString();
+                return false;
+            }
+        }
+
+        pendingBlocks_++;
+        if (pendingBlocks_ >= blocksPerRecordBatch_) {
+            return flush(error);
+        }
+        return true;
+    }
+
+    bool close(std::string& error) {
+        if (writer_) {
+            if (!flush(error)) {
+                return false;
+            }
+            auto status = writer_->Close();
+            if (!status.ok()) {
+                error = "closing Parquet writer: " + status.ToString();
+                return false;
+            }
+            writer_.reset();
+        }
+        if (outputStream_) {
+            auto status = outputStream_->Close();
+            if (!status.ok()) {
+                error = "closing Parquet output: " + status.ToString();
+                return false;
+            }
+            outputStream_.reset();
+        }
+        return true;
+    }
+
+private:
+    void resetBuilders() {
+        auto* pool = arrow::default_memory_pool();
+        blockStartBuilder_ = std::make_unique<arrow::Int64Builder>(pool);
+        scoresBuilder_ = std::make_unique<arrow::ListBuilder>(
+            pool, std::make_shared<arrow::FloatBuilder>(pool));
+        pendingBlocks_ = 0;
+    }
+
+    bool flush(std::string& error) {
+        if (pendingBlocks_ == 0) {
+            return true;
+        }
+
+        std::shared_ptr<arrow::Array> blockStartArray;
+        auto status = blockStartBuilder_->Finish(&blockStartArray);
+        if (!status.ok()) {
+            error = "finishing dense block_start array: " + status.ToString();
+            return false;
+        }
+
+        std::shared_ptr<arrow::Array> scoresArray;
+        status = scoresBuilder_->Finish(&scoresArray);
+        if (!status.ok()) {
+            error = "finishing dense scores array: " + status.ToString();
+            return false;
+        }
+
+        auto batch = arrow::RecordBatch::Make(
+            schema_, static_cast<std::int64_t>(pendingBlocks_),
+            {blockStartArray, scoresArray});
+        status = writer_->WriteRecordBatch(*batch);
+        if (!status.ok()) {
+            error = "writing dense Parquet record batch: " + status.ToString();
+            return false;
+        }
+
+        resetBuilders();
+        return true;
+    }
+
+    size_t blocksPerRecordBatch_;
+    size_t pendingBlocks_ = 0;
+    std::shared_ptr<arrow::Schema> schema_;
+    std::shared_ptr<arrow::io::FileOutputStream> outputStream_;
+    std::unique_ptr<parquet::arrow::FileWriter> writer_;
+    std::unique_ptr<arrow::Int64Builder> blockStartBuilder_;
+    std::unique_ptr<arrow::ListBuilder> scoresBuilder_;
+};
+#endif
 
 void writeDenseScoreBlock(std::ostream& outFile, const ScoreBlock& block) {
     outFile << block.blockStart << "\t[";
@@ -635,12 +811,22 @@ int scanDenseScores(const std::string& chromosome, const EncodedChromosome& enco
     }
 
     std::filesystem::create_directories(outputFilePath.parent_path());
+#ifdef PSSM_SCAN_WITH_PARQUET
+    DenseScoreParquetWriter denseWriter;
+    std::string denseWriterError;
+    if (!denseWriter.open(outputFilePath, denseWriterError)) {
+        std::cerr << "E: Error opening dense score output file '" << outputFilePath.string()
+                  << "': " << denseWriterError << std::endl;
+        return -1;
+    }
+#else
     std::ofstream outFile(outputFilePath);
     if (!outFile.is_open()) {
         std::cerr << "E: Error opening dense score output file '" << outputFilePath.string() << "'." << std::endl;
         return -1;
     }
     outFile << "block_start\tscores\n";
+#endif
 
     if (beVerbose) displayProgressBar(0.0);
     const size_t statusCheckMask = 0x3fff;
@@ -650,7 +836,15 @@ int scanDenseScores(const std::string& chromosome, const EncodedChromosome& enco
     for (size_t blockStart = posStart; blockStart <= lastWindowStart; blockStart += denseBlockSize) {
         const size_t windowCount = std::min(denseBlockSize, lastWindowStart - blockStart + 1);
         const ScoreBlock block = calculateScoreBlock(codes, sequenceLength, reverseComplementWindow, blockStart, windowCount, flatPssm);
+#ifdef PSSM_SCAN_WITH_PARQUET
+        if (!denseWriter.writeBlock(block, denseWriterError)) {
+            std::cerr << "E: Error writing dense score output file '" << outputFilePath.string()
+                      << "': " << denseWriterError << std::endl;
+            return -1;
+        }
+#else
         writeDenseScoreBlock(outFile, block);
+#endif
         validWindows += block.validWindows;
         skippedWindows += block.skippedWindows;
 
@@ -664,9 +858,16 @@ int scanDenseScores(const std::string& chromosome, const EncodedChromosome& enco
         }
     }
 
+#ifdef PSSM_SCAN_WITH_PARQUET
+    if (!denseWriter.close(denseWriterError)) {
+        std::cerr << "E: Error closing dense score output file '" << outputFilePath.string()
+                  << "': " << denseWriterError << std::endl;
+        return -1;
+    }
+#endif
     maybePrintRequestedProgress("dense_scores", pssm, chromosome, strand, posStart, posEnd, motifLength, posEnd - motifLength);
     if (beVerbose) {
-        std::cerr << "I: Dense score blocks saved to " << outputFilePath.string()
+        std::cerr << "I: Dense " << denseScoreFormatName() << " score blocks saved to " << outputFilePath.string()
                   << " (valid_windows=" << validWindows
                   << ", skipped_windows=" << skippedWindows << ")." << std::endl;
     }
@@ -1178,7 +1379,7 @@ void printHelp(const std::string& programName, const std::string& genomeFile, co
     std::cout << " --coordinate-mode    Output coordinate convention: legacy or bed (set to '" << coordinateModeName(coordinateMode) << "')" << std::endl;
     std::cout << " --score-distribution Write a score histogram instead of BED hits; default strand is + unless --strand is set (set to " << scoreDistribution << ")" << std::endl;
     std::cout << " --distribution-bin-width Score histogram bin width or adaptive ladder (set to '" << distributionBinWidth << "')" << std::endl;
-    std::cout << " --dense-scores       Write dense score blocks as TSV for one motif and one chromosome (set to " << denseScores << ")" << std::endl;
+    std::cout << " --dense-scores       Write dense " << denseScoreFormatName() << " score blocks for one motif and one chromosome (set to " << denseScores << ")" << std::endl;
     std::cout << " --dense-block-size   Dense score windows per output block (set to " << denseBlockSize << ")" << std::endl;
     std::cout << " --skip-N             Skip windows containing 'N'" << std::endl;
     std::cout << " --neutral-N          Treat 'N' as neutral (contribute 0 to the score)" << std::endl;
@@ -1675,7 +1876,7 @@ int main(int argc, char* argv[]) {
                                     targetFrom, targetTo, denseBlockSize, outputFilePath) != 0) {
                     return 1;
                 }
-                std::cout << "Dense scores saved to: " << outputFilePath.string() << std::endl;
+                std::cout << "Dense " << denseScoreFormatName() << " scores saved to: " << outputFilePath.string() << std::endl;
             }
 
             if (scanMinusStrand) {
@@ -1685,7 +1886,7 @@ int main(int argc, char* argv[]) {
                                     targetFrom, targetTo, denseBlockSize, outputFilePath) != 0) {
                     return 1;
                 }
-                std::cout << "Dense scores saved to: " << outputFilePath.string() << std::endl;
+                std::cout << "Dense " << denseScoreFormatName() << " scores saved to: " << outputFilePath.string() << std::endl;
             }
 
             continue;
