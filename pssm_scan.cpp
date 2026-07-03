@@ -1380,7 +1380,7 @@ void printHelp(const std::string& programName, const std::string& genomeFile, co
     std::cout << " --score-distribution Write a score histogram instead of BED hits; default strand is + unless --strand is set (set to " << scoreDistribution << ")" << std::endl;
     std::cout << " --distribution-bin-width Score histogram bin width or adaptive ladder (set to '" << distributionBinWidth << "')" << std::endl;
     std::cout << " --dense-scores       Write dense " << denseScoreFormatName() << " score blocks for one motif and one chromosome (set to " << denseScores << ")" << std::endl;
-    std::cout << " --dense-block-size   Dense score windows per output block (set to " << denseBlockSize << ")" << std::endl;
+    std::cout << " --dense-block-size   Dense alignment scores per output block (set to " << denseBlockSize << ")" << std::endl;
     std::cout << " --skip-N             Skip windows containing 'N'" << std::endl;
     std::cout << " --neutral-N          Treat 'N' as neutral (contribute 0 to the score)" << std::endl;
     std::cout << " -N, --skip-normalization Skip log-normalisation, will affect scoring." << std::endl;
@@ -1663,10 +1663,10 @@ int main(int argc, char* argv[]) {
             return 1;
         }
         if (thresholdSet) {
-            std::cerr << "W: --dense-scores writes all window scores and ignores --threshold." << std::endl;
+            std::cerr << "W: --dense-scores writes all alignment scores and ignores --threshold." << std::endl;
         }
         if (std::isfinite(minPwmRelativeScore) || std::isfinite(maxPwmRelativeScore)) {
-            std::cerr << "W: --dense-scores writes all window scores and ignores PWM-relative score filters." << std::endl;
+            std::cerr << "W: --dense-scores writes all alignment scores and ignores PWM-relative score filters." << std::endl;
         }
         if (showSequence) {
             std::cerr << "W: --dense-scores ignores --show-sequence." << std::endl;

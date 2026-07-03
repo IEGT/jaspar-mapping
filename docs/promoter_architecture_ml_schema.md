@@ -40,7 +40,7 @@ tables/jaspar2026/
   motif_hit/chrom=*/…        # layer 1  (large, regenerable)
   motif_score_dense/
     motif_id=*/score_mode=*/pseudocount=*/chrom=*/strand=*/…
-                            # dense calibration blocks, score for every window start
+                            # dense calibration blocks, score for every PSSM alignment start
   motif_cutandrun_score_bin_stats/
     motif_id=*/score_mode=*/pseudocount=*/chrom=*/…
                             # CUT&RUN enrichment by score bin
@@ -56,8 +56,8 @@ Only non-zero facts are stored for the genome-wide hit layer — `motif_hit`
 holds actual hits, `cutandrun` one row per (locus, sample),
 `promoter_arch_feature` one row per (gene, motif). Dense calibration runs are
 the explicit exception: for selected motifs/chromosomes they store one score
-per motif-window start and strand in block vectors, with repeated identity moved into
-partition paths.
+per motif-model alignment start and strand in block vectors, with repeated
+identity moved into partition paths.
 
 ## Layers and keys
 
@@ -86,13 +86,15 @@ calibration for TP73 (`MA0861.2`) on both strands:
 - `--score-mode log2_relative_risk --pseudocount 1`
 - `--score-mode log_odds --pseudocount 1`
 
-Each run stores one score per motif-window start and strand as dense block vectors.
-Position is implicit (`start = block_start + offset`), and `end` is derived
-from `motif_metadata.motif_length`. The theoretical anchor remains score `0`:
-for log2 relative risk it is the point where the sequence window has no net
-information gain over equal A/C/G/T background. The calibration then asks
-whether CUT&RUN support diverges from the random-window baseline above, at, or
-below that anchor, and whether log odds gives a cleaner or more symmetric
+Each run stores one score per motif-model alignment start and strand as dense
+block vectors. Position is implicit (`start = block_start + offset`), and
+`end` is derived from `motif_metadata.motif_length`. This interval is the DNA
+span used for scoring the PSSM alignment; it should not be read as an asserted
+physical footprint of the TF complex. The theoretical anchor remains score
+`0`: for log2 relative risk it is the point where the scored sequence has no
+net information gain over equal A/C/G/T background. The calibration then asks
+whether CUT&RUN support diverges from the random-alignment baseline above, at,
+or below that anchor, and whether log odds gives a cleaner or more symmetric
 separation.
 
 Use the same score bins for both dense runs:

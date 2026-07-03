@@ -123,13 +123,17 @@ Distribution TSVs also include an explicit `BinScheme=sentinel` row when such
 windows are present, with `ScoreBinStart=-Inf` and `ScoreBinEnd=-10000`.
 
 For dense chr1 calibration against CUT&RUN coverage, use `--dense-scores` with
-one motif and one chromosome. Dense mode writes every motif-window start as
-block Parquet when built with Arrow support, under a hive-style path such as
+one motif and one chromosome. Dense mode writes one score for every possible
+alignment start of the motif model to the selected chromosome and strand.
+With Arrow support, those alignment scores are written as block Parquet under
+a hive-style path such as
 `tables/jaspar2026/motif_score_dense/motif_id=MA0861.2/score_mode=.../chrom=1/strand=plus/part-000000.parquet`.
-Skipped windows, including unsmoothed zero-count sentinels and assembly gaps
-under `--skip-N`, are stored as `NULL` elements in the score vector. Build the
-direct Parquet scanner with Apache Arrow/Parquet C++ available through
-`pkg-config`:
+Skipped alignments, including unsmoothed zero-count sentinels and assembly gaps
+under `--skip-N`, are stored as `NULL` elements in the score vector. The
+derived `start`/`end` interval is the sequence span used for PSSM scoring; it
+is not intended to define the physical footprint of the bound TF complex.
+Build the direct Parquet scanner with Apache Arrow/Parquet C++ available
+through `pkg-config`:
 
 ```
 make pssm_scan_parquet

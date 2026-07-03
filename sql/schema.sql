@@ -44,10 +44,11 @@ SELECT
     matched_seq           -- nullable; present only if scanned with --show-sequence
 FROM read_parquet('tables/jaspar2026/motif_hit/*/*.parquet', hive_partitioning = 1);
 
--- Dense per-window-start score blocks for calibration runs. Physical Parquet
--- stores only block_start and a FLOAT[] score vector; skipped/sentinel windows
--- are NULL list elements. Identity lives in hive partitions: motif_id,
--- score_mode, pseudocount, chrom, strand.
+-- Dense score blocks for calibration runs. Each score belongs to one PSSM
+-- alignment start, not to an asserted TF footprint. Physical Parquet stores
+-- only block_start and a FLOAT[] score vector; skipped/sentinel alignments are
+-- NULL list elements. Identity lives in hive partitions: motif_id, score_mode,
+-- pseudocount, chrom, strand.
 CREATE OR REPLACE VIEW motif_score_dense_block AS
 SELECT
     motif_id,
@@ -61,8 +62,9 @@ SELECT
     scores
 FROM read_parquet('tables/jaspar2026/motif_score_dense/*/*/*/*/*/*.parquet', hive_partitioning = 1);
 
--- Logical row view over dense score blocks. Use this for region inspection;
--- aggregate directly from blocks for whole-chromosome calibration jobs.
+-- Logical row view over dense score blocks. The start/end interval is the DNA
+-- span scored by the PSSM alignment. Use this for region inspection; aggregate
+-- directly from blocks for whole-chromosome calibration jobs.
 CREATE OR REPLACE VIEW motif_score_dense AS
 SELECT
     b.chrom,
