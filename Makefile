@@ -6,6 +6,7 @@ CXXFLAGS += -O3
 CXXFLAGS += -DNDEBUG
 CXXOPTFLAGS?=
 CXXFLAGS += $(CXXOPTFLAGS)
+TEST_CXXFLAGS?=$(filter-out -std=c++23 -O3 -g,$(CXXFLAGS)) -std=c++17 -O0
 #LDFLAGS=-lz -lbz2
 #LDFLAGS=/home/sm718/miniconda3/pkgs/zlib-1.3.1-h4ab18f5_1/lib/libz.a /home/sm718/miniconda3/pkgs/bzip2-1.0.8-h4bc722e_7/lib/libbz2.a
 LDFLAGS += -lz -lbz2
@@ -51,17 +52,32 @@ DISTRIBUTIONDIR?=score_distributions_$(SCORE_MODE)_bins_$(DISTRIBUTION_BIN_WIDTH
 .SUFFIXES: .gz .bed.gz .cpp .o .fasta .fa.gz _positive_$(CHR).bed _positive_$(CHR).bed.gz _negative_$(CHR).bed _negative_$(CHR).bed.gz _bidirect_$(CHR).bed.gz .bed .bedGraph .combined.bed
 
 BINARIES=pssm_scan gtf_file_region_retrieval context
+TEST_BINARIES=tests/test_pssm_scan
 
 all: $(BINARIES)
 
 .cpp.o:
 	$(CXX) $(CXXFLAGS) -c $<
 
+compressed_file_reader.o: compressed_file_reader.cpp compressed_file_reader.h
+
+progress.o: progress.cpp progress.h
+
+pssm.o: pssm.cpp pssm.h
+
+pssm_scan_core.o: pssm_scan_core.cpp pssm_scan_core.h pssm.h
+
 context: context.o compressed_file_reader.o
 	$(CXX) $(CXXFLAGS) -o $@ $^  $(LDFLAGS)
 
-pssm_scan: pssm_scan.cpp progress.o pssm.o compressed_file_reader.o
-	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
+pssm_scan: pssm_scan.cpp pssm.h pssm_scan_core.h progress.o pssm.o pssm_scan_core.o compressed_file_reader.o
+	$(CXX) $(CXXFLAGS) -o $@ pssm_scan.cpp progress.o pssm.o pssm_scan_core.o compressed_file_reader.o $(LDFLAGS)
+
+tests/test_pssm_scan: tests/test_pssm_scan.cpp pssm_scan_core.h pssm.h pssm.o pssm_scan_core.o
+	$(CXX) $(TEST_CXXFLAGS) -o $@ tests/test_pssm_scan.cpp pssm.o pssm_scan_core.o
+
+check: tests/test_pssm_scan
+	./tests/test_pssm_scan
 
 gtf_file_region_retrieval: gtf_file_region_retrieval.cpp progress.o gtf_file_region.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
@@ -70,7 +86,7 @@ clean:
 	$(RM) -f *.o
 
 distclean:
-	$(RM) -f $(BINARIES) *.o
+	$(RM) -f $(BINARIES) $(TEST_BINARIES) *.o
 
 $(JASPAR):
 	mkdir -p $(dir $@)
@@ -181,7 +197,7 @@ test_reference_tp73_promoter_chr1: pssm_scan $(JASPAR) $(GENOME)
 	fi ; \
 	echo "I: E2F1 hits in TP73 promoter reference window: $$hits"
 
-.PHONY: test all $(OUTPUTDIR)/$(CHR) jaspar genome genomegz genome_index scan_chr_all_motifs genome_testdata count datatables files_cutandrun_clean TP73_datatable test_reference_tp73_promoter_chr1 score_distributions_chr1
+.PHONY: test check all $(OUTPUTDIR)/$(CHR) jaspar genome genomegz genome_index scan_chr_all_motifs genome_testdata count datatables files_cutandrun_clean TP73_datatable test_reference_tp73_promoter_chr1 score_distributions_chr1
 .PRECIOUS: $(GENOME) $(GENOMEGZ) %.bed %.bed.gz
 .SECONDARY:
 

@@ -13,6 +13,7 @@
 gtf_file_region_retrieval 
 pssm_scan
 context
+tests/test_pssm_scan
 *.gz
 *.RData
 *.pdf

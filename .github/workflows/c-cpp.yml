@@ -21,13 +21,7 @@ jobs:
         run: make
 
       - name: Fast smoke test
-        run: |
-          set -e
-          if grep -qE '^check:' Makefile; then
-            make check
-          else
-            ./pssm_scan --help >/dev/null
-          fi
+        run: make check
 
       - name: Archive first binary
         uses: actions/upload-artifact@v4

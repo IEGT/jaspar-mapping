@@ -77,13 +77,13 @@ class PSSM {
         /**
          * @brief returns log(frequency/background)
          */
-        static inline double logRelativeRisk(const double& frequency, const double& background);
-        static inline double logRelativeRiskACGT(const double& frequency);
+        static double logRelativeRisk(const double& frequency, const double& background);
+        static double logRelativeRiskACGT(const double& frequency);
         /**
          * @brief returns log(count/(colsum-count) minus log(background/(1-background))
          * Background is presume to always be at 0.25, ignoring variations in the GC content. 
          */
-        static inline double logOddsRatioACGT(const double& count, const double& colsum);
+        static double logOddsRatioACGT(const double& count, const double& colsum);
         static std::string canonicalScoreModeName(const std::string& scoreMode);
 
         // Normalize the PSSM by converting counts to the selected score mode.
