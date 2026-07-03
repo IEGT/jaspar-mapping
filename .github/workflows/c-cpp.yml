@@ -20,14 +20,23 @@ jobs:
       - name: make
         run: make
 
+      - name: Fast smoke test
+        run: |
+          set -e
+          if grep -qE '^check:' Makefile; then
+            make check
+          else
+            ./pssm_scan --help >/dev/null
+          fi
+
       - name: Archive first binary
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: pssm_scan-linux
-          path: ./pssm_scan.exe
+          path: ./pssm_scan
 
       - name: Archive second binary
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: gtf_file_region_retrieval-linux
           path: ./gtf_file_region_retrieval
