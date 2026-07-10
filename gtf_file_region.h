@@ -4,6 +4,7 @@
 // Structure to store gene region information
 struct GeneRegion {
     std::string chromosome;
+    // BED coordinates: 0-based start, half-open end.
     size_t start;
     size_t end;
     std::string strand;

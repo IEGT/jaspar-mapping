@@ -96,8 +96,18 @@ std::unordered_map<std::string, GeneRegion> parseGTFFile(const std::string& gtfF
             continue; // Skip lines that are not gene or transcript entries
         }
 
-        long start = std::stol(startStr);
-        long end = std::stol(endStr);
+        const long gtfStart = std::stol(startStr);
+        const long gtfEnd = std::stol(endStr);
+        if (gtfStart < 1 || gtfEnd < gtfStart) {
+            std::cerr << "E: Line " << lineNo << ": Invalid GTF coordinates "
+                      << gtfStart << "-" << gtfEnd << "." << std::endl;
+            continue;
+        }
+
+        // GTF is 1-based inclusive; GeneRegion uses BED's 0-based,
+        // half-open convention throughout.
+        const size_t start = static_cast<size_t>(gtfStart - 1);
+        const size_t end = static_cast<size_t>(gtfEnd);
 
         // Extract the gene name from the attributes field
         size_t biotypePos = attributes.find("gene_biotype");
@@ -219,19 +229,20 @@ std::unordered_map<std::string, GeneRegion> parseGTFFile(const std::string& gtfF
 // Return a new GeneRegion object that represents the region upstream of the current region
 GeneRegion GeneRegion::relative_upstream(size_t minDist=1, size_t maxDist=500) const {
     assert(end>start);
-    if (minDist > maxDist) {
-        std::cerr << "E GeneRegion::relative_upstream: minDist > maxDist" << std::endl;
+    if (minDist == 0 || minDist > maxDist) {
+        std::cerr << "E GeneRegion::relative_upstream: distances must satisfy 1 <= minDist <= maxDist" << std::endl;
         abort();
     }
     if ("+" == strand) {
-        size_t newStart = start - maxDist;
-        size_t newEnd = start - minDist;
+        const size_t newStart = maxDist > start ? 0 : start - maxDist;
+        const size_t nearOffset = minDist - 1;
+        const size_t newEnd = nearOffset > start ? 0 : start - nearOffset;
         assert(newStart<=newEnd);
         return {chromosome, newStart, newEnd, strand, geneId, geneName, transcriptName};
     }
     else if ("-" == strand) {
-        size_t newStart = end + minDist;
-        size_t newEnd = end + maxDist;
+        const size_t newStart = end + minDist - 1;
+        const size_t newEnd = end + maxDist;
         assert(newStart<=newEnd);
         return {chromosome, newStart, newEnd, strand, geneId, geneName, transcriptName};
     }
@@ -239,27 +250,28 @@ GeneRegion GeneRegion::relative_upstream(size_t minDist=1, size_t maxDist=500) c
     abort();
 }
 
-// Return a new GeneRegion object that represents the region upstream of the current region
+// Return a new GeneRegion object that represents the region downstream of the current region
 GeneRegion GeneRegion::relative_downstream(size_t minDist=1, size_t maxDist=500) const {
     assert(end>start);
-    if (minDist > maxDist) {
-        std::cerr << "E GeneRegion::relative_downstream: minDist > maxDist" << std::endl;
+    if (minDist == 0 || minDist > maxDist) {
+        std::cerr << "E GeneRegion::relative_downstream: distances must satisfy 1 <= minDist <= maxDist" << std::endl;
         abort();
     }
     if ("+" == strand) {
-        size_t newStart = start + minDist-1; // -1 since the start position itself is part of the feature
-        size_t newEnd = start + maxDist-1;
+        const size_t newStart = start + minDist - 1;
+        const size_t newEnd = start + maxDist;
         assert(newStart<=newEnd);
         return {chromosome, newStart, newEnd, strand, geneId, geneName, transcriptName};
     }
     else if ("-" == strand) {
-        size_t newStart = end - maxDist+1; // +1 since the end position itself is part of the feature
-        size_t newEnd = end - minDist+1;
+        const size_t newStart = maxDist > end ? 0 : end - maxDist;
+        const size_t nearOffset = minDist - 1;
+        const size_t newEnd = nearOffset > end ? 0 : end - nearOffset;
         assert(newStart<=newEnd);
         return {chromosome, newStart, newEnd, strand, geneId, geneName, transcriptName};
     }
  
-    std::cerr << "E GeneRegion::relative_upstream: unknown strand: '" << strand << "'" << std::endl;
+    std::cerr << "E GeneRegion::relative_downstream: unknown strand: '" << strand << "'" << std::endl;
     abort();
 }
 

@@ -180,6 +180,25 @@ A helper routine was created to filter GTF annotations of genome. This can be us
  2. Download the GTF file accompanying the FASTA file, i.e. https://ftp.ensembl.org/pub/release-112/gtf/homo_sapiens/Homo_sapiens.GRCh38.112.gtf.gz
  3. Execute it ./gtf_file_region_retrieval
 
+`gtf_file_region_retrieval` always emits BED6 coordinates: the start is
+0-based and the end is exclusive. A GTF interval `start..end` (1-based,
+inclusive) is therefore represented as `[start - 1, end)` in its unfiltered
+output.
+
+The `--filter promoter` output contains distances 1 through 500 immediately
+upstream of the transcription start site and excludes the TSS itself. For a
+plus-strand transcript with BED start `tss`, this is `[tss - 500, tss)`; for a
+minus-strand transcript with BED end `end`, it is `[end, end + 500)`. The
+`--filter utr` output is currently a TSS-relative downstream window rather
+than an annotation-derived UTR: it contains 500 bases including the TSS,
+`[tss, tss + 500)` on the plus strand and `[end - 500, end)` on the minus
+strand. Intervals extending left of chromosome coordinate zero are clipped at
+zero and can consequently be shorter than 500 bases.
+
+The tracked `GeneLists/*.bed` files predate this coordinate correction. They
+are historical outputs and must be regenerated before use in the promoter/ML
+layer.
+
 Associate all filtered matches of your transcription factor's predicted binding sites with CUT&RUN matches.
 
  1. Create a folder with a copy of the data you aim to use as a reference of your CUT&RUN data to a dedicated folder. This could be the .bed files or .bigGraph files showing the detected peaks or the coverage genomic regions.

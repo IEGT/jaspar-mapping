@@ -190,7 +190,10 @@ parameters are typed, and no agent needs to discover table joins on the fly.
 
 ## Open questions to settle before building the exporter
 
-- **Promoter window definition** — the GeneLists `*.promoter.bed` extents (upstream/downstream of TSS) fix every distance feature; pin and record them in the manifest.
+- **Promoter window definition** — regenerate the historical GeneLists
+  `*.promoter.bed` files with the corrected GTF-to-BED conversion before they
+  seed this layer. Pin the chosen upstream/downstream extents and coordinate
+  convention in the manifest because they fix every distance feature.
 - **Differential source** — how `log2fc_ta_vs_dn` is computed from E-MTAB-14704 (per cell line, which contrast, which shrinkage), and whether `skmel29` and `saos2` are modelled separately or pooled.
 - **Motif-version consistency** — the run uses `MA0861.2`; the legacy datatable pipeline still references `MA0861.1` (see the earlier review). Reconcile before joining old and new outputs.
 - **Ensembl release** — genome vs GTF release for the 2026 run (Makefile pulls 113; the paper used 112). Coordinates are stable on GRCh38, but layer-4 annotation is not.

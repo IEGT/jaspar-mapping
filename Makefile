@@ -70,7 +70,7 @@ DISTRIBUTIONDIR?=score_distributions_$(SCORE_MODE)_bins_$(DISTRIBUTION_BIN_WIDTH
 
 BINARIES=pssm_scan gtf_file_region_retrieval context
 PARQUET_BINARIES=pssm_scan_parquet
-TEST_BINARIES=tests/test_pssm_scan
+TEST_BINARIES=tests/test_pssm_scan tests/test_gtf_file_region
 
 all: $(BINARIES)
 
@@ -85,6 +85,8 @@ pssm.o: pssm.cpp pssm.h
 
 pssm_scan_core.o: pssm_scan_core.cpp pssm_scan_core.h pssm.h
 
+gtf_file_region.o: gtf_file_region.cpp gtf_file_region.h progress.h
+
 context: context.o compressed_file_reader.o
 	$(CXX) $(CXXFLAGS) -o $@ $^  $(LDFLAGS)
 
@@ -97,8 +99,12 @@ pssm_scan_parquet: pssm_scan.cpp pssm.h pssm_scan_core.h progress.o pssm.o pssm_
 tests/test_pssm_scan: tests/test_pssm_scan.cpp pssm_scan_core.h pssm.h pssm.o pssm_scan_core.o
 	$(CXX) $(TEST_CXXFLAGS) -o $@ tests/test_pssm_scan.cpp pssm.o pssm_scan_core.o
 
-check: tests/test_pssm_scan
+tests/test_gtf_file_region: tests/test_gtf_file_region.cpp gtf_file_region.h gtf_file_region.o progress.o
+	$(CXX) $(TEST_CXXFLAGS) -o $@ tests/test_gtf_file_region.cpp gtf_file_region.o progress.o
+
+check: $(TEST_BINARIES)
 	./tests/test_pssm_scan
+	./tests/test_gtf_file_region
 
 gtf_file_region_retrieval: gtf_file_region_retrieval.cpp progress.o gtf_file_region.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
