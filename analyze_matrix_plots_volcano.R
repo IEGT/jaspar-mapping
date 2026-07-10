@@ -312,19 +312,22 @@ volcano.plot.for.cell.line <- function(cell.line, threshold.num.reads=1, debug=T
         cat("D: 2\n")
     }
 
-    frequency.cofactors <- sapply(c("TA","DN","GFP"), function(ta.or.dn,m.context.num.binary.confirmed.sum.tota=m.context.num.binary.confirmed.sum.total,m.context.num.tfbs.confirmed.total=m.context.num.tfbs.confirmed.total) {
+    frequency.cofactors <- sapply(c("TA","DN","GFP"), function(ta.or.dn) {
 
         total.confirmed <- m.context.num.binary.confirmed.sum.total[,ta.or.dn]
-        if (is.na(total.confirmed)) {
+        if (anyNA(total.confirmed)) {
             stop(paste0("E: Values for 'm.context.num.binary.confirmed.sum.total[\"",ta.or.dn,"\"]' have not been computed."))
         }
 
         total.predicted.jaspar <- m.context.num.tfbs.confirmed.total[ta.or.dn]
-        if(is.na(m.context.num.tfbs.confirmed.total)) {
+        if (length(total.predicted.jaspar) != 1L || is.na(total.predicted.jaspar)) {
             stop(paste0("E: Values for 'm.context.num.tfbs.confirmed.total[\"",ta.or.dn,"\"]' have not been computed."))
         }
+        if (total.predicted.jaspar <= 0) {
+            stop(paste0("E: Cannot calculate cofactor frequencies for '",ta.or.dn,"' without confirmed TFBS."))
+        }
 
-        a <- total.confirmed / m.context.num.tfbs.confirmed.total
+        a <- total.confirmed / total.predicted.jaspar
         names(a) <- prettyIdentifierJaspar(names(a))
         a
     })
@@ -705,5 +708,4 @@ write.table(list(TA=volcano_data.ta[,-4],DN=volcano_data.dn[,-4]), file=paste0("
 relevant.cofactors.selection.ta <- names(which(relevant.cofactors.methylation.is.up.ta & relevant.cofactors))
 relevant.cofactors.selection.dn <- names(which(relevant.cofactors.methylation.is.up.dn & relevant.cofactors))
 relevant.cofactors.selection <- names(which(relevant.cofactors.methylation.is.up & relevant.cofactors))
-
 
