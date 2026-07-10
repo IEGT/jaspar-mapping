@@ -36,7 +36,7 @@ readBedFiles <- function(path="GeneLists", pattern="*.bed") {
         }
         setnames(dt, h)  # Rename columns
         dt[, `:=`(Chr = as.character(Chr), From = as.integer(From), To = as.integer(To),
-                  Gene = as.character(Gene), Score = as.integer(Score),
+                  Gene = as.character(Gene), Score = as.numeric(Score),
                   Strand=as.character(Strand)) ]  # Ensure correct types
        return(dt)
     })
@@ -84,4 +84,3 @@ utrBedTables <- readBedFiles(pattern="*.utr.*bed")
 # bed1 <- fread("path/to/bed1.bed")
 # bed2 <- fread("path/to/bed2.bed")
 # overlaps <- checkBedOverlaps(bed1, bed2)
-
