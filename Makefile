@@ -127,6 +127,7 @@ check: $(TEST_BINARIES)
 	./tests/test_pssm_scan
 	./tests/test_gtf_file_region
 	bash tests/test_fix_missing_bidirect.sh
+	bash tests/test_localMaxSkmelTADN.sh
 
 check-r:
 	Rscript tests/test_analyze_bed_cutandrun.R

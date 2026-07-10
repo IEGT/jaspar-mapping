@@ -2,60 +2,49 @@
 use strict;
 use warnings;
 
-# Check for input file
 if (@ARGV != 1) {
-    die "Usage: $0 <input.csv>\n";
+    die "Usage: $0 <input.tsv>\n";
 }
 
 my $input_file = $ARGV[0];
-
-# Open the input file
 open my $fh, '<', $input_file or die "Cannot open file $input_file: $!\n";
 
-# Hash to store the maximum activity line for each gene
-my %max_activity;
+my $local_max_line;
+my $local_max_activity;
+my $local_max_direction_equal = 0;
+my $previous_gene;
 
-my $localMax="";
-my $localMaxScore = -1;
-my $prevGene="";
+while (my $line = <$fh>) {
+    chomp $line;
+    my @columns = split /\t/, $line, -1;
 
-while (<>) {
-    chomp;
-    my $line = $_;
-    my @columns = split /\t/;  # Assuming CSV is tab-separated
-
-    # Ensure the line has enough columns
-    if ( @columns < 23 ) {
-        warn "Skipping line due to insufficient columns: $line\n";
-        exit 1;
+    if (@columns < 24) {
+        die "Input line has fewer than 24 tab-separated columns: $line\n";
     }
 
-    my $p73_skmel_DN = $columns[15];  # Column 16 (0-based index is 15)
-    my $p73_skmel_TA = $columns[17];  # Column 18 (0-based index is 17)
+    my $p73_skmel_dn = $columns[15];
+    my $p73_skmel_ta = $columns[17];
+    my $tp73_activity = $p73_skmel_dn + $p73_skmel_ta;
+    my $direction_equal = $columns[5] eq $columns[23] ? 1 : 0;
+    my $gene = $columns[21];
 
-    # Calculate the total activity
-    my $tp73_activity = $p73_skmel_DN + $p73_skmel_TA;
-    my $directionEqual = 0;
-    $directionEqual=1 if $columns[5] eq $columns[23];
-    my $gene = $columns[21];  # Column 22 (0-based index is 21)
-    my $total_activity = $tp73_activity + $directionEqual;
-
-    #print "Debug: $gene\t$tp73_activity + directionEqual:$directionEqual ($columns[5] == $columns[23])\n";
-
-    if ($gene eq $prevGene) {
-        if ($localMaxScore < 0 or $localMaxScore < $tp73_activity) {
-            $localMax = $line;
-            $localMaxScore = $total_activity;
-        } elsif ($localMaxScore == $tp73_activity && $directionEqual>0) {
-	    #print STDERR "Happened! ($localMaxScore)\n";
-            $localMax = $line;
-            $localMaxScore = $total_activity;
-	}
-    } else {
-        print "$localMax\n" if $localMax ne "";
-        $localMaxScore = $total_activity;
-        $localMax = $line;
-        $prevGene = $gene;
+    if (!defined $previous_gene || $gene ne $previous_gene) {
+        print "$local_max_line\n" if defined $local_max_line;
+        $previous_gene = $gene;
+        $local_max_line = $line;
+        $local_max_activity = $tp73_activity;
+        $local_max_direction_equal = $direction_equal;
+    } elsif (
+        $tp73_activity > $local_max_activity
+        || ($tp73_activity == $local_max_activity
+            && $direction_equal > $local_max_direction_equal)
+    ) {
+        $local_max_line = $line;
+        $local_max_activity = $tp73_activity;
+        $local_max_direction_equal = $direction_equal;
     }
-
 }
+
+print "$local_max_line\n" if defined $local_max_line;
+
+close $fh or die "Cannot close file $input_file: $!\n";
