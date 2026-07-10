@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cctype>
 #include <cstdlib>
+#include <iomanip>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
@@ -34,6 +35,33 @@ const std::array<std::uint8_t, 256>& baseCodeTable() {
     return table;
 }
 
+std::string sanitizePathComponent(const std::string& value) {
+    std::string sanitized;
+    sanitized.reserve(value.size());
+    bool previousWasDash = false;
+    for (const unsigned char c : value) {
+        if (std::isalnum(c) || c == '.' || c == '_' || c == '-') {
+            sanitized.push_back(static_cast<char>(c));
+            previousWasDash = false;
+        } else if (!previousWasDash) {
+            sanitized.push_back('-');
+            previousWasDash = true;
+        }
+    }
+    while (!sanitized.empty() && sanitized.back() == '-') {
+        sanitized.pop_back();
+    }
+    return sanitized.empty() ? "unknown" : sanitized;
+}
+
+std::string optionalScoreBoundLabel(const double value) {
+    return std::isfinite(value) ? formatDoubleForFileLabel(value) : "none";
+}
+
+std::string coordinateModeFileLabel(const CoordinateMode coordinateMode) {
+    return coordinateMode == CoordinateMode::Bed ? "bed" : "legacy";
+}
+
 } // namespace
 
 char complementBase(char base) {
@@ -55,6 +83,76 @@ bool parseDoubleStrict(const char* text, double& value) {
     }
     value = parsed;
     return true;
+}
+
+std::string formatDoubleForFileLabel(const double value) {
+    if (std::isnan(value)) {
+        return "nan";
+    }
+    if (std::isinf(value)) {
+        return value < 0.0 ? "minf" : "inf";
+    }
+
+    std::ostringstream ss;
+    ss << std::setprecision(12) << value;
+    std::string label = ss.str();
+    std::replace(label.begin(), label.end(), '+', 'p');
+    std::replace(label.begin(), label.end(), '-', 'm');
+    return label;
+}
+
+std::filesystem::path hitOutputDirectory(const std::filesystem::path& outdir,
+                                         const HitOutputOptions& options) {
+    std::filesystem::path outputPath = outdir;
+    outputPath /= "hits";
+    outputPath /= "score_mode-" + sanitizePathComponent(options.scoreMode);
+    outputPath /= "pseudocount-" + formatDoubleForFileLabel(options.pseudocount);
+    outputPath /= "threshold-" +
+        (options.thresholdSet ? formatDoubleForFileLabel(options.threshold) : "none");
+    outputPath /= "pwm_relative_min-" + optionalScoreBoundLabel(options.minPwmRelativeScore);
+    outputPath /= "pwm_relative_max-" + optionalScoreBoundLabel(options.maxPwmRelativeScore);
+    outputPath /= "coordinate_mode-" + coordinateModeFileLabel(options.coordinateMode);
+    outputPath /= std::string("sequence-") + (options.showSequence ? "included" : "omitted");
+    outputPath /= std::string("n_policy-") + (options.skipN ? "skip" : "neutral");
+    return outputPath;
+}
+
+std::string motifDatasetLabelFromPSSMFile(const std::filesystem::path& pssmFile) {
+    std::string filename = pssmFile.filename().string();
+    std::transform(filename.begin(), filename.end(), filename.begin(), [](const unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+
+    const size_t jasparPosition = filename.find("jaspar");
+    if (jasparPosition != std::string::npos) {
+        size_t versionStart = jasparPosition + std::string("jaspar").size();
+        while (versionStart < filename.size() &&
+               !std::isdigit(static_cast<unsigned char>(filename[versionStart]))) {
+            ++versionStart;
+        }
+        size_t versionEnd = versionStart;
+        while (versionEnd < filename.size() &&
+               std::isdigit(static_cast<unsigned char>(filename[versionEnd]))) {
+            ++versionEnd;
+        }
+        if (versionEnd > versionStart) {
+            return "jaspar" + filename.substr(versionStart, versionEnd - versionStart);
+        }
+    }
+
+    std::string stem = pssmFile.stem().string();
+    std::transform(stem.begin(), stem.end(), stem.begin(), [](const unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return sanitizePathComponent(stem);
+}
+
+std::string denseScorePartFilename(const long from, const long to, const bool skipN,
+                                   const std::string& extension) {
+    const std::string fromLabel = from > 0L ? std::to_string(from) : "0";
+    const std::string toLabel = to > 0L ? std::to_string(to) : "end";
+    return "part-from=" + fromLabel + "-to=" + toLabel +
+        "-n_policy=" + (skipN ? "skip" : "neutral") + "-000000" + extension;
 }
 
 std::uint8_t codeForBase(char base) {

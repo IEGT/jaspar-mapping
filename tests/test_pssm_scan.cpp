@@ -263,6 +263,63 @@ void testCoordinateModeOffsets() {
                 static_cast<size_t>(26), "BED output end");
 }
 
+void testOutputNaming() {
+    const HitOutputOptions options{
+        "log2_relative_risk",
+        1.0,
+        true,
+        0.0,
+        0.8,
+        std::numeric_limits<double>::infinity(),
+        CoordinateMode::Bed,
+        true,
+        true
+    };
+    const std::filesystem::path outputDirectory = hitOutputDirectory("out", options);
+    expectEqual(
+        outputDirectory.generic_string(),
+        "out/hits/score_mode-log2_relative_risk/pseudocount-1/threshold-0/"
+        "pwm_relative_min-0.8/pwm_relative_max-none/coordinate_mode-bed/"
+        "sequence-included/n_policy-skip",
+        "hit output path records all content-changing options"
+    );
+
+    HitOutputOptions noThreshold = options;
+    noThreshold.thresholdSet = false;
+    expectTrue(hitOutputDirectory("out", noThreshold) != outputDirectory,
+               "explicit threshold zero has a distinct output path");
+
+    HitOutputOptions differentPseudocount = options;
+    differentPseudocount.pseudocount = 0.0;
+    expectTrue(hitOutputDirectory("out", differentPseudocount) != outputDirectory,
+               "pseudocount changes the output path");
+
+    HitOutputOptions legacyCoordinates = options;
+    legacyCoordinates.coordinateMode = CoordinateMode::Legacy;
+    expectTrue(hitOutputDirectory("out", legacyCoordinates) != outputDirectory,
+               "coordinate mode changes the output path");
+
+    HitOutputOptions noRelativeScoreFilter = options;
+    noRelativeScoreFilter.minPwmRelativeScore =
+        -std::numeric_limits<double>::infinity();
+    expectTrue(hitOutputDirectory("out", noRelativeScoreFilter) != outputDirectory,
+               "PWM-relative score bounds change the output path");
+
+    expectEqual(
+        motifDatasetLabelFromPSSMFile("/tmp/JASPAR2026_CORE_non-redundant_pfms_jaspar.txt"),
+        "jaspar2026",
+        "dense dataset label derived from JASPAR filename"
+    );
+    expectEqual(motifDatasetLabelFromPSSMFile("/tmp/Custom motifs.pfm"),
+                "custom-motifs", "custom dense dataset label is sanitized");
+    expectEqual(denseScorePartFilename(100, 200, true, ".parquet"),
+                "part-from=100-to=200-n_policy=skip-000000.parquet",
+                "dense range and N policy in part filename");
+    expectEqual(denseScorePartFilename(-1, -1, false, ".tsv"),
+                "part-from=0-to=end-n_policy=neutral-000000.tsv",
+                "dense full-range part filename");
+}
+
 void testScoreDistribution() {
     ScoreDistribution distribution("adaptive");
     expectNear(distribution.binWidthForScore(-10.0), 0.2, 1e-12, "adaptive bin width at -10");
@@ -299,6 +356,7 @@ int main() {
     testGenomicScoreBlocks();
     testScoreRangeAndPWMRelativeScore();
     testCoordinateModeOffsets();
+    testOutputNaming();
     testScoreDistribution();
 
     if (failures != 0) {

@@ -38,7 +38,25 @@ SCORE_MODE?=log2_relative_risk
 OUTPUTDIR?=$(if $(filter log2_relative_risk,$(SCORE_MODE)),output_RelativeRisk_20250217,output_$(SCORE_MODE)_20250217)
 PSEUDOCOUNT?=
 PSEUDOCOUNT_FLAG=$(if $(PSEUDOCOUNT),--pseudocount $(PSEUDOCOUNT),)
-SCAN_CHR_FLAGS?=--coordinate-mode bed --show-sequence $(PSEUDOCOUNT_FLAG)
+file_number_label = $(shell printf '%.12g' '$(1)' | tr '+-' 'pm')
+EFFECTIVE_PSEUDOCOUNT_VALUE=$(if $(PSEUDOCOUNT),$(PSEUDOCOUNT),$(if $(filter log_odds,$(SCORE_MODE)),1,0))
+EFFECTIVE_PSEUDOCOUNT_LABEL=$(call file_number_label,$(EFFECTIVE_PSEUDOCOUNT_VALUE))
+SCAN_THRESHOLD?=0
+SCAN_THRESHOLD_LABEL=$(call file_number_label,$(SCAN_THRESHOLD))
+SCAN_COORDINATE_MODE?=bed
+SCAN_SHOW_SEQUENCE?=1
+SCAN_N_POLICY?=skip
+MIN_PWM_RELATIVE_SCORE?=
+MAX_PWM_RELATIVE_SCORE?=
+PWM_RELATIVE_FLAGS=$(if $(MIN_PWM_RELATIVE_SCORE),--min-pwm-relative-score $(MIN_PWM_RELATIVE_SCORE),) $(if $(MAX_PWM_RELATIVE_SCORE),--max-pwm-relative-score $(MAX_PWM_RELATIVE_SCORE),)
+SCAN_N_FLAG=$(if $(filter neutral,$(SCAN_N_POLICY)),--neutral-N,--skip-N)
+HIT_N_POLICY_LABEL=$(if $(filter neutral,$(SCAN_N_POLICY)),neutral,skip)
+SCAN_CHR_FLAGS?=--coordinate-mode $(SCAN_COORDINATE_MODE) $(if $(filter 1,$(SCAN_SHOW_SEQUENCE)),--show-sequence,) $(SCAN_N_FLAG) $(PSEUDOCOUNT_FLAG) $(PWM_RELATIVE_FLAGS)
+HIT_SEQUENCE_LABEL=$(if $(filter 1,$(SCAN_SHOW_SEQUENCE)),included,omitted)
+HIT_PWM_RELATIVE_MIN_LABEL=$(if $(MIN_PWM_RELATIVE_SCORE),$(call file_number_label,$(MIN_PWM_RELATIVE_SCORE)),none)
+HIT_PWM_RELATIVE_MAX_LABEL=$(if $(MAX_PWM_RELATIVE_SCORE),$(call file_number_label,$(MAX_PWM_RELATIVE_SCORE)),none)
+HIT_CONFIG_SUBDIR=hits/score_mode-$(SCORE_MODE)/pseudocount-$(EFFECTIVE_PSEUDOCOUNT_LABEL)/threshold-$(SCAN_THRESHOLD_LABEL)/pwm_relative_min-$(HIT_PWM_RELATIVE_MIN_LABEL)/pwm_relative_max-$(HIT_PWM_RELATIVE_MAX_LABEL)/coordinate_mode-$(SCAN_COORDINATE_MODE)/sequence-$(HIT_SEQUENCE_LABEL)/n_policy-$(HIT_N_POLICY_LABEL)
+HIT_OUTPUTDIR=$(OUTPUTDIR)/$(CHR)/$(HIT_CONFIG_SUBDIR)
 
 JASPAR_VERSION=2026
 JASPAR_DIR=.
@@ -51,16 +69,19 @@ GENOME_INDEX=$(GENOME).fai
 TP73_MOTIF_ID?=$(if $(filter 2022,$(JASPAR_VERSION)),MA0861.1,MA0861.2)
 TP73_MOTIF=TP73_$(TP73_MOTIF_ID)
 TP73_BIDIRECT=$(TP73_MOTIF)_bidirect_$(CHR)
-TP73_BIDIRECT_GZ=$(OUTPUTDIR)/$(CHR)/$(TP73_BIDIRECT).bed.gz
+TP73_BIDIRECT_GZ=$(HIT_OUTPUTDIR)/$(TP73_BIDIRECT).bed.gz
 TP73_COMBINED_BED=$(TP73_BIDIRECT).combined.bed
 TEST_REFERENCE_OUTPUTDIR=output_test_reference_chr1
 TEST_REFERENCE_CHR=1
 TEST_REFERENCE_FROM=3651800
 TEST_REFERENCE_TO=3652600
 TEST_REFERENCE_THRESHOLD=0
+TEST_REFERENCE_THRESHOLD_LABEL=$(call file_number_label,$(TEST_REFERENCE_THRESHOLD))
 TEST_REFERENCE_MOTIFS=MA0024.3 MA0106.3 MA0525.2 $(TP73_MOTIF_ID)
-TEST_REFERENCE_E2F1_POSITIVE=$(TEST_REFERENCE_OUTPUTDIR)/E2F1_MA0024.3_positive_$(TEST_REFERENCE_CHR)_$(TEST_REFERENCE_FROM)-$(TEST_REFERENCE_TO).bed
-TEST_REFERENCE_E2F1_NEGATIVE=$(TEST_REFERENCE_OUTPUTDIR)/E2F1_MA0024.3_negative_$(TEST_REFERENCE_CHR)_$(TEST_REFERENCE_FROM)-$(TEST_REFERENCE_TO).bed
+TEST_REFERENCE_CONFIG_SUBDIR=hits/score_mode-$(SCORE_MODE)/pseudocount-$(EFFECTIVE_PSEUDOCOUNT_LABEL)/threshold-$(TEST_REFERENCE_THRESHOLD_LABEL)/pwm_relative_min-$(HIT_PWM_RELATIVE_MIN_LABEL)/pwm_relative_max-$(HIT_PWM_RELATIVE_MAX_LABEL)/coordinate_mode-$(SCAN_COORDINATE_MODE)/sequence-$(HIT_SEQUENCE_LABEL)/n_policy-$(HIT_N_POLICY_LABEL)
+TEST_REFERENCE_HITDIR=$(TEST_REFERENCE_OUTPUTDIR)/$(TEST_REFERENCE_CONFIG_SUBDIR)
+TEST_REFERENCE_E2F1_POSITIVE=$(TEST_REFERENCE_HITDIR)/E2F1_MA0024.3_positive_$(TEST_REFERENCE_CHR)_$(TEST_REFERENCE_FROM)-$(TEST_REFERENCE_TO).bed
+TEST_REFERENCE_E2F1_NEGATIVE=$(TEST_REFERENCE_HITDIR)/E2F1_MA0024.3_negative_$(TEST_REFERENCE_CHR)_$(TEST_REFERENCE_FROM)-$(TEST_REFERENCE_TO).bed
 DISTRIBUTION_CHR=1
 DISTRIBUTION_BIN_WIDTH?=adaptive
 DISTRIBUTION_PSEUDOCOUNT_LABEL=$(if $(PSEUDOCOUNT),_pseudocount_$(PSEUDOCOUNT),)
@@ -139,24 +160,24 @@ genome_index: $(GENOME_INDEX)
 
 scan_chr_all_motifs: pssm_scan $(JASPAR) $(GENOME) $(GENOME_INDEX)
 	mkdir -p $(OUTPUTDIR)/$(CHR)
-	./pssm_scan --outdir $(OUTPUTDIR)/$(CHR) --genome $(GENOME) --pssm $(JASPAR) --score-mode $(SCORE_MODE) -l 0 --chr $(CHR) $(SCAN_CHR_FLAGS)
+	./pssm_scan --outdir $(OUTPUTDIR)/$(CHR) --genome $(GENOME) --pssm $(JASPAR) --score-mode $(SCORE_MODE) --threshold $(SCAN_THRESHOLD) --chr $(CHR) $(SCAN_CHR_FLAGS)
 
 # Define the pattern rule for generating .bed files
-$(OUTPUTDIR)/$(CHR)/%_negative_$(CHR).bed $(OUTPUTDIR)/$(CHR)/%_positive_$(CHR).bed:
-	mkdir -p $(OUTPUTDIR)/$(CHR)
+$(HIT_OUTPUTDIR)/%_negative_$(CHR).bed $(HIT_OUTPUTDIR)/%_positive_$(CHR).bed:
+	mkdir -p $(HIT_OUTPUTDIR)
 	echo $*
 	NAME=$(shell echo $* | sed -e 's/_MA.*$$//') ; \
 	ACC=$(shell echo $* | tr "_" "\n" |grep -E "^MA[0-9][0-9][0-9][0-9]" |head -n 1) ; \
 	echo "NAME=$$NAME ACC=$$ACC" ; \
-	if [ ! -f $(OUTPUTDIR)/$(CHR)/$${NAME}_$${ACC}_positive_$(CHR).bed ] ; then \
-	    echo "Missing: $(OUTPUTDIR)/$(CHR)/$${NAME}_$${ACC}_positive_$(CHR).bed" ; \
-	    ./pssm_scan --outdir $(OUTPUTDIR)/$(CHR) --genome $(GENOME) --pssm $(JASPAR) --score-mode $(SCORE_MODE) -l 0 -m $$ACC --chr $(CHR) ; \
-	elif [ ! -f $(OUTPUTDIR)/$(CHR)/$${NAME}_$${ACC}_negative_$(CHR).bed ]; then \
+	if [ ! -f $(HIT_OUTPUTDIR)/$${NAME}_$${ACC}_positive_$(CHR).bed ] ; then \
+	    echo "Missing: $(HIT_OUTPUTDIR)/$${NAME}_$${ACC}_positive_$(CHR).bed" ; \
+	    ./pssm_scan --outdir $(OUTPUTDIR)/$(CHR) --genome $(GENOME) --pssm $(JASPAR) --score-mode $(SCORE_MODE) --threshold $(SCAN_THRESHOLD) --motif $$ACC --chr $(CHR) $(SCAN_CHR_FLAGS) ; \
+	elif [ ! -f $(HIT_OUTPUTDIR)/$${NAME}_$${ACC}_negative_$(CHR).bed ]; then \
 	    echo "Missing: sort -k 1,1 -k2,2n" ; \
-	    ./pssm_scan --outdir $(OUTPUTDIR)/$(CHR) --genome $(GENOME) --pssm $(JASPAR) --score-mode $(SCORE_MODE) -l 0 -m $$ACC --chr $(CHR) ; \
+	    ./pssm_scan --outdir $(OUTPUTDIR)/$(CHR) --genome $(GENOME) --pssm $(JASPAR) --score-mode $(SCORE_MODE) --threshold $(SCAN_THRESHOLD) --motif $$ACC --chr $(CHR) $(SCAN_CHR_FLAGS) ; \
 	fi
 
-$(OUTPUTDIR)/%_bidirect_$(CHR).bed.gz: $(OUTPUTDIR)/%_negative_$(CHR).bed.gz $(OUTPUTDIR)/%_positive_$(CHR).bed.gz
+$(HIT_OUTPUTDIR)/%_bidirect_$(CHR).bed.gz: $(HIT_OUTPUTDIR)/%_negative_$(CHR).bed.gz $(HIT_OUTPUTDIR)/%_positive_$(CHR).bed.gz
 	zcat $^ | sort -S 2G -k 1,1 -k2,2n | gzip -9 -n -c > $@
 
 %.bed.gz: %.bed
@@ -207,12 +228,12 @@ test: pssm_scan Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta Homo_sa
 
 test_reference_tp73_promoter_chr1: pssm_scan $(JASPAR) $(GENOME)
 	@if [ "$(TEST_REFERENCE_THRESHOLD)" != "0" ]; then \
-	    echo "E: test_reference_tp73_promoter_chr1 expects TEST_REFERENCE_THRESHOLD=0 because pssm_scan changes output filenames for non-zero thresholds." ; \
+	    echo "E: test_reference_tp73_promoter_chr1 is calibrated for TEST_REFERENCE_THRESHOLD=0." ; \
 	    exit 1 ; \
 	fi
 	mkdir -p $(TEST_REFERENCE_OUTPUTDIR)
 	for motif in $(TEST_REFERENCE_MOTIFS); do \
-	    ./pssm_scan --outdir $(TEST_REFERENCE_OUTPUTDIR) --genome $(GENOME) --pssm $(JASPAR) --score-mode $(SCORE_MODE) --motif $$motif --chr $(TEST_REFERENCE_CHR) --from $(TEST_REFERENCE_FROM) --to $(TEST_REFERENCE_TO) --threshold $(TEST_REFERENCE_THRESHOLD) --show-sequence ; \
+	    ./pssm_scan --outdir $(TEST_REFERENCE_OUTPUTDIR) --genome $(GENOME) --pssm $(JASPAR) --score-mode $(SCORE_MODE) --motif $$motif --chr $(TEST_REFERENCE_CHR) --from $(TEST_REFERENCE_FROM) --to $(TEST_REFERENCE_TO) --threshold $(TEST_REFERENCE_THRESHOLD) $(SCAN_CHR_FLAGS) ; \
 	done
 	for file in "$(TEST_REFERENCE_E2F1_POSITIVE)" "$(TEST_REFERENCE_E2F1_NEGATIVE)"; do \
 	    if [ ! -f "$$file" ]; then \
@@ -300,7 +321,7 @@ $(PATH_CUTNRUN)/%.clean.bed: $(PATH_CUTNRUN)/%.bedGraph
 
 
 #$(CHR): $(addprefix $(CHR)/,$(BED_FILES))
-$(OUTPUTDIR)/$(CHR): $(addprefix $(OUTPUTDIR)/$(CHR)/,$(BIDIRECT_FILES))
+$(OUTPUTDIR)/$(CHR): $(addprefix $(HIT_OUTPUTDIR)/,$(BIDIRECT_FILES))
 
 datatables: context
 	#for chr in 2; do
@@ -312,7 +333,7 @@ datatables: context
 TP73_datatable.bed.gz: TP73_datatable_$(CHR).bed.gz
 
 TP73_datatable_$(CHR).bed.gz: $(TP73_COMBINED_BED).gz
-	./context $< $(OUTPUTDIR)/$(CHR)/*bidirect*.bed.gz | gzip -9 -n -c > $@ || echo "I: Check ulimit -n 3000 if failing to open files"
+	./context $< $(HIT_OUTPUTDIR)/*bidirect*.bed.gz | gzip -9 -n -c > $@ || echo "I: Check ulimit -n 3000 if failing to open files"
 
 
 count:

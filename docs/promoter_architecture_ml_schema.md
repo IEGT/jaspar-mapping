@@ -40,6 +40,7 @@ tables/jaspar2026/
   motif_hit/chrom=*/…        # layer 1  (large, regenerable)
   motif_score_dense/
     motif_id=*/score_mode=*/pseudocount=*/chrom=*/strand=*/…
+                            # range and N policy are encoded in each part filename
                             # dense calibration blocks, score for every PSSM alignment start
   motif_cutandrun_score_bin_stats/
     motif_id=*/score_mode=*/pseudocount=*/chrom=*/…
@@ -64,7 +65,7 @@ identity moved into partition paths.
 Full column lists live in `sql/schema.sql`; the essentials:
 
 - **`motif_hit`** — `chrom, start, end, motif_id, motif_name, strand, score, score_mode, pseudocount, pwm_relative_score, matched_seq`. Straight from `pssm_scan`. `score_mode` plus `pseudocount` define the motif scoring transform; `pwm_relative_score` (0–1) is the cross-motif-comparable score to threshold on.
-- **`motif_score_dense`** — logical view over dense score blocks: `chrom, start, end, motif_id, motif_name, strand, score_mode, pseudocount, score`. Physical files store only `block_start` plus a `FLOAT[] scores` vector; `motif_id`, `score_mode`, `pseudocount`, `chrom`, and `strand` live in hive partitions.
+- **`motif_score_dense`** — logical view over dense score blocks: `chrom, start, end, motif_id, motif_name, strand, score_mode, pseudocount, score`. Physical files store only `block_start` plus a `FLOAT[] scores` vector; `motif_id`, `score_mode`, `pseudocount`, `chrom`, and `strand` live in hive partitions, while requested range and N policy are encoded in collision-resistant part filenames.
 - **`motif_cutandrun_score_bin_stats`** — dense-score calibration output by score bin and CUT&RUN sample: window counts, covered-window counts, baseline fraction, enrichment ratio, log2 enrichment, and signal summaries.
 - **`motif_architecture`** — one row per `motif_id`: family, `binding_unit_model`, half-site pattern, spacer range, `architecture_confidence`. Curated for the TP53 family, `unknown` elsewhere.
 - **`hit_architecture`** *(optional)* — per-hit decomposition (`spacer_bp`, half-site scores, `oligomer_compatible`), derived from `matched_seq`, kept separate so layer 1 stays stable.

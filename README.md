@@ -108,6 +108,14 @@ half-open BED-style coordinates in the first three output fields. The default
 only for targeted diagnostics or with thresholds that cannot promote all-N
 windows.
 
+Ordinary hit files are placed below a configuration-specific path rooted at
+`OUTDIR/hits/`. Its partitions record score mode, effective pseudocount,
+threshold, PWM-relative bounds, coordinate mode, sequence inclusion, and N
+policy. In particular, an explicit `--threshold 0` uses `threshold-0`, while
+an invocation without a threshold uses `threshold-none`; those runs therefore
+cannot overwrite each other. The motif, strand, chromosome, and optional
+range remain in the BED basename.
+
 To inspect subthreshold scores without writing one row per genomic window, use
 `./pssm_scan --score-distribution` or `make score_distributions_chr1`. The Make
 target scans chromosome 1 on the forward strand for every JASPAR motif and
@@ -129,7 +137,11 @@ one motif and one chromosome. Dense mode writes one score for every possible
 alignment start of the motif model to the selected chromosome and strand.
 With Arrow support, those alignment scores are written as block Parquet under
 a hive-style path such as
-`tables/jaspar2026/motif_score_dense/motif_id=MA0861.2/score_mode=.../chrom=1/strand=plus/part-000000.parquet`.
+`tables/jaspar2026/motif_score_dense/motif_id=MA0861.2/score_mode=.../pseudocount=1/chrom=1/strand=plus/part-from=0-to=end-n_policy=skip-000000.parquet`.
+The dataset directory is derived from the supplied PSSM filename rather than
+hardcoded: a JASPAR 2026 filename maps to `jaspar2026`, while custom files use
+a sanitized filename stem. Dense part names include the requested range and N
+policy so partial calibrations cannot replace full-chromosome output.
 Skipped alignments, including unsmoothed zero-count sentinels and assembly gaps
 under `--skip-N`, are stored as `NULL` elements in the score vector. The
 derived `start`/`end` interval is the sequence span used for PSSM scoring; it

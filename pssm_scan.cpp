@@ -294,15 +294,6 @@ double defaultPseudocountForScoreMode(const std::string& scoreMode) {
     return scoreMode == "log_odds" ? 1.0 : 0.0;
 }
 
-std::string formatDoubleForFileLabel(double value) {
-    std::ostringstream ss;
-    ss << std::setprecision(12) << value;
-    std::string label = ss.str();
-    std::replace(label.begin(), label.end(), '+', 'p');
-    std::replace(label.begin(), label.end(), '-', 'm');
-    return label;
-}
-
 std::string strandPartitionLabel(const std::string& strand) {
     return strand == "-" ? "minus" : "plus";
 }
@@ -324,18 +315,19 @@ std::string denseScoreFormatName() {
 }
 
 std::filesystem::path denseScoreOutputPath(const std::string& outdir, const PSSM& pssm,
-                                           const std::string& scoreMode, double pseudocount,
-                                           const std::string& chromosome, const std::string& strand) {
+                                           const std::string& pssmFile, const std::string& scoreMode,
+                                           double pseudocount, const std::string& chromosome,
+                                           const std::string& strand, long from, long to, bool skipN) {
     std::filesystem::path outputPath = outdir;
     outputPath /= "tables";
-    outputPath /= "jaspar2026";
+    outputPath /= motifDatasetLabelFromPSSMFile(pssmFile);
     outputPath /= "motif_score_dense";
     outputPath /= "motif_id=" + pssm.motifID;
     outputPath /= "score_mode=" + scoreMode;
     outputPath /= "pseudocount=" + formatDoubleForFileLabel(pseudocount);
     outputPath /= "chrom=" + chromosome;
     outputPath /= "strand=" + strandPartitionLabel(strand);
-    outputPath /= "part-000000" + denseScoreOutputExtension();
+    outputPath /= denseScorePartFilename(from, to, skipN, denseScoreOutputExtension());
     return outputPath;
 }
 
@@ -1695,6 +1687,30 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    std::filesystem::path sparseHitOutputDirectory;
+    if (!scoreDistribution && !denseScores) {
+        const HitOutputOptions hitOutputOptions{
+            effectiveScoreMode,
+            effectivePseudocount,
+            thresholdSet,
+            threshold,
+            minPwmRelativeScore,
+            maxPwmRelativeScore,
+            coordinateMode,
+            showSequence,
+            skipN
+        };
+        sparseHitOutputDirectory = hitOutputDirectory(outdir, hitOutputOptions);
+        std::error_code directoryError;
+        std::filesystem::create_directories(sparseHitOutputDirectory, directoryError);
+        if (directoryError) {
+            std::cerr << "E: Could not create hit output directory '"
+                      << sparseHitOutputDirectory.string() << "': "
+                      << directoryError.message() << std::endl;
+            return 1;
+        }
+    }
+
     chromosome_set_type targetChromosomesForGenome;
     if (!targetChromosome.empty()) {
         targetChromosomesForGenome.insert(targetChromosome);
@@ -1875,7 +1891,8 @@ int main(int argc, char* argv[]) {
 
             if (scanPlusStrand) {
                 const std::filesystem::path outputFilePath = denseScoreOutputPath(
-                    outdir, pssm_object_copy, effectiveScoreMode, effectivePseudocount, targetChromosome, "+");
+                    outdir, pssm_object_copy, pssmFile, effectiveScoreMode, effectivePseudocount,
+                    targetChromosome, "+", targetFrom, targetTo, skipN);
                 if (scanDenseScores(targetChromosome, encodedChromosome, "+", pssm_object_copy, flatPssm,
                                     targetFrom, targetTo, denseBlockSize, outputFilePath) != 0) {
                     return 1;
@@ -1885,7 +1902,8 @@ int main(int argc, char* argv[]) {
 
             if (scanMinusStrand) {
                 const std::filesystem::path outputFilePath = denseScoreOutputPath(
-                    outdir, pssm_object_copy, effectiveScoreMode, effectivePseudocount, targetChromosome, "-");
+                    outdir, pssm_object_copy, pssmFile, effectiveScoreMode, effectivePseudocount,
+                    targetChromosome, "-", targetFrom, targetTo, skipN);
                 if (scanDenseScores(targetChromosome, encodedChromosome, "-", pssm_object_copy, flatPssm,
                                     targetFrom, targetTo, denseBlockSize, outputFilePath) != 0) {
                     return 1;
@@ -1896,11 +1914,11 @@ int main(int argc, char* argv[]) {
             continue;
         }
         
-        std::filesystem::path outputFilePathPositive = outdir;
+        std::filesystem::path outputFilePathPositive = sparseHitOutputDirectory;
         outputFilePathPositive /= motifNameForFile + "_" + motifID + "_positive";
         std::string outputFileNamePositive = outputFilePathPositive.string();
         
-        std::filesystem::path outputFilePathNegative = outdir;
+        std::filesystem::path outputFilePathNegative = sparseHitOutputDirectory;
         outputFilePathNegative /= motifNameForFile + "_" + motifID + "_negative";
         std::string outputFileNameNegative = outputFilePathNegative.string();
         
@@ -1915,12 +1933,6 @@ int main(int argc, char* argv[]) {
         if (targetTo > 0L) {
             outputFileNamePositive += "-"+std::to_string(targetTo);
             outputFileNameNegative += "-"+std::to_string(targetTo);
-        }
-        if (thresholdSet && threshold) {
-            outputFileNamePositive += "_thresh_";
-            outputFileNamePositive += std::to_string(threshold);
-            outputFileNameNegative += "_thresh_";
-            outputFileNameNegative += std::to_string(threshold);
         }
         outputFileNamePositive += ".bed";
         outputFileNameNegative += ".bed";
