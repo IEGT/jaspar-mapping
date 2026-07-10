@@ -126,6 +126,7 @@ tests/test_gtf_file_region: tests/test_gtf_file_region.cpp gtf_file_region.h gtf
 check: $(TEST_BINARIES)
 	./tests/test_pssm_scan
 	./tests/test_gtf_file_region
+	bash tests/test_fix_missing_bidirect.sh
 
 check-r:
 	Rscript tests/test_analyze_bed_cutandrun.R
