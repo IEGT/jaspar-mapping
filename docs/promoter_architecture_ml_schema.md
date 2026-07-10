@@ -74,10 +74,12 @@ Full column lists live in `sql/schema.sql`; the essentials:
 - **`expression_differential`** — `gene_id, cell_line, log2fc_ta_vs_dn, padj, …`. **This is the ML label.**
 
 Three materialized tables carry all the cost: `promoter_motif_hit` (the single
-interval join of hits into promoter windows, with strand-aware `tss_distance`),
+interval join of hits into promoter windows, deduplicated to one row per gene
+and unique hit while retaining the closest transcript's strand-aware
+`tss_distance` and the number of overlapping transcripts),
 `promoter_arch_feature` (per-gene, per-motif architecture summary), and
-`promoter_card` (one compact row per gene for agent lookup). The `ml_ta_vs_dn`
-view joins the long feature table to the label.
+`promoter_card` (one compact row per gene and scoring configuration for agent
+lookup). The `ml_ta_vs_dn` view joins the long feature table to the label.
 
 ## Dense Chr1 Calibration
 
@@ -131,9 +133,11 @@ is computed per line). **Label:** `log2fc_ta_vs_dn` for regression, or
 `label_ta_up` (sign) for classification — both in `ml_ta_vs_dn`. **Features:**
 promoter architecture aggregated per gene — counts and strong-hit counts per
 motif / TF family, max relative score, minimum distance to TSS, and architecture
-flags such as `has_dimer_of_dimers`. The wide training frame is produced by
-`PIVOT` at read time (`queries.sql` Q3), so the stored tables stay long and the
-feature set can grow without a schema migration.
+flags such as `has_dimer_of_dimers`. Query Q3 returns a parameterized long
+family-feature frame for one cell line and scoring configuration. The ML
+client/exporter pivots that bound result to wide form, so DuckDB does not have
+to discover dynamic columns while parameters are still unresolved and the
+stored tables remain long without a schema migration.
 
 **Keep the model sequence-only by default.** Features come from layers 1–2
 (architecture), which are deterministic from sequence. The CUT&RUN differential
@@ -157,11 +161,11 @@ The contract for OpenClaw / Claude / Codex is deliberately small:
 1. **One package, one schema.** From the exported package root, open `tables/jaspar2026/jaspar2026.duckdb` and `.read sql/schema.sql`; every layer is then a named view/table over package-relative Parquet paths. This document plus `schema.sql` is the entire surface an agent needs to read to know what exists.
 2. **Named, parameterized queries.** `sql/queries.sql` is the canned set (region browse, gene architecture, ML pull, CUT&RUN cross-check, enrichment, gene-set slice). Agents fill `$params`; they don't invent joins. Region and gene lookups prune by the chrom partition + `start` zonemap, so latency is a row-group scan, not a full pass.
 3. **Hot promoter cards.** Ordinary agent questions start with `promoter_card`,
-   a one-row summary keyed by gene. It contains the promoter span, motif-hit
-   totals, strongest PWM-relative score, nearest hit to the TSS, TP53-family
-   dimer-of-dimers flag, and count of represented TF families. This keeps
-   "tell me about TP73" fast while still pointing deeper queries at the long
-   architecture tables.
+   a summary keyed by gene, score mode, and pseudocount. It contains the
+   promoter span, motif-hit totals, strongest PWM-relative score, nearest hit
+   to the TSS, TP53-family dimer-of-dimers flag, and count of represented TF
+   families. Keeping configurations in separate rows prevents incompatible
+   runs being combined while keeping "tell me about TP73" fast.
 4. **Stable, versioned identity.** `manifest.json` records the source commit, the JASPAR 2026 SHA-256, the Ensembl release, and row counts, so an answer is reproducible and an agent can state exactly which package it queried.
 5. **Read-only by default.** The `.duckdb` is a rebuildable index over Parquet; agents read it. Rebuilds come from the exporter, not from queries.
 
@@ -175,16 +179,18 @@ OpenClaw, Claude, and Codex should expose a small read-only surface rather than
 free-form access to raw genome-wide files:
 
 - `resolve_gene(gene_name)` -> stable `gene_id`, chromosome, strand, TSS.
-- `get_promoter_card(gene_name)` -> one compact row from `promoter_card`.
-- `get_promoter_architecture(gene_name)` -> query Q2 over
+- `get_promoter_card(gene_name, score_mode, pseudocount)` -> one compact row
+  from `promoter_card`.
+- `get_promoter_architecture(gene_name, score_mode, pseudocount)` -> query Q2 over
   `promoter_arch_feature`.
 - `query_region(chrom, start, end)` -> query Q1 over `motif_hit`.
 - `query_dense_score_region(motif_id, chrom, strand, score_mode, pseudocount, start, end)` -> query Q7 over `motif_score_dense`.
 - `get_score_calibration(motif_id, chrom, score_mode, pseudocount)` -> query Q8 over `motif_cutandrun_score_bin_stats`.
 - `get_score_calibration_bins()` -> query Q9 over `score_calibration_bin`.
 - `get_cutandrun_promoter_signal(gene_name, cell_line)` -> query Q4.
-- `export_ml_matrix(cell_line, feature_set)` -> query Q3 or a pinned Parquet
-  export recorded in `manifest.json`.
+- `export_ml_matrix(cell_line, score_mode, pseudocount, feature_set)` -> query
+  Q3, pivot its bound long result in the client, or read a pinned Parquet export
+  recorded in `manifest.json`.
 
 This is intentionally boring: each tool maps to a named SQL statement, all
 parameters are typed, and no agent needs to discover table joins on the fly.

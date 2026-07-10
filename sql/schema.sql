@@ -212,31 +212,69 @@ SELECT
 FROM read_parquet('tables/jaspar2026/expression_differential/*.parquet');
 
 -- ===========================================================================
--- Materialized joins — the two things we never want to recompute per query.
+-- Materialized joins and summaries that we never want to recompute per query.
 -- ===========================================================================
 
--- Bridge: which motif hits fall inside which promoter, with strand-aware TSS
--- distance. This is the one interval join in the whole system; do it once.
+-- Bridge: which motif hits fall inside which gene's promoter set, with
+-- strand-aware TSS distance. A hit can overlap several transcript promoters
+-- for one gene, but appears here only once per gene and scoring configuration.
+-- The closest transcript supplies the signed distance; the overlap count keeps
+-- the discarded transcript multiplicity visible without multiplying features.
+-- This is the one interval join in the whole system; do it once.
 CREATE OR REPLACE TABLE promoter_motif_hit AS
+WITH transcript_overlap AS (
+    SELECT
+        p.gene_id,
+        p.transcript_id,
+        h.chrom,
+        h.motif_id,
+        h.strand,
+        h.score,
+        h.score_mode,
+        h.pseudocount,
+        h.pwm_relative_score,
+        h.start AS hit_start,
+        h."end" AS hit_end,
+        -- signed distance from TSS, positive = downstream in gene direction
+        CASE WHEN p.strand = '+' THEN h.start - p.tss
+             ELSE p.tss - h."end" END AS tss_distance
+    FROM promoter p
+    JOIN motif_hit h
+      ON  h.chrom = p.chrom
+      AND h.start >= p.promoter_start
+      AND h."end" <= p.promoter_end
+),
+ranked_overlap AS (
+    SELECT
+        *,
+        COUNT(DISTINCT transcript_id) OVER hit_identity
+            AS n_overlapping_transcripts,
+        ROW_NUMBER() OVER (
+            hit_identity
+            ORDER BY ABS(tss_distance), transcript_id
+        ) AS transcript_distance_rank
+    FROM transcript_overlap
+    WINDOW hit_identity AS (
+        PARTITION BY gene_id, chrom, hit_start, hit_end, motif_id, strand,
+                     score_mode, pseudocount, score, pwm_relative_score
+    )
+)
 SELECT
-    p.gene_id,
-    p.transcript_id,
-    h.motif_id,
-    h.strand,
-    h.score,
-    h.score_mode,
-    h.pseudocount,
-    h.pwm_relative_score,
-    h.start,
-    h."end",
-    -- signed distance from TSS, positive = downstream of TSS in gene direction
-    CASE WHEN p.strand = '+' THEN h.start - p.tss
-         ELSE p.tss - h."end" END AS tss_distance
-FROM promoter p
-JOIN motif_hit h
-  ON  h.chrom = p.chrom
-  AND h.start >= p.promoter_start
-  AND h."end" <= p.promoter_end;
+    gene_id,
+    transcript_id AS closest_transcript_id,
+    n_overlapping_transcripts,
+    chrom,
+    motif_id,
+    strand,
+    score,
+    score_mode,
+    pseudocount,
+    pwm_relative_score,
+    hit_start AS start,
+    hit_end AS "end",
+    tss_distance
+FROM ranked_overlap
+WHERE transcript_distance_rank = 1;
 
 -- Per-(gene, motif) architecture summary in LONG form (no ~8000-col matrix).
 -- Pivot to wide only at the ML boundary (see queries.sql / the Python builder).
@@ -277,7 +315,9 @@ SELECT
 FROM promoter_arch_feature f
 JOIN expression_differential d USING (gene_id);
 
--- Hot agent lookup: one compact, low-latency promoter summary per gene.
+-- Hot agent lookup: one compact, low-latency promoter summary per gene and
+-- scoring configuration. Keeping score_mode and pseudocount in the table grain
+-- prevents totals from unrelated scoring runs being combined under MIN labels.
 -- This is the first stop for OpenClaw / Claude / Codex before deeper joins.
 CREATE OR REPLACE TABLE promoter_card AS
 WITH promoter_span AS (
@@ -289,11 +329,15 @@ WITH promoter_span AS (
     FROM promoter
     GROUP BY gene_id
 ),
+score_configuration AS (
+    SELECT DISTINCT score_mode, pseudocount
+    FROM motif_hit
+),
 feature_summary AS (
     SELECT
         gene_id,
-        MIN(score_mode) AS score_mode,
-        MIN(pseudocount) AS pseudocount,
+        score_mode,
+        pseudocount,
         COUNT(DISTINCT motif_id) AS n_motifs_with_hits,
         SUM(n_hits) AS n_motif_hits,
         MAX(max_rel_score) AS max_pwm_relative_score,
@@ -301,7 +345,7 @@ feature_summary AS (
         BOOL_OR(COALESCE(has_dimer_of_dimers, false)) AS has_dimer_of_dimers,
         COUNT(DISTINCT tf_family) FILTER (WHERE tf_family IS NOT NULL) AS n_tf_families
     FROM promoter_arch_feature
-    GROUP BY gene_id
+    GROUP BY gene_id, score_mode, pseudocount
 )
 SELECT
     g.gene_id,
@@ -311,8 +355,8 @@ SELECT
     g.tss,
     ps.promoter_start,
     ps.promoter_end,
-    fs.score_mode,
-    fs.pseudocount,
+    sc.score_mode,
+    sc.pseudocount,
     COALESCE(ps.n_promoter_transcripts, 0) AS n_promoter_transcripts,
     COALESCE(fs.n_motifs_with_hits, 0) AS n_motifs_with_hits,
     COALESCE(fs.n_motif_hits, 0) AS n_motif_hits,
@@ -321,5 +365,9 @@ SELECT
     COALESCE(fs.has_dimer_of_dimers, false) AS has_dimer_of_dimers,
     COALESCE(fs.n_tf_families, 0) AS n_tf_families
 FROM gene g
+CROSS JOIN score_configuration sc
 LEFT JOIN promoter_span ps USING (gene_id)
-LEFT JOIN feature_summary fs USING (gene_id);
+LEFT JOIN feature_summary fs
+  ON  fs.gene_id = g.gene_id
+  AND fs.score_mode = sc.score_mode
+  AND fs.pseudocount IS NOT DISTINCT FROM sc.pseudocount;

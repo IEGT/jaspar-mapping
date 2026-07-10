@@ -7,10 +7,13 @@
 -- ============================================================================
 
 -- Q0. Hot promoter card — first lookup for an agent answering "what do we know
---     about this gene's promoter architecture?" Param: $gene_name
+--     about this gene's promoter architecture?"
+--     Params: $gene_name, $score_mode, $pseudocount
 SELECT *
 FROM promoter_card
-WHERE gene_name = $gene_name;
+WHERE gene_name = $gene_name
+  AND score_mode = $score_mode
+  AND pseudocount = $pseudocount;
 
 -- Q1. Region browse — every motif hit in a window. Prunes by chrom partition
 --     + start zonemap, so latency is ~row-group scan, not full table.
@@ -21,25 +24,43 @@ WHERE chrom = $chrom AND start >= $start AND "end" <= $end
 ORDER BY start;
 
 -- Q2. Promoter architecture for one gene — what the ML sees, human-readable.
---     Param: $gene_name
+--     Params: $gene_name, $score_mode, $pseudocount
 SELECT f.motif_id, f.score_mode, f.pseudocount, f.tf_family, f.binding_unit_model,
        f.n_hits, f.n_strong_hits, f.max_rel_score, f.min_abs_tss_distance
 FROM promoter_arch_feature f
 JOIN gene g ON g.gene_id = f.gene_id
 WHERE g.gene_name = $gene_name
+  AND f.score_mode = $score_mode
+  AND f.pseudocount = $pseudocount
 ORDER BY f.n_strong_hits DESC, f.max_rel_score DESC;
 
--- Q3. The ML pull, WIDE — one row per gene, one column per (tf_family feature),
---     plus the TA-vs-DN label. This is the training frame; PIVOT happens here so
---     the stored tables stay long. Param: $cell_line
-PIVOT (
-    SELECT m.gene_id, m.tf_family, m.n_strong_hits, m.log2fc_ta_vs_dn, m.label_ta_up
-    FROM ml_ta_vs_dn m
-    WHERE m.cell_line = $cell_line AND m.tf_family IS NOT NULL
-)
-ON tf_family
-USING SUM(n_strong_hits)
-GROUP BY gene_id, log2fc_ta_vs_dn, label_ta_up;
+-- Q3. Prepared-safe ML pull in LONG family-feature form. DuckDB must discover
+--     data-driven PIVOT columns while binding a statement, so a dynamic PIVOT
+--     cannot contain parameters in its source. Bind this query first, then
+--     pivot its result in the ML client/exporter.
+--     Params: $cell_line, $score_mode, $pseudocount
+SELECT
+    m.gene_id,
+    m.cell_line,
+    m.score_mode,
+    m.pseudocount,
+    m.tf_family,
+    SUM(m.n_hits) AS n_hits,
+    SUM(m.n_strong_hits) AS n_strong_hits,
+    MAX(m.max_rel_score) AS max_rel_score,
+    MIN(m.min_abs_tss_distance) AS min_abs_tss_distance,
+    BOOL_OR(COALESCE(m.has_dimer_of_dimers, false)) AS has_dimer_of_dimers,
+    m.log2fc_ta_vs_dn,
+    m.padj,
+    m.label_ta_up
+FROM ml_ta_vs_dn m
+WHERE m.cell_line = $cell_line
+  AND m.score_mode = $score_mode
+  AND m.pseudocount = $pseudocount
+  AND m.tf_family IS NOT NULL
+GROUP BY m.gene_id, m.cell_line, m.score_mode, m.pseudocount, m.tf_family,
+         m.log2fc_ta_vs_dn, m.padj, m.label_ta_up
+ORDER BY m.gene_id, m.tf_family;
 
 -- Q4. Experimental cross-check — TA-vs-DN differential CUT&RUN signal at a
 --     gene's promoter loci, kept separate by antibody. Keep this OUT of the
@@ -59,7 +80,8 @@ GROUP BY c.chrom, c.start, c."end", c.cell_line, c.antibody
 ORDER BY ABS(ta_minus_dn) DESC;
 
 -- Q5. Architecture enrichment — do dimer-of-dimers TP53-family sites associate
---     with TA-up genes? A quick 2x2 signal before any modelling. Param: $cell_line
+--     with TA-up genes? A quick 2x2 signal before any modelling.
+--     Params: $cell_line, $score_mode, $pseudocount
 SELECT has_arch,
        AVG(label_ta_up)          AS frac_ta_up,
        COUNT(*)                  AS n_genes
@@ -69,16 +91,22 @@ FROM (
            MAX(m.label_ta_up)                                     AS label_ta_up
     FROM ml_ta_vs_dn m
     WHERE m.cell_line = $cell_line
+      AND m.score_mode = $score_mode
+      AND m.pseudocount = $pseudocount
     GROUP BY m.gene_id
 )
 GROUP BY has_arch;
 
 -- Q6. Gene-set slice — restrict the ML frame to a pathway (e.g. an EMT set) so a
---     model can be trained per program. Params: $set_name, $cell_line
+--     model can be trained per program.
+--     Params: $set_name, $cell_line, $score_mode, $pseudocount
 SELECT m.*
 FROM ml_ta_vs_dn m
 JOIN gene_set s ON s.gene_id = m.gene_id
-WHERE s.set_name = $set_name AND m.cell_line = $cell_line;
+WHERE s.set_name = $set_name
+  AND m.cell_line = $cell_line
+  AND m.score_mode = $score_mode
+  AND m.pseudocount = $pseudocount;
 
 -- Q7. Dense score slice — reconstruct PSSM alignment-score rows from dense
 --     score blocks for a small genomic interval. Params: $motif_id, $chrom, $strand,

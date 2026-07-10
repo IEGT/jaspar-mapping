@@ -13,8 +13,9 @@ as the draft query contract:
 - Use BED 0-based half-open coordinates for exported motif and promoter tables.
 - Keep large generated data out of Git; package it as versioned Parquet plus a
   rebuildable DuckDB query index.
-- Prefer the materialized `promoter_card` for low-latency agent lookups, and
-  use named parameterized queries instead of ad hoc joins from agents.
+- Prefer the materialized `promoter_card` for low-latency agent lookups, bind
+  its `score_mode` and `pseudocount` explicitly, and use named parameterized
+  queries instead of ad hoc joins from agents.
 - Keep ML features in long/tidy tables; pivot to wide matrices only at the ML
   export boundary.
 - Keep sequence-derived promoter architecture separate from CUT&RUN-derived
