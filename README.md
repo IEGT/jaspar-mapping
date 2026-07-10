@@ -32,6 +32,31 @@ For the paper we used
 * Jaspar release 2022
 * Ensembl version 112
 
+The current R analysis environment is pinned in `renv.lock` for R 4.5.1; it
+is an updated environment for this source tree, not a reconstruction of the
+publication-era R session. From a fresh checkout, install `renv` once and
+restore the recorded CRAN package versions:
+
+```
+Rscript -e 'install.packages("renv", repos="https://cloud.r-project.org")'
+Rscript -e 'renv::restore(prompt=FALSE)'
+```
+
+The standalone Ensembl REST helper has one Python dependency. Install it in a
+virtual environment with:
+
+```
+python3 -m venv .venv
+. .venv/bin/activate
+python3 -m pip install -r requirements.txt
+```
+
+The C++ build dependencies and FASTA indexing requirements are described in
+the installation steps below. Test fixtures keep their contents and suffixes
+aligned: the tracked `*_1000.bed` samples are plain BED text, while compressed
+inputs must use `.gz` or `.bz2` so `CompressedFileReader` selects the matching
+decoder.
+
 New analyses default to JASPAR 2026 in the Makefile. Use
 `make JASPAR_VERSION=2022 jaspar` when recreating the publication-era input.
 JASPAR matrix files are small and ignored by Git; keep them local to this tree,

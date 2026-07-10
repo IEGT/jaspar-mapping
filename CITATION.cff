@@ -1,0 +1,41 @@
+cff-version: 1.2.0
+message: >-
+  If you use this software, please cite version 0.0.0 and the associated
+  article below.
+title: JASPAR mapping
+type: software
+version: 0.0.0
+date-released: "2026-06-29"
+commit: 5ef00d0e5e5a910e78175a65b14614393185bdeb
+authors:
+  - family-names: Möller
+    given-names: Steffen
+    email: moeller@debian.org
+repository-code: https://github.com/IEGT/jaspar-mapping
+url: https://github.com/IEGT/jaspar-mapping/releases/tag/v0.0.0
+keywords:
+  - JASPAR
+  - transcription factor binding sites
+  - CUT&RUN
+  - p73
+preferred-citation:
+  type: article
+  authors:
+    - family-names: Möller
+      given-names: Steffen
+    - family-names: Spitschak
+      given-names: Alf
+    - family-names: Murr
+      given-names: Nico
+    - family-names: Pützer
+      given-names: Brigitte M.
+  title: >-
+    Integrative Multimodal Profiling of TAp73 and DNp73 Reveals
+    Isoform-Specific Transcriptomic Coregulator Landscapes in Cancer Programs
+  journal: Biomolecules
+  year: 2025
+  month: 12
+  volume: 16
+  issue: 1
+  start: "63"
+  doi: 10.3390/biom16010063

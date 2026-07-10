@@ -1,0 +1,2 @@
+# Runtime dependency of scripts/fetch_region_to_embl.py.
+requests==2.34.2

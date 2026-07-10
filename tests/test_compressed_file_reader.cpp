@@ -3,6 +3,7 @@
 #include <bzlib.h>
 #include <zlib.h>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -118,10 +119,45 @@ void expectMoveAssignment(const std::filesystem::path& sourcePath,
     }
 }
 
+void expectPlainBedFixture(const std::filesystem::path& path,
+                           const size_t expectedRows) {
+    require(CompressedFileReader::determineFileType(path.string())
+                == CompressedFileReader::PLAIN,
+            "Tracked BED fixture should select the plain-text reader");
+
+    CompressedFileReader reader(path.string(), false);
+    std::string line;
+    size_t rows = 0;
+    while (reader.getline(line)) {
+        require(std::count(line.begin(), line.end(), '\t') == 5,
+                "Tracked BED fixture contains a non-BED6 row at line "
+                    + std::to_string(rows + 1));
+        ++rows;
+    }
+    require(rows == expectedRows,
+            "Tracked BED fixture should contain " + std::to_string(expectedRows)
+                + " rows, got " + std::to_string(rows));
+}
+
 } // namespace
 
 int main() {
     try {
+        require(CompressedFileReader::determineFileType("fixture.bed")
+                    == CompressedFileReader::PLAIN,
+                "A .bed suffix should select the plain-text reader");
+        require(CompressedFileReader::determineFileType("fixture.bed.gz")
+                    == CompressedFileReader::GZIP,
+                "A .bed.gz suffix should select the gzip reader");
+        require(CompressedFileReader::determineFileType("fixture.bed.bz2")
+                    == CompressedFileReader::BZIP2,
+                "A .bed.bz2 suffix should select the bzip2 reader");
+
+        const std::filesystem::path projectRoot =
+            std::filesystem::path(__FILE__).parent_path().parent_path();
+        expectPlainBedFixture(
+            projectRoot / "test_files/E2F1_MA0024.3_bidirect_1_1000.bed", 1000);
+
         const auto suffix = std::to_string(
             std::chrono::steady_clock::now().time_since_epoch().count());
         TemporaryDirectory temporary{

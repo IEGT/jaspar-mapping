@@ -1,5 +1,8 @@
 .vscode
 .DS_Store
+.Rhistory
+.Rproj.user/
+.venv/
 .depend
 *.fasta
 *.fa
@@ -9,6 +12,7 @@
 *.bed
 *.gch
 *.txt
+!requirements.txt
 *.png
 gtf_file_region_retrieval 
 pssm_scan
@@ -25,3 +29,6 @@ tests/test_compressed_file_reader
 *.jpg
 *.dSYM/
 score_distributions_*/
+renv/library/
+renv/staging/
+renv/python/
