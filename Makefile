@@ -126,12 +126,13 @@ tests/test_gtf_file_region: tests/test_gtf_file_region.cpp gtf_file_region.h gtf
 tests/test_compressed_file_reader: tests/test_compressed_file_reader.cpp compressed_file_reader.h compressed_file_reader.o
 	$(CXX) $(TEST_CXXFLAGS) -o $@ tests/test_compressed_file_reader.cpp compressed_file_reader.o $(LDFLAGS)
 
-check: $(TEST_BINARIES)
+check: pssm_scan $(TEST_BINARIES)
 	./tests/test_pssm_scan
 	./tests/test_gtf_file_region
 	./tests/test_compressed_file_reader
 	bash tests/test_fix_missing_bidirect.sh
 	bash tests/test_localMaxSkmelTADN.sh
+	bash tests/test_indexed_genome_scan.sh
 
 check-r:
 	Rscript tests/test_analyze_bed_cutandrun.R
@@ -165,6 +166,9 @@ genomegz: $(GENOMEGZ)
 $(GENOME_INDEX): $(GENOME)
 	samtools faidx $<
 
+%.fasta.fai: %.fasta
+	samtools faidx $<
+
 genome_index: $(GENOME_INDEX)
 
 scan_chr_all_motifs: pssm_scan $(JASPAR) $(GENOME) $(GENOME_INDEX)
@@ -172,7 +176,7 @@ scan_chr_all_motifs: pssm_scan $(JASPAR) $(GENOME) $(GENOME_INDEX)
 	./pssm_scan --outdir $(OUTPUTDIR)/$(CHR) --genome $(GENOME) --pssm $(JASPAR) --score-mode $(SCORE_MODE) --threshold $(SCAN_THRESHOLD) --chr $(CHR) $(SCAN_CHR_FLAGS)
 
 # Define the pattern rule for generating .bed files
-$(HIT_OUTPUTDIR)/%_negative_$(CHR).bed $(HIT_OUTPUTDIR)/%_positive_$(CHR).bed:
+$(HIT_OUTPUTDIR)/%_negative_$(CHR).bed $(HIT_OUTPUTDIR)/%_positive_$(CHR).bed: pssm_scan $(JASPAR) $(GENOME) $(GENOME_INDEX)
 	mkdir -p $(HIT_OUTPUTDIR)
 	echo $*
 	NAME=$(shell echo $* | sed -e 's/_MA.*$$//') ; \
@@ -206,7 +210,7 @@ echo_score_distributions:
 
 score_distributions_chr1: $(SCORE_DISTRIBUTION_FILES)
 
-$(DISTRIBUTIONDIR)/%_score_distribution_$(SCORE_MODE)_bins_$(DISTRIBUTION_BIN_WIDTH)_positive_$(DISTRIBUTION_CHR)$(DISTRIBUTION_PSEUDOCOUNT_LABEL).tsv: pssm_scan $(JASPAR) $(GENOME)
+$(DISTRIBUTIONDIR)/%_score_distribution_$(SCORE_MODE)_bins_$(DISTRIBUTION_BIN_WIDTH)_positive_$(DISTRIBUTION_CHR)$(DISTRIBUTION_PSEUDOCOUNT_LABEL).tsv: pssm_scan $(JASPAR) $(GENOME) $(GENOME_INDEX)
 	mkdir -p $(DISTRIBUTIONDIR)
 	echo $*
 	NAME=$(shell echo $* | sed -e 's/_MA.*$$//') ; \
@@ -226,7 +230,7 @@ genome_testdata_gz: genome_testdata
 testGTF: gtf_file_region_retrieval
 	echo "TP73" |  ./gtf_file_region_retrieval
 
-test: pssm_scan Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta Homo_sapiens.GRCh38.dna.primary_assembly_bottom500000.fasta
+test: pssm_scan $(JASPAR) Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta.fai Homo_sapiens.GRCh38.dna.primary_assembly_bottom500000.fasta
 	#./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta -l -5400 --verbose -m $(TP73_MOTIF_ID) --chr $(CHR) --from 100000 --to 103000 --help
 	./pssm_scan --pssm $(JASPAR) --genome Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta --score-mode $(SCORE_MODE) -l 0 --verbose -m MA0059.1 --chr $(CHR) --from 100001 --to 103001 -s
 	#./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta -l 0 --verbose -m MA0019.1 --chr $(CHR) --from 100000 --to 130000
@@ -235,7 +239,7 @@ test: pssm_scan Homo_sapiens.GRCh38.dna.primary_assembly_top500000.fasta Homo_sa
 	#./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_bottom500000.fasta -l -500 --verbose -o output_bottom --chr 44 --from 100000 --to 103000
 	#./pssm_scan --genome Homo_sapiens.GRCh38.dna.primary_assembly_bottom500000.fasta -l -500 --verbose -o output_bottom --from 100000 --to 103000
 
-test_reference_tp73_promoter_chr1: pssm_scan $(JASPAR) $(GENOME)
+test_reference_tp73_promoter_chr1: pssm_scan $(JASPAR) $(GENOME) $(GENOME_INDEX)
 	@if [ "$(TEST_REFERENCE_THRESHOLD)" != "0" ]; then \
 	    echo "E: test_reference_tp73_promoter_chr1 is calibrated for TEST_REFERENCE_THRESHOLD=0." ; \
 	    exit 1 ; \

@@ -56,7 +56,7 @@ Compute facilities:
 To execute this program
  1. Compile binaries
     - Install dependencies:
-      UNIX: sudo apt install libbz2-dev make 
+      UNIX: sudo apt install libbz2-dev make samtools
     - Compile:
       UNiX: make
  2. Download the exact same genome that your cut'n'run experiments were run against, like +
@@ -64,16 +64,24 @@ To execute this program
     and
  3. unpack it by +
    `gunzip -c Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz > Homo_sapiens.GRCh38.dna.primary_assembly.fasta`
- 4. Optionally create a FASTA index with `make genome_index` or
+ 4. Create the required FASTA index with `make genome_index` or
     `samtools faidx Homo_sapiens.GRCh38.dna.primary_assembly.fasta`.
-    `pssm_scan` automatically uses `${GENOME}.fai` for chromosome-restricted
-    scans. BGZF-compressed FASTA can also be accessed through matching `.fai`
-    and `.gzi` files; ordinary gzip remains a streaming fallback.
+    `pssm_scan` uses `${GENOME}.fai` unless `--fasta-index` is provided and
+    reads one chromosome at a time in index order for every scan. BGZF-compressed
+    FASTA requires matching `.fai` and `.gzi` files. Ordinary gzip and bzip2
+    FASTA are not production inputs; unpack ordinary gzip or recompress it with
+    `bgzip` and create both indexes.
  5. Download JASPAR with the Makefile default release, currently JASPAR 2026, by running +
     `make jaspar`
  6. Execute `./pssm_scan`, expect separate outputs for every motif and the respective positive and negative strands. The option "--help" provides extra details. The default score mode is `log2_relative_risk`, matching the publication-era behavior; use `--score-mode log_odds` or `make SCORE_MODE=log_odds ...` when running the alternative motif-score filter. Make keeps the historical `output_RelativeRisk_20250217` directory for the default mode and switches non-default score modes to separate output directories unless `OUTPUTDIR` is set explicitly.
 
 Unconstrained, for the full genome, expect an output of ~30 GB for each of the ~2000 motifs of JASPAR. Options are provided to retrieve matches above a given threshold or for particular chromosomal regions. Scanner outputs include a `ScoreMode` column so downstream tables can distinguish sequence-level score filters from later contrast-level log ratios or log odds.
+
+Whole-genome scans retain only the current chromosome sequence and its requested
+strand-code arrays. Every motif is scanned before that chromosome is released,
+and genome-wide BED rows follow chromosome order from the `.fai` file. This keeps
+peak genome memory proportional to the largest chromosome rather than the whole
+assembly and gives deterministic chromosome-grouped output.
 
 For production chromosome scans, prefer `make scan_chr_all_motifs CHR=1` over
 per-motif invocations. That path loads and encodes the chromosome once, parses
