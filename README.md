@@ -90,11 +90,15 @@ chromosome or motif-family fan-out remains the default parallelization strategy;
 compressed BED output are deliberate follow-up choices because they affect job
 sizing, log ordering, and downstream file handling.
 
-Long-running scans can report progress on demand without `-v`. Send `SIGUSR1`
-to the running process, for example `kill -USR1 <pid>`, and `pssm_scan` prints
-one status line to stderr with the current motif, chromosome, strand, position,
-window count, and percent complete. On platforms with `SIGINFO`, that signal
-requests the same report.
+Long-running scans can report progress on demand without `-v`. On POSIX systems,
+send `SIGUSR1` to the running process, for example `kill -USR1 <pid>`. On
+platforms with `SIGINFO`, that signal requests the same report. In a Windows
+console, press Ctrl+Break; the Windows build handles `CTRL_BREAK_EVENT` without
+terminating the scan. Automated Windows callers can use `GenerateConsoleCtrlEvent`
+to send `CTRL_BREAK_EVENT`, but the caller and target must share a console and the
+target should be started as a console process group. Each mechanism prints one
+status line to stderr with the current motif, chromosome, strand, position,
+window count, and percent complete.
 
 Additional scanner controls now include `--strand +|-|both`,
 `--coordinate-mode legacy|bed`, and `--min-pwm-relative-score` /

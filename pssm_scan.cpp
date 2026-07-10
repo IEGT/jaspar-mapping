@@ -23,6 +23,16 @@
 #include <stdexcept>
 #include <utility>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 #ifdef PSSM_SCAN_WITH_PARQUET
 #include <arrow/api.h>
 #include <arrow/io/api.h>
@@ -42,9 +52,23 @@ typedef std::set<std::string> chromosome_set_type;
 
 int beVerbose = 0;
 int showDebug = 0;
+#ifdef _WIN32
+volatile LONG progressStatusRequested = 0;
+#else
 volatile std::sig_atomic_t progressStatusRequested = 0;
+#endif
 static constexpr size_t DEFAULT_SCORE_BLOCK_SIZE = 65536;
 
+#ifdef _WIN32
+BOOL WINAPI handleProgressControlEvent(const DWORD controlType) {
+    if (controlType != CTRL_BREAK_EVENT) {
+        return FALSE;
+    }
+
+    InterlockedExchange(&progressStatusRequested, 1);
+    return TRUE;
+}
+#else
 void handleProgressSignal(int) {
     progressStatusRequested = 1;
 }
@@ -63,11 +87,31 @@ void installProgressSignalHandler(const int signalNumber, const char* signalName
                   << std::strerror(errno) << std::endl;
     }
 }
+#endif
 
-void installProgressSignalHandlers() {
+void installProgressRequestHandlers() {
+#ifdef _WIN32
+    if (SetConsoleCtrlHandler(handleProgressControlEvent, TRUE) == 0) {
+        std::cerr << "W: Failed to install CTRL+Break progress handler: Windows error "
+                  << GetLastError() << std::endl;
+    }
+#else
     installProgressSignalHandler(SIGUSR1, "SIGUSR1");
 #ifdef SIGINFO
     installProgressSignalHandler(SIGINFO, "SIGINFO");
+#endif
+#endif
+}
+
+bool consumeProgressStatusRequest() {
+#ifdef _WIN32
+    return InterlockedExchange(&progressStatusRequested, 0) != 0;
+#else
+    if (progressStatusRequested == 0) {
+        return false;
+    }
+    progressStatusRequested = 0;
+    return true;
 #endif
 }
 
@@ -556,10 +600,9 @@ void maybePrintRequestedProgress(const char* operation, const PSSM& pssm,
                                  const std::string& chromosome, const std::string& strand,
                                  size_t posStart, size_t posEnd,
                                  size_t motifLength, size_t currentPos) {
-    if (progressStatusRequested == 0) {
+    if (!consumeProgressStatusRequest()) {
         return;
     }
-    progressStatusRequested = 0;
 
     size_t totalWindows = 0;
     if (posEnd >= motifLength && posStart <= posEnd - motifLength) {
@@ -1378,9 +1421,13 @@ void printHelp(const std::string& programName, const std::string& genomeFile, co
     std::cout << " --skip-N             Skip windows containing 'N'" << std::endl;
     std::cout << " --neutral-N          Treat 'N' as neutral (contribute 0 to the score)" << std::endl;
     std::cout << " -N, --skip-normalization Skip log-normalisation, will affect scoring." << std::endl;
+#ifdef _WIN32
+    std::cout << " Ctrl+Break            Request one progress line on stderr in a Windows console" << std::endl;
+#else
     std::cout << " SIGUSR1              Request one progress line on stderr from a running process, e.g. kill -USR1 <pid>" << std::endl;
 #ifdef SIGINFO
     std::cout << " SIGINFO              Also requests one progress line where available, e.g. Ctrl-T on BSD/macOS" << std::endl;
+#endif
 #endif
     std::cout << " -h, --help           Display this help message" << std::endl;
 }
@@ -1388,7 +1435,7 @@ void printHelp(const std::string& programName, const std::string& genomeFile, co
 } // namespace
 
 int main(int argc, char* argv[]) {
-    installProgressSignalHandlers();
+    installProgressRequestHandlers();
 
     // Default file names
     std::string genomeFile = "Homo_sapiens.GRCh38.dna.primary_assembly.fasta";
