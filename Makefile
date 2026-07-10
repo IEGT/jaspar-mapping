@@ -91,7 +91,7 @@ DISTRIBUTIONDIR?=score_distributions_$(SCORE_MODE)_bins_$(DISTRIBUTION_BIN_WIDTH
 
 BINARIES=pssm_scan gtf_file_region_retrieval context
 PARQUET_BINARIES=pssm_scan_parquet
-TEST_BINARIES=tests/test_pssm_scan tests/test_gtf_file_region
+TEST_BINARIES=tests/test_pssm_scan tests/test_gtf_file_region tests/test_compressed_file_reader
 
 all: $(BINARIES)
 
@@ -123,9 +123,13 @@ tests/test_pssm_scan: tests/test_pssm_scan.cpp pssm_scan_core.h pssm.h pssm.o ps
 tests/test_gtf_file_region: tests/test_gtf_file_region.cpp gtf_file_region.h gtf_file_region.o progress.o
 	$(CXX) $(TEST_CXXFLAGS) -o $@ tests/test_gtf_file_region.cpp gtf_file_region.o progress.o
 
+tests/test_compressed_file_reader: tests/test_compressed_file_reader.cpp compressed_file_reader.h compressed_file_reader.o
+	$(CXX) $(TEST_CXXFLAGS) -o $@ tests/test_compressed_file_reader.cpp compressed_file_reader.o $(LDFLAGS)
+
 check: $(TEST_BINARIES)
 	./tests/test_pssm_scan
 	./tests/test_gtf_file_region
+	./tests/test_compressed_file_reader
 	bash tests/test_fix_missing_bidirect.sh
 	bash tests/test_localMaxSkmelTADN.sh
 

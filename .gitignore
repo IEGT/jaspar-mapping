@@ -16,6 +16,7 @@ pssm_scan_parquet
 context
 tests/test_pssm_scan
 tests/test_gtf_file_region
+tests/test_compressed_file_reader
 *.gz
 *.RData
 *.pdf

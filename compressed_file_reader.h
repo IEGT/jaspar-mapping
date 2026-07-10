@@ -1,10 +1,12 @@
+#include <cstddef>
 #include <iostream>
 #include <fstream>
 #include <zlib.h>
 #include <bzlib.h>
 #include <memory>
-#include <string>
 #include <optional> // For handling unread lines
+#include <stdexcept>
+#include <string>
 
 class CompressedFileReader {
 public:
@@ -32,17 +34,8 @@ public:
     CompressedFileReader(const CompressedFileReader&) = delete;
     CompressedFileReader& operator=(const CompressedFileReader&) = delete;
 
-    // Implement move assignment operator
-    CompressedFileReader& operator=(CompressedFileReader&& other) noexcept {
-        if (this != &other) {
-            file_ = std::move(other.file_);
-            type_ = std::move(other.type_);
-            gz_file_ = std::move(other.gz_file_);
-            bz_file_ = std::move(other.bz_file_);
-            unread_line_ = std::move(other.unread_line_);
-        }
-        return *this;
-    }
+    CompressedFileReader(CompressedFileReader&& other) noexcept;
+    CompressedFileReader& operator=(CompressedFileReader&& other) noexcept;
 
     static CompressedFileReader::FileType determineFileType(const std::string& filename);
 
@@ -86,11 +79,7 @@ public:
         return -1;
     }
 
-    ~CompressedFileReader() {
-        if (type_ == GZIP && gz_file_) gzclose(gz_file_);
-        else if (type_ == BZIP2 && bz_file_) BZ2_bzclose(bz_file_);
-        else if (file_) file_->close();
-    }
+    ~CompressedFileReader();
 
     /** Read a line from the file, return false if EOF */
     bool getline(std::string& line);
@@ -99,9 +88,16 @@ public:
     void unread(const std::string& line);
 
 private:
-    FileType type_;
+    bool getlineCompressed(std::string& line);
+    void close() noexcept;
+    void moveFrom(CompressedFileReader&& other) noexcept;
+
+    FileType type_ = PLAIN;
     std::unique_ptr<std::ifstream> file_;
     gzFile gz_file_ = nullptr;
     BZFILE* bz_file_ = nullptr;
     std::optional<std::string> unread_line_; // Buffer for the last read line
+    std::string compressed_buffer_;
+    size_t compressed_buffer_offset_ = 0;
+    bool compressed_eof_ = false;
 };
