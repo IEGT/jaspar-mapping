@@ -8,6 +8,10 @@ motifs:
 | PATZ1 | `MA1961.2` | 11 bp |
 | TP73 | `MA0861.2` | 16 bp |
 
+For a five-base introduction where every expected score can be checked by
+hand, begin with
+[`../test_files/synthetic_dense/README.md`](../test_files/synthetic_dense/README.md).
+
 Every run uses pseudocount 1, both reference orientations, skip-N handling,
 and both `log2_relative_risk` and `log_odds`. This gives eight dense score
 configurations. A stored element represents one possible motif-model alignment
