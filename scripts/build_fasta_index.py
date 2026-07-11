@@ -118,10 +118,18 @@ def build_index(fasta: BinaryIO, output: TextIO) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Build a samtools-compatible .fai for an uncompressed FASTA"
+        description=(
+            "Build a samtools-compatible .fai index for an uncompressed FASTA "
+            "without requiring samtools."
+        )
     )
-    parser.add_argument("fasta", type=Path)
-    parser.add_argument("--output", "-o", type=Path)
+    parser.add_argument(
+        "fasta", type=Path, help="uncompressed input FASTA (plain text)"
+    )
+    parser.add_argument(
+        "--output", "-o", type=Path,
+        help="output .fai path (default: FASTA path with .fai appended)",
+    )
     args = parser.parse_args()
 
     fasta_path = args.fasta

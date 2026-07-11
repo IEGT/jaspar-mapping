@@ -89,6 +89,58 @@ provides:
 Ready-to-run SQL examples are in
 [`../sql/chr1_dense_dry_run_examples.sql`](../sql/chr1_dense_dry_run_examples.sql).
 
+## Dynamic BED Export
+
+`scripts/export_dense_bed.py` regenerates sparse, thresholded BED rows from a
+dense package without rescanning the genome or creating an intermediate file.
+First inspect the available motif/configuration partitions:
+
+```sh
+scripts/export_dense_bed.py \
+  --package dry_runs/chr1_patz1_tp73_from-3600000-to-3700000 \
+  --list-configs
+```
+
+Count a proposed TP73 selection before writing it:
+
+```sh
+scripts/export_dense_bed.py \
+  --package dry_runs/chr1_patz1_tp73_from-3600000-to-3700000 \
+  --motif MA0861.2 --score-mode log_odds --pseudocount 1 \
+  --chrom 1 --strand both --from 3651800 --to 3652600 \
+  --min-score 0 --count-only
+```
+
+Then stream the same selection directly to compressed BED:
+
+```sh
+scripts/export_dense_bed.py \
+  --package dry_runs/chr1_patz1_tp73_from-3600000-to-3700000 \
+  --motif MA0861.2 --score-mode log_odds --pseudocount 1 \
+  --chrom 1 --strand both --from 3651800 --to 3652600 \
+  --min-score 0 --columns provenance \
+  --output TP73_MA0861.2_log_odds_chr1_3651800-3652600.bed.gz
+```
+
+`--chrom` is repeatable and accepts comma-separated values. `--min-score` and
+`--max-score` are inclusive; the historical lower threshold of zero is the
+default, while `--all-scores` explicitly removes it. `--no-header` supports
+strict BED consumers, and `--score-decimals 3` reproduces the old display
+precision. Existing output files are never replaced unless `--force` is given.
+
+The range is a BED-style, 0-based, half-open selection of motif alignment
+starts. Consequently, the reported sequence interval can extend beyond
+`--to`; that interval records the sequence used for scoring, not the physical
+footprint of a bound TF complex. NULL scores from skipped sequence are never
+exported.
+
+The default output is the compatible first six columns `Chromosome`, `From`,
+`To`, `Name`, `Score`, and `Strand`. `--columns provenance` appends `MotifID`,
+`ScoreMode`, `Pseudocount`, and `CoordinateMode`. Dense storage does not contain
+the matched sequence or the motif-specific finite score range needed to recover
+`PWMRelativeScore`, so the exporter deliberately does not fabricate those two
+columns.
+
 ## Full Chromosome 1
 
 The full run is deliberately gated because it contains approximately two

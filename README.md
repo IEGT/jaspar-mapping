@@ -210,6 +210,11 @@ read-only inspection commands, full-chromosome gate, and GENtle interpretation
 contract are documented in
 [`docs/chr1_patz1_tp73_dry_run.md`](docs/chr1_patz1_tp73_dry_run.md) and
 [`docs/gentle_chr1_duckdb_interpretation_prompt.md`](docs/gentle_chr1_duckdb_interpretation_prompt.md).
+Thresholded BED files can be regenerated without rescanning the genome using
+`scripts/export_dense_bed.py`; it filters the dense package by motif,
+configuration, chromosome, orientation, alignment-start range, and score while
+streaming directly to plain or gzip-compressed output. See the dry-run document
+for examples and the precise compatibility boundary.
 
 ## Automated reference checks
 

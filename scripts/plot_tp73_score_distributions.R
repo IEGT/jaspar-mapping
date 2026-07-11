@@ -2,6 +2,32 @@
 
 args <- commandArgs(trailingOnly = TRUE)
 
+usage <- function(output = stdout()) {
+  cat(
+    paste0(
+      "Usage: plot_tp73_score_distributions.R [LOG_RISK.tsv] [LOG_ODDS.tsv] ",
+      "[OUTPUT.png] [TAIL_SUMMARY.tsv]\n\n",
+      "Plot TP73/MA0861.2 score-density and cumulative-tail curves from two ",
+      "pssm_scan score-distribution tables. Positional arguments override, ",
+      "in order, the default log2-relative-risk input, log-odds input, PNG ",
+      "plot, and tail-summary TSV paths.\n\n",
+      "Options:\n",
+      "  -h, --help  Show this help and exit\n"
+    ),
+    file = output
+  )
+}
+
+if (length(args) == 1L && args[[1L]] %in% c("-h", "--help")) {
+  usage()
+  quit(status = 0L)
+}
+if (length(args) > 4L) {
+  cat("E: Expected no more than four positional arguments.\n", file = stderr())
+  usage(stderr())
+  quit(status = 2L)
+}
+
 log_risk_file <- if (length(args) >= 1) args[[1]] else
   "score_distributions_log2_relative_risk_bins_adaptive_JASPAR2026_chr1_pseudocount_1/TP73_MA0861.2_score_distribution_log2_relative_risk_bins_adaptive_both_1_pseudocount_1.tsv"
 log_odds_file <- if (length(args) >= 2) args[[2]] else

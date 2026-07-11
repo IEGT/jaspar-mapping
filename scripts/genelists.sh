@@ -1,5 +1,36 @@
 #!/bin/bash -e
 
+usage() {
+    cat <<'EOF'
+Usage: genelists.sh
+
+Download the curated MSigDB gene sets listed in this script into GeneLists/
+and generate chromosome 1 promoter, UTR, and transcript BED files with
+gtf_file_region_retrieval. Existing downloads and complete BED triplets are
+reused.
+
+Options:
+  -h, --help  Show this help and exit
+
+Requirements:
+  Run from the jaspar-mapping repository root with wget and the built
+  ./gtf_file_region_retrieval binary available. Network access is required for
+  gene sets not already present in GeneLists/.
+EOF
+}
+
+case ${1:-} in
+    -h|--help)
+        usage
+        exit 0
+        ;;
+esac
+if [ "$#" -ne 0 ]; then
+    echo "E: This command accepts no positional arguments." >&2
+    usage >&2
+    exit 2
+fi
+
 if [ ! -d "scripts" ]; then
         echo "E: Execute the script from the root of the Jaspar folder"
         exit 1

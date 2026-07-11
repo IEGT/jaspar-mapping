@@ -13,7 +13,18 @@ import sys
 from collections import Counter
 from typing import Dict, List, Optional, Tuple
 
-import requests
+
+
+def requests_module():
+    """Load the optional network dependency only after CLI parsing."""
+    try:
+        import requests
+    except ModuleNotFoundError as error:
+        raise RuntimeError(
+            "The requests package is required for Ensembl retrieval. "
+            "Install the project's Python requirements first."
+        ) from error
+    return requests
 
 
 def ensembl_host(assembly: str) -> str:
@@ -24,14 +35,14 @@ def ensembl_host(assembly: str) -> str:
 
 
 def http_get_json(url: str, headers: Dict[str, str], params: Optional[Dict[str, str]] = None):
-    r = requests.get(url, headers=headers, params=params, timeout=60)
+    r = requests_module().get(url, headers=headers, params=params, timeout=60)
     if not r.ok:
         raise RuntimeError(f"GET {url} failed: HTTP {r.status_code}: {r.text[:500]}")
     return r.json()
 
 
 def http_get_text(url: str, headers: Dict[str, str], params: Optional[Dict[str, str]] = None) -> str:
-    r = requests.get(url, headers=headers, params=params, timeout=60)
+    r = requests_module().get(url, headers=headers, params=params, timeout=60)
     if not r.ok:
         raise RuntimeError(f"GET {url} failed: HTTP {r.status_code}: {r.text[:500]}")
     return r.text
@@ -56,7 +67,9 @@ def fetch_overlap(host: str, species: str, region: str, features: List[str]) -> 
     # requests wants dict; for repeated params use list of tuples via "params".
     # We'll build manually in URL-like style by passing list of tuples.
     params_tuples = [("feature", f) for f in features]
-    r = requests.get(url, headers=headers, params=params_tuples, timeout=60)
+    r = requests_module().get(
+        url, headers=headers, params=params_tuples, timeout=60
+    )
     if not r.ok:
         raise RuntimeError(f"GET {url} failed: HTTP {r.status_code}: {r.text[:500]}")
     return r.json()

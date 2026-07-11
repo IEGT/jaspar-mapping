@@ -34,6 +34,13 @@ fi
 command=${1:-overview}
 [[ $# -eq 0 ]] || shift
 
+case "$command" in
+    -h|--help|help)
+        usage
+        exit 0
+        ;;
+esac
+
 command -v duckdb >/dev/null 2>&1 || {
     echo "E: duckdb CLI is required." >&2
     exit 1

@@ -2,8 +2,29 @@
 use strict;
 use warnings;
 
+sub usage {
+    my ($handle) = @_;
+    print {$handle} <<'EOF';
+Usage: localMaxSkmelTADN.pl INPUT.tsv
+
+Select one row per consecutive gene group from a tab-separated promoter table.
+Rows are ranked by the sum of the SK-Mel-29 DN and TA p73 activity columns;
+ties prefer matching motif/gene direction. Input must contain at least 24
+columns and be grouped by gene. Selected original rows are written to stdout.
+
+Options:
+  -h, --help  Show this help and exit
+EOF
+}
+
+if (@ARGV == 1 && ($ARGV[0] eq '-h' || $ARGV[0] eq '--help')) {
+    usage(*STDOUT);
+    exit 0;
+}
+
 if (@ARGV != 1) {
-    die "Usage: $0 <input.tsv>\n";
+    usage(*STDERR);
+    exit 2;
 }
 
 my $input_file = $ARGV[0];

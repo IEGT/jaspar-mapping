@@ -2,6 +2,39 @@
 
 set -euo pipefail
 
+usage() {
+    cat <<'EOF'
+Usage: CHR=CHROMOSOME fix_missing_bidirect.sh
+
+Create missing bidirectional .bed.gz archives in output_ChrCHROMOSOME by
+combining matching uncompressed positive- and negative-strand BED files.
+Each new archive is sorted, gzip-validated, and row-count-validated before its
+two source BED files are removed. Existing archives are never replaced and
+their source files are retained.
+
+Options:
+  -h, --help  Show this help and exit
+
+Environment:
+  CHR  Required chromosome label, for example 1, X, or Y
+
+Run this command from the repository root. This command deletes source BED
+files only after a newly created replacement archive passes all validations.
+EOF
+}
+
+case ${1:-} in
+    -h|--help)
+        usage
+        exit 0
+        ;;
+esac
+if [[ $# -ne 0 ]]; then
+    echo "E: This command accepts no positional arguments." >&2
+    usage >&2
+    exit 2
+fi
+
 CHR=${CHR:-unset}
 output_directory="output_Chr${CHR}"
 

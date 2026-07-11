@@ -1,11 +1,42 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Usage: ./run_bedtools_map.sh regions.bed values1.bed values2.bed ...
+set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+Usage: bedtools_map_serial.sh REGIONS.bed VALUES1.bed [VALUES2.bed ...]
+
+Map column 5 from each VALUES file onto REGIONS with `bedtools map -o max`.
+The first result is written to mapped_max_step1.bed in the current directory;
+each additional VALUES file produces mapped_max_stepN.bed using the preceding
+result as its input.
+
+Options:
+  -h, --help  Show this help and exit
+
+Requirements:
+  bedtools must be available in PATH. Existing mapped_max_stepN.bed files are
+  replaced by the corresponding bedtools invocation.
+EOF
+}
+
+case ${1:-} in
+    -h|--help)
+        usage
+        exit 0
+        ;;
+esac
 
 if [ "$#" -lt 2 ]; then
-    echo "Usage: $0 regions.bed values1.bed [values2.bed ...]"
-    exit 1
+    echo "E: Provide a regions BED and at least one values BED." >&2
+    usage >&2
+    exit 2
 fi
+
+command -v bedtools >/dev/null 2>&1 || {
+    echo "E: bedtools is required in PATH." >&2
+    exit 1
+}
 
 regions="$1"
 shift

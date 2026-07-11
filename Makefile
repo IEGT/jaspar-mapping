@@ -139,6 +139,7 @@ check: pssm_scan $(TEST_BINARIES)
 	bash tests/test_localMaxSkmelTADN.sh
 	bash tests/test_indexed_genome_scan.sh
 	bash tests/test_build_fasta_index.sh
+	bash tests/test_script_help.sh
 
 check-r:
 	Rscript tests/test_analyze_bed_cutandrun.R
@@ -146,6 +147,7 @@ check-r:
 check-duckdb:
 	bash tests/test_duckdb_contract.sh
 	bash tests/test_chr1_dense_duckdb.sh
+	bash tests/test_export_dense_bed.sh
 
 check_synthetic_dense: pssm_scan_parquet
 	bash tests/test_synthetic_dense_dataset.sh

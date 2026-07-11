@@ -2,7 +2,21 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: $0 <dense-score.tsv | dense-score-directory> [output.parquet]" >&2
+    cat <<'EOF'
+Usage: dense_tsv_to_parquet.sh INPUT [OUTPUT.parquet]
+
+Convert dense score blocks from tab-separated text to ZSTD-compressed Parquet.
+INPUT may be one .tsv file or a directory, which is searched recursively for
+.tsv files. For one file, OUTPUT defaults to the input basename with .parquet;
+directory mode writes each .parquet beside its corresponding .tsv file.
+
+Options:
+  -h, --help  Show this help and exit
+
+Requirements:
+  The DuckDB command-line client must be available in PATH. Input TSV files
+  must have `block_start` and `scores` columns, where scores is a FLOAT list.
+EOF
 }
 
 sql_quote() {
@@ -28,8 +42,15 @@ convert_one() {
     ) TO '${output_sql}' (FORMAT PARQUET, COMPRESSION ZSTD);"
 }
 
+case ${1:-} in
+    -h|--help)
+        usage
+        exit 0
+        ;;
+esac
+
 if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
-    usage
+    usage >&2
     exit 2
 fi
 
