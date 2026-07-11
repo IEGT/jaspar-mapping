@@ -86,6 +86,11 @@ DISTRIBUTION_CHR=1
 DISTRIBUTION_BIN_WIDTH?=adaptive
 DISTRIBUTION_PSEUDOCOUNT_LABEL=$(if $(PSEUDOCOUNT),_pseudocount_$(PSEUDOCOUNT),)
 DISTRIBUTIONDIR?=score_distributions_$(SCORE_MODE)_bins_$(DISTRIBUTION_BIN_WIDTH)_JASPAR$(JASPAR_VERSION)_chr$(DISTRIBUTION_CHR)$(DISTRIBUTION_PSEUDOCOUNT_LABEL)
+DRY_RUN_FROM?=3600000
+DRY_RUN_TO?=3700000
+DRY_RUN_FULL_CHR1?=0
+DRY_RUN_OUTPUT?=dry_runs/chr1_patz1_tp73_$(if $(filter 1,$(DRY_RUN_FULL_CHR1)),full,from-$(DRY_RUN_FROM)-to-$(DRY_RUN_TO))
+DRY_RUN_RANGE_FLAGS=$(if $(filter 1,$(DRY_RUN_FULL_CHR1)),--full-chr1,--from $(DRY_RUN_FROM) --to $(DRY_RUN_TO))
 
 .SUFFIXES: .gz .bed.gz .cpp .o .fasta .fa.gz _positive_$(CHR).bed _positive_$(CHR).bed.gz _negative_$(CHR).bed _negative_$(CHR).bed.gz _bidirect_$(CHR).bed.gz .bed .bedGraph .combined.bed
 
@@ -133,12 +138,14 @@ check: pssm_scan $(TEST_BINARIES)
 	bash tests/test_fix_missing_bidirect.sh
 	bash tests/test_localMaxSkmelTADN.sh
 	bash tests/test_indexed_genome_scan.sh
+	bash tests/test_build_fasta_index.sh
 
 check-r:
 	Rscript tests/test_analyze_bed_cutandrun.R
 
 check-duckdb:
 	bash tests/test_duckdb_contract.sh
+	bash tests/test_chr1_dense_duckdb.sh
 
 gtf_file_region_retrieval: gtf_file_region_retrieval.cpp progress.o gtf_file_region.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
@@ -164,16 +171,30 @@ genome: $(GENOME)
 genomegz: $(GENOMEGZ)
 
 $(GENOME_INDEX): $(GENOME)
-	samtools faidx $<
+	@if command -v samtools >/dev/null 2>&1; then \
+		samtools faidx $<; \
+	else \
+		python3 scripts/build_fasta_index.py $< --output $@; \
+	fi
 
 %.fasta.fai: %.fasta
-	samtools faidx $<
+	@if command -v samtools >/dev/null 2>&1; then \
+		samtools faidx $<; \
+	else \
+		python3 scripts/build_fasta_index.py $< --output $@; \
+	fi
 
 genome_index: $(GENOME_INDEX)
 
 scan_chr_all_motifs: pssm_scan $(JASPAR) $(GENOME) $(GENOME_INDEX)
 	mkdir -p $(OUTPUTDIR)/$(CHR)
 	./pssm_scan --outdir $(OUTPUTDIR)/$(CHR) --genome $(GENOME) --pssm $(JASPAR) --score-mode $(SCORE_MODE) --threshold $(SCAN_THRESHOLD) --chr $(CHR) $(SCAN_CHR_FLAGS)
+
+dry_run_chr1_patz1_tp73: pssm_scan_parquet $(JASPAR) $(GENOME) $(GENOME_INDEX)
+	bash scripts/run_chr1_patz1_tp73_dry_run.sh --output $(DRY_RUN_OUTPUT) $(DRY_RUN_RANGE_FLAGS)
+
+inspect_chr1_patz1_tp73: dry_run_chr1_patz1_tp73
+	bash scripts/inspect_chr1_dense_dry_run.sh --package $(DRY_RUN_OUTPUT) overview
 
 # Define the pattern rule for generating .bed files
 $(HIT_OUTPUTDIR)/%_negative_$(CHR).bed $(HIT_OUTPUTDIR)/%_positive_$(CHR).bed: pssm_scan $(JASPAR) $(GENOME) $(GENOME_INDEX)
@@ -261,7 +282,7 @@ test_reference_tp73_promoter_chr1: pssm_scan $(JASPAR) $(GENOME) $(GENOME_INDEX)
 	fi ; \
 	echo "I: E2F1 hits in TP73 promoter reference window: $$hits"
 
-.PHONY: test check check-r check-duckdb all $(OUTPUTDIR)/$(CHR) jaspar genome genomegz genome_index scan_chr_all_motifs genome_testdata count datatables files_cutandrun_clean TP73_datatable test_reference_tp73_promoter_chr1 score_distributions_chr1
+.PHONY: test check check-r check-duckdb all $(OUTPUTDIR)/$(CHR) jaspar genome genomegz genome_index scan_chr_all_motifs dry_run_chr1_patz1_tp73 inspect_chr1_patz1_tp73 genome_testdata count datatables files_cutandrun_clean TP73_datatable test_reference_tp73_promoter_chr1 score_distributions_chr1
 .PRECIOUS: $(GENOME) $(GENOMEGZ) %.bed %.bed.gz
 .SECONDARY:
 

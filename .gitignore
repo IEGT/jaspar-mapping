@@ -3,8 +3,11 @@
 .Rhistory
 .Rproj.user/
 .venv/
+__pycache__/
+*.pyc
 .depend
 *.fasta
+*.fai
 *.fa
 *.gtf
 *.fa.gz
@@ -32,3 +35,4 @@ score_distributions_*/
 renv/library/
 renv/staging/
 renv/python/
+dry_runs/

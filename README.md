@@ -81,7 +81,9 @@ Compute facilities:
 To execute this program
  1. Compile binaries
     - Install dependencies:
-      UNIX: sudo apt install libbz2-dev make samtools
+      UNIX: sudo apt install libbz2-dev make
+      `samtools` is preferred for FASTA indexing; when it is absent, Make uses
+      the dependency-free `scripts/build_fasta_index.py` fallback.
     - Compile:
       UNiX: make
  2. Download the exact same genome that your cut'n'run experiments were run against, like +
@@ -200,6 +202,14 @@ Repeat the same command with `--score-mode log_odds` and a different `--outdir`
 for the second TP73 calibration run. The default dependency-free `pssm_scan`
 build still writes TSV blocks; `scripts/dense_tsv_to_parquet.sh` remains as a
 fallback converter for environments where Arrow is not installed.
+
+For a small end-to-end Parquet/DuckDB exercise around the chromosome 1 TP73
+locus, covering PATZ1 (`MA1961.2`) and TP73 (`MA0861.2`) in both score modes and
+orientations, run `make dry_run_chr1_patz1_tp73`. The reproducible runner,
+read-only inspection commands, full-chromosome gate, and GENtle interpretation
+contract are documented in
+[`docs/chr1_patz1_tp73_dry_run.md`](docs/chr1_patz1_tp73_dry_run.md) and
+[`docs/gentle_chr1_duckdb_interpretation_prompt.md`](docs/gentle_chr1_duckdb_interpretation_prompt.md).
 
 ## Automated reference checks
 
