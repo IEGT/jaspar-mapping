@@ -215,6 +215,9 @@ Thresholded BED files can be regenerated without rescanning the genome using
 configuration, chromosome, orientation, alignment-start range, and score while
 streaming directly to plain or gzip-compressed output. See the dry-run document
 for examples and the precise compatibility boundary.
+The reproducible Slurm runner for the full chromosome 1 TP73, E2F1, SP1,
+PATZ1, and POU2F2 panel is documented in
+[`docs/chr1_2026_motif_panel.md`](docs/chr1_2026_motif_panel.md).
 
 ## Automated reference checks
 

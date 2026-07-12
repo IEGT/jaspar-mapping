@@ -75,7 +75,14 @@ if [[ ! -f $metadata_file ]]; then
 fi
 
 expected_sql=${expected//\'/\'\'}
-source_commit=$(git -C "$repository_root" rev-parse HEAD)
+if source_commit=$(git -C "$repository_root" rev-parse HEAD 2>/dev/null); then
+    :
+elif [[ -s $repository_root/SOURCE_COMMIT ]]; then
+    source_commit=$(<"$repository_root/SOURCE_COMMIT")
+else
+    echo "E: Cannot determine the source commit from Git or SOURCE_COMMIT." >&2
+    exit 1
+fi
 database=synthetic_dense.duckdb
 
 (

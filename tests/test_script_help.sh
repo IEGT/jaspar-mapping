@@ -20,6 +20,7 @@ scripts/fix_missing_bidirect_gz.sh
 scripts/genelists.sh
 scripts/inspect_chr1_dense_dry_run.sh
 scripts/plot_tp73_score_distributions.R
+scripts/run_chr1_2026_motif_panel.sh
 scripts/run_chr1_patz1_tp73_dry_run.sh
 scripts/run_what_is_missing.sh
 scripts/shift_bed.awk
@@ -74,6 +75,20 @@ while IFS= read -r script; do
 done < "$expected"
 
 assert_help "OverlapTfPromoters/localMaxSkmelTADN.pl"
+
+panel_config=$("$repository_root/scripts/run_chr1_2026_motif_panel.sh" --print-config)
+[[ $(grep -c $'^Motif\t' <<< "$panel_config") -eq 5 ]] || {
+    echo "E: Chromosome 1 panel does not declare exactly five motifs." >&2
+    exit 1
+}
+for motif in TP73:MA0861.2:16 E2F1:MA0024.3:12 SP1:MA0079.5:9 \
+    PATZ1:MA1961.2:11 POU2F2:MA0507.3:13
+do
+    grep -Fq $'Motif\t'"$motif" <<< "$panel_config" || {
+        echo "E: Chromosome 1 panel is missing $motif." >&2
+        exit 1
+    }
+done
 
 shifted=$(printf '1\t100\t200\tplus\t0\t+\n1\t100\t200\tminus\t0\t-\n' |
     "$repository_root/scripts/shift_bed.awk")
