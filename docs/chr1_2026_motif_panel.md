@@ -32,7 +32,7 @@ sbatch \
   --partition=requeue \
   --ntasks=20 \
   --cpus-per-task=1 \
-  --mem=20G \
+  --mem=64G \
   --time=1-00:00:00 \
   --requeue \
   --chdir="$RUN_ROOT" \
@@ -42,6 +42,13 @@ sbatch \
   --run-root "$RUN_ROOT" \
   --source-commit "$SOURCE_COMMIT"
 ```
+
+The 64 GiB request includes 3 GiB for each scanner plus 4 GiB for the batch
+coordinator and headroom. This is based on observed complete-chromosome peak
+RSS values of approximately 1.8--2.1 GiB per scanner. The runner passes the
+3 GiB reservation to every `srun` step explicitly; otherwise Slurm may assign the
+whole job-memory request to each step and serialize the nominally parallel
+scans.
 
 Each task first writes to a job-specific staging directory. A Parquet file is
 promoted to the final package only after its block extent and total number of

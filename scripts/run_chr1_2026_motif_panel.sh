@@ -7,6 +7,9 @@ readonly JASPAR_SHA256="0dc9b7f9e159a8376c2e52edf373863ae21518bb760ceeea494ad6b7
 readonly GENOME_URL="https://ftp.ensembl.org/pub/release-113/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz"
 readonly SOURCE_ARCHIVE_URL_PREFIX="https://codeload.github.com/IEGT/jaspar-mapping/tar.gz"
 readonly EXPECTED_CHR1_LENGTH=248956422
+readonly SCAN_COUNT=20
+readonly SCAN_MEMORY_MB=3072
+readonly REQUIRED_JOB_MEMORY_MB=$((SCAN_COUNT * SCAN_MEMORY_MB + 4096))
 
 readonly -a MOTIF_IDS=(MA0861.2 MA0024.3 MA0079.5 MA1961.2 MA0507.3)
 readonly -a MOTIF_NAMES=(TP73 E2F1 SP1 PATZ1 POU2F2)
@@ -39,7 +42,7 @@ staging. No existing file is replaced or removed. A rerun reuses only outputs
 that pass structural and window-count validation.
 
 Recommended Haumea submission:
-  sbatch --account=cluster --partition=requeue --ntasks=20 --mem=20G \
+  sbatch --account=cluster --partition=requeue --ntasks=20 --mem=64G \
     --time=1-00:00:00 --requeue --chdir=DIR \
     --output=DIR/logs/slurm-%j.out --error=DIR/logs/slurm-%j.err \
     scripts/run_chr1_2026_motif_panel.sh --run-root DIR --source-commit SHA
@@ -146,6 +149,15 @@ done
     echo "E: The panel requires at least 20 Slurm tasks; found ${SLURM_NTASKS:-0}." >&2
     exit 1
 }
+if [[ ${SLURM_MEM_PER_NODE:-} =~ ^[0-9]+$ &&
+      ${SLURM_JOB_NUM_NODES:-} =~ ^[0-9]+$ ]]; then
+    allocated_memory_mb=$((SLURM_MEM_PER_NODE * SLURM_JOB_NUM_NODES))
+    [[ $allocated_memory_mb -ge $REQUIRED_JOB_MEMORY_MB ]] || {
+        echo "E: Parallel execution requires at least ${REQUIRED_JOB_MEMORY_MB} MB;" \
+            "the allocation provides ${allocated_memory_mb} MB." >&2
+        exit 1
+    }
+fi
 mkdir -p "$run_root"
 run_root=$(cd "$run_root" && pwd -P)
 
@@ -332,7 +344,8 @@ run_one() {
     [[ ! -e $task_stage ]] || { echo "E: Task staging path exists: $task_stage" >&2; return 1; }
     mkdir -p "$task_stage"
     echo "I: Starting $label"
-    srun --exclusive --nodes=1 --ntasks=1 --cpus-per-task=1 --cpu-bind=none \
+    srun --exclusive --nodes=1 --ntasks=1 --cpus-per-task=1 \
+        --mem="${SCAN_MEMORY_MB}M" --cpu-bind=none \
         "$scanner" -v --dense-scores --dense-block-size 65536 \
         --outdir "$task_stage" \
         --genome "$genome_file" --fasta-index "$fasta_index" \
