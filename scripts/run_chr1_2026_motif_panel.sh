@@ -5,6 +5,7 @@ set -euo pipefail
 readonly JASPAR_URL="https://jaspar.elixir.no/download/data/2026/CORE/JASPAR2026_CORE_non-redundant_pfms_jaspar.txt"
 readonly JASPAR_SHA256="0dc9b7f9e159a8376c2e52edf373863ae21518bb760ceeea494ad6b746092e53"
 readonly GENOME_URL="https://ftp.ensembl.org/pub/release-113/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz"
+readonly SOURCE_ARCHIVE_URL_PREFIX="https://codeload.github.com/IEGT/jaspar-mapping/tar.gz"
 readonly EXPECTED_CHR1_LENGTH=248956422
 
 readonly -a MOTIF_IDS=(MA0861.2 MA0024.3 MA0079.5 MA1961.2 MA0507.3)
@@ -23,23 +24,25 @@ PATZ1/MA1961.2, and POU2F2/MA0507.3 in both score modes and orientations:
 20 independent scans in total.
 
 Options:
-  --run-root DIR    Dedicated directory for every generated file (required)
-  --source DIR      Public jaspar-mapping Git checkout (default: script parent)
-  --micromamba FILE Micromamba executable (default: $MAMBA_EXE or micromamba)
-  --print-config    Print the pinned panel and public inputs, then exit
-  -h, --help        Show this help and exit
+  --run-root DIR       Dedicated directory for every generated file (required)
+  --source-commit SHA  Full public Git commit; fetch its archive without Git
+  --source DIR         Git checkout used when --source-commit is omitted
+                       (default: script parent; Git required on execution host)
+  --micromamba FILE    Micromamba executable (default: $MAMBA_EXE or micromamba)
+  --print-config       Print the pinned panel and public inputs, then exit
+  -h, --help           Show this help and exit
 
 The job downloads version-pinned public JASPAR and Ensembl inputs, creates an
 isolated Conda environment below DIR, builds the Arrow-enabled scanner from the
-checked-out Git commit, and writes validated Parquet through per-task staging.
-No existing file is replaced or removed. A rerun reuses only outputs that pass
-structural and window-count validation.
+commit-pinned public source, and writes validated Parquet through per-task
+staging. No existing file is replaced or removed. A rerun reuses only outputs
+that pass structural and window-count validation.
 
 Recommended Haumea submission:
   sbatch --account=cluster --partition=requeue --ntasks=20 --mem=20G \
     --time=1-00:00:00 --requeue --chdir=DIR \
     --output=DIR/logs/slurm-%j.out --error=DIR/logs/slurm-%j.err \
-    scripts/run_chr1_2026_motif_panel.sh --run-root DIR
+    scripts/run_chr1_2026_motif_panel.sh --run-root DIR --source-commit SHA
 EOF
 }
 
@@ -60,8 +63,40 @@ print_config() {
     done
 }
 
+record_url() {
+    local path=$1
+    local url=$2
+    local url_file="$path.url"
+    if [[ -e $url_file ]]; then
+        [[ $(<"$url_file") == "$url" ]] || {
+            echo "E: Recorded URL differs for $path." >&2
+            return 1
+        }
+    else
+        printf '%s\n' "$url" > "$url_file"
+    fi
+}
+
+download_once() {
+    local url=$1
+    local destination=$2
+    local partial="$destination.download-${SLURM_JOB_ID}-${SLURM_RESTART_COUNT:-0}"
+    record_url "$destination" "$url"
+    if [[ -s $destination ]]; then
+        echo "I: Reusing public input $destination"
+        return
+    fi
+    [[ ! -e $destination ]] || { echo "E: Empty input exists: $destination" >&2; return 1; }
+    [[ ! -e $partial ]] || { echo "E: Download staging file exists: $partial" >&2; return 1; }
+    curl --fail --location --retry 5 --output "$partial" "$url"
+    [[ -s $partial ]] || { echo "E: Download is empty: $url" >&2; return 1; }
+    [[ ! -e $destination ]] || { echo "E: Input appeared concurrently: $destination" >&2; return 1; }
+    mv "$partial" "$destination"
+}
+
 run_root=""
 source_dir=$(cd "$(dirname "$0")/.." && pwd)
+source_commit=""
 micromamba_executable=${MAMBA_EXE:-micromamba}
 
 while [[ $# -gt 0 ]]; do
@@ -74,6 +109,11 @@ while [[ $# -gt 0 ]]; do
         --source)
             [[ $# -ge 2 ]] || { echo "E: --source requires a directory." >&2; exit 2; }
             source_dir=$2
+            shift 2
+            ;;
+        --source-commit)
+            [[ $# -ge 2 ]] || { echo "E: --source-commit requires a SHA." >&2; exit 2; }
+            source_commit=$2
             shift 2
             ;;
         --micromamba)
@@ -106,9 +146,6 @@ done
     echo "E: The panel requires at least 20 Slurm tasks; found ${SLURM_NTASKS:-0}." >&2
     exit 1
 }
-[[ -d $source_dir/.git ]] || { echo "E: Git checkout not found: $source_dir" >&2; exit 1; }
-
-source_dir=$(cd "$source_dir" && pwd -P)
 mkdir -p "$run_root"
 run_root=$(cd "$run_root" && pwd -P)
 
@@ -121,15 +158,31 @@ readonly mamba_root="$run_root/mamba-root"
 readonly package_dir="$output_dir/jaspar2026_chr1_dense_5motifs_full"
 mkdir -p "$input_dir" "$output_dir" "$logs_dir" "$staging_root" "$mamba_root"
 
-source_commit=$(git -C "$source_dir" rev-parse HEAD)
-git -C "$source_dir" diff --quiet --ignore-submodules -- || {
-    echo "E: Tracked source changes are present in $source_dir." >&2
-    exit 1
-}
-git -C "$source_dir" diff --cached --quiet --ignore-submodules -- || {
-    echo "E: Staged source changes are present in $source_dir." >&2
-    exit 1
-}
+source_from_archive=0
+if [[ -n $source_commit ]]; then
+    [[ $source_commit =~ ^[0-9a-f]{40}$ ]] || {
+        echo "E: --source-commit must be a full lowercase 40-character Git SHA." >&2
+        exit 2
+    }
+    source_from_archive=1
+else
+    [[ -d $source_dir/.git ]] || { echo "E: Git checkout not found: $source_dir" >&2; exit 1; }
+    source_dir=$(cd "$source_dir" && pwd -P)
+    git_executable=$(command -v git || true)
+    [[ -x $git_executable ]] || {
+        echo "E: Git is unavailable; pass --source-commit to use the public archive." >&2
+        exit 1
+    }
+    source_commit=$("$git_executable" -C "$source_dir" rev-parse HEAD)
+    "$git_executable" -C "$source_dir" diff --quiet --ignore-submodules -- || {
+        echo "E: Tracked source changes are present in $source_dir." >&2
+        exit 1
+    }
+    "$git_executable" -C "$source_dir" diff --cached --quiet --ignore-submodules -- || {
+        echo "E: Staged source changes are present in $source_dir." >&2
+        exit 1
+    }
+fi
 
 readonly code_dir="$run_root/code-$source_commit"
 if [[ ! -d $code_dir ]]; then
@@ -139,7 +192,19 @@ if [[ ! -d $code_dir ]]; then
         exit 1
     }
     mkdir -p "$source_stage"
-    git -C "$source_dir" archive "$source_commit" | tar -x -C "$source_stage"
+    if [[ $source_from_archive -eq 1 ]]; then
+        source_archive="$input_dir/jaspar-mapping-$source_commit.tar.gz"
+        download_once "$SOURCE_ARCHIVE_URL_PREFIX/$source_commit" "$source_archive"
+        tar -tzf "$source_archive" >/dev/null
+        tar -xzf "$source_archive" -C "$source_stage" --strip-components=1
+        [[ -f $source_stage/Makefile ]] || {
+            echo "E: Public source archive does not contain the expected project." >&2
+            exit 1
+        }
+    else
+        "$git_executable" -C "$source_dir" archive "$source_commit" |
+            tar -x -C "$source_stage"
+    fi
     printf '%s\n' "$source_commit" > "$source_stage/SOURCE_COMMIT"
     [[ ! -e $code_dir ]] || { echo "E: Code directory appeared concurrently." >&2; exit 1; }
     mv "$source_stage" "$code_dir"
@@ -171,37 +236,6 @@ export LD_LIBRARY_PATH="$environment_dir/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH
 [[ $(pkg-config --modversion arrow) == 25.0.0 ]] || { echo "E: Arrow 25.0.0 is required." >&2; exit 1; }
 [[ $(pkg-config --modversion parquet) == 25.0.0 ]] || { echo "E: Parquet 25.0.0 is required." >&2; exit 1; }
 duckdb --version | grep -q 'v1\.5\.4' || { echo "E: DuckDB 1.5.4 is required." >&2; exit 1; }
-
-record_url() {
-    local path=$1
-    local url=$2
-    local url_file="$path.url"
-    if [[ -e $url_file ]]; then
-        [[ $(<"$url_file") == "$url" ]] || {
-            echo "E: Recorded URL differs for $path." >&2
-            return 1
-        }
-    else
-        printf '%s\n' "$url" > "$url_file"
-    fi
-}
-
-download_once() {
-    local url=$1
-    local destination=$2
-    local partial="$destination.download-${SLURM_JOB_ID}-${SLURM_RESTART_COUNT:-0}"
-    record_url "$destination" "$url"
-    if [[ -s $destination ]]; then
-        echo "I: Reusing public input $destination"
-        return
-    fi
-    [[ ! -e $destination ]] || { echo "E: Empty input exists: $destination" >&2; return 1; }
-    [[ ! -e $partial ]] || { echo "E: Download staging file exists: $partial" >&2; return 1; }
-    curl --fail --location --retry 5 --output "$partial" "$url"
-    [[ -s $partial ]] || { echo "E: Download is empty: $url" >&2; return 1; }
-    [[ ! -e $destination ]] || { echo "E: Input appeared concurrently: $destination" >&2; return 1; }
-    mv "$partial" "$destination"
-}
 
 readonly jaspar_file="$input_dir/JASPAR2026_CORE_non-redundant_pfms_jaspar.txt"
 readonly genome_gz="$input_dir/Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz"

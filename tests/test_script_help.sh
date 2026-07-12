@@ -90,6 +90,12 @@ do
     }
 done
 
+panel_help=$("$repository_root/scripts/run_chr1_2026_motif_panel.sh" --help)
+grep -Fq -- '--source-commit SHA' <<< "$panel_help" || {
+    echo "E: Chromosome 1 panel help omits its Git-free source mode." >&2
+    exit 1
+}
+
 shifted=$(printf '1\t100\t200\tplus\t0\t+\n1\t100\t200\tminus\t0\t-\n' |
     "$repository_root/scripts/shift_bed.awk")
 expected_shifted=$'1\t600\t700\tplus\t0\t+\n1\t0\t0\tminus\t0\t-'

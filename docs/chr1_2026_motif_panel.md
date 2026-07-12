@@ -14,15 +14,18 @@ scan used to calibrate later sparse genome-wide storage. It runs five JASPAR
 | POU2F2 | `MA0507.3` | 13 |
 
 The runner downloads the inputs directly from the versioned public JASPAR and
-Ensembl URLs printed by `--print-config`. It creates a pinned Conda environment
-inside the run root, archives the current public Git commit into that root,
-builds the direct-Parquet scanner, and launches exactly 20 independent Slurm
-steps. No local workstation files are inputs to the analysis.
+Ensembl URLs printed by `--print-config`. Given `--source-commit`, it also
+downloads that exact commit from the public GitHub archive, so compute nodes do
+not need Git. It creates a pinned Conda environment inside the run root, builds
+the direct-Parquet scanner, and launches exactly 20 independent Slurm steps. No
+local workstation files are inputs to the analysis.
 
 On Haumea, prepare a dedicated directory and submit with the requeue resources:
 
 ```sh
 RUN_ROOT=/data/sm718/codex/jaspar2026_chr1_dense_5motifs
+REPOSITORY=/data/sm718/GitHub/jaspar-mapping
+SOURCE_COMMIT=$(/usr/bin/git -C "$REPOSITORY" rev-parse HEAD)
 mkdir -p "$RUN_ROOT/logs"
 sbatch \
   --account=cluster \
@@ -35,7 +38,9 @@ sbatch \
   --chdir="$RUN_ROOT" \
   --output="$RUN_ROOT/logs/slurm-%j.out" \
   --error="$RUN_ROOT/logs/slurm-%j.err" \
-  scripts/run_chr1_2026_motif_panel.sh --run-root "$RUN_ROOT"
+  "$REPOSITORY/scripts/run_chr1_2026_motif_panel.sh" \
+  --run-root "$RUN_ROOT" \
+  --source-commit "$SOURCE_COMMIT"
 ```
 
 Each task first writes to a job-specific staging directory. A Parquet file is
