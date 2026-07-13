@@ -224,14 +224,30 @@ void testGenomicScoreBlocks() {
     expectNear(plusBlock.scores[0], 11.0, 1e-12, "first dense block score");
     expectNear(plusBlock.scores[1], 21.0, 1e-12, "second dense block score");
     expectNear(plusBlock.scores[2], 32.0, 1e-12, "third dense block score");
+    expectEqual(plusBlock.sequenceValid.size(), static_cast<size_t>(3), "score block validity size");
+    expectTrue(plusBlock.sequenceValid[0] && plusBlock.sequenceValid[1] && plusBlock.sequenceValid[2],
+               "ordinary dense windows have valid sequence");
     expectEqual(plusBlock.validWindows, static_cast<std::uint64_t>(3), "score block valid count");
     expectEqual(plusBlock.skippedWindows, static_cast<std::uint64_t>(0), "score block skipped count");
 
     std::vector<std::uint8_t> codesWithN = {codeForBase('A'), codeForBase('N')};
     const ScoreBlock skippedBlock = calculateScoreBlock(codesWithN, codesWithN.size(), false, 0, 1, flat);
     expectTrue(isSkippedScore(skippedBlock.scores[0]), "N-containing dense score skipped");
+    expectTrue(!skippedBlock.sequenceValid[0], "N-containing dense sequence invalid");
     expectEqual(skippedBlock.validWindows, static_cast<std::uint64_t>(0), "skipped block valid count");
     expectEqual(skippedBlock.skippedWindows, static_cast<std::uint64_t>(1), "skipped block skipped count");
+
+    FlatPSSM zeroCountFlat = flat;
+    zeroCountFlat.scores[0 * BASE_CODE_COUNT + BASE_A] = SENTINEL_SCORE;
+    const std::vector<std::uint8_t> zeroCountCodes = {codeForBase('A'), codeForBase('C')};
+    const ScoreBlock zeroCountBlock = calculateScoreBlock(
+        zeroCountCodes, zeroCountCodes.size(), false, 0, 1, zeroCountFlat);
+    expectTrue(isSkippedScore(zeroCountBlock.scores[0]), "zero-count motif score is sentinel");
+    expectTrue(zeroCountBlock.sequenceValid[0], "zero-count motif score retains valid DNA sequence");
+    expectEqual(zeroCountBlock.validWindows, static_cast<std::uint64_t>(1),
+                "zero-count motif score remains a dense candidate");
+    expectEqual(zeroCountBlock.skippedWindows, static_cast<std::uint64_t>(0),
+                "zero-count motif score is not a missing DNA window");
 }
 
 void testScoreRangeAndPWMRelativeScore() {

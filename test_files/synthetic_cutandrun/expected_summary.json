@@ -1,0 +1,19 @@
+{
+  "average_precision": 0.8761904761904762,
+  "containment_rule": "component_start < motif_start and component_end > motif_end",
+  "coordinate_mode": "BED 0-based half-open",
+  "coverage_merge_rule": "overlapping or directly adjacent intervals",
+  "f1": 0.8333333333333333,
+  "f1_threshold": -2.0,
+  "motif_support_prevalence": 0.625,
+  "n_components_immersing_any_motif": 5,
+  "n_coverage_components": 8,
+  "n_coverage_intervals": 10,
+  "n_motifs": 8,
+  "n_supported_motifs": 5,
+  "roc_auc": 0.7333333333333333,
+  "sample_id": "synthetic_tp73",
+  "score_mode": "synthetic_score",
+  "youden_j": 0.6,
+  "youden_threshold": 6.0
+}

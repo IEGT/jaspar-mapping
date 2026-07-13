@@ -13,6 +13,7 @@ __pycache__/
 *.fa.gz
 *.o
 *.bed
+!test_files/synthetic_cutandrun/*.bed
 *.gch
 *.txt
 !requirements.txt
@@ -24,6 +25,7 @@ context
 tests/test_pssm_scan
 tests/test_gtf_file_region
 tests/test_compressed_file_reader
+tests/test_context
 *.gz
 *.RData
 *.pdf

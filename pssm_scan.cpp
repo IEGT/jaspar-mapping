@@ -422,9 +422,12 @@ public:
         }
 
         auto* valueBuilder = static_cast<arrow::FloatBuilder*>(scoresBuilder_->value_builder());
-        for (double score : block.scores) {
-            if (isSkippedScore(score)) {
+        for (size_t i = 0; i < block.scores.size(); ++i) {
+            const double score = block.scores[i];
+            if (i >= block.sequenceValid.size() || !block.sequenceValid[i] || std::isnan(score)) {
                 status = valueBuilder->AppendNull();
+            } else if (score < SENTINEL_SCORE / 10.0) {
+                status = valueBuilder->Append(-std::numeric_limits<float>::infinity());
             } else {
                 status = valueBuilder->Append(static_cast<float>(score));
             }
@@ -521,8 +524,11 @@ void writeDenseScoreBlock(std::ostream& outFile, const ScoreBlock& block) {
         if (i > 0) {
             outFile << ",";
         }
-        if (isSkippedScore(block.scores[i])) {
+        if (i >= block.sequenceValid.size() || !block.sequenceValid[i] ||
+            std::isnan(block.scores[i])) {
             outFile << "NULL";
+        } else if (block.scores[i] < SENTINEL_SCORE / 10.0) {
+            outFile << "-Inf";
         } else {
             outFile << std::setprecision(9) << block.scores[i];
         }

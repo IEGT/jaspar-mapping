@@ -131,6 +131,8 @@ SELECT
     COUNT(*) AS n_windows,
     COUNT(score) AS n_valid_windows,
     COUNT(*) - COUNT(score) AS n_skipped_windows,
+    COUNT(*) FILTER (WHERE isinf(score) AND score < 0) AS n_negative_infinity_windows,
+    COUNT(*) FILTER (WHERE isfinite(score)) AS n_finite_windows,
     MIN(score) AS min_score,
     AVG(score) AS mean_score,
     MAX(score) AS max_score,
@@ -165,8 +167,14 @@ valid_scores AS (
     WHERE score IS NOT NULL
 )
 SELECT
-    ROUND(FLOOR(score / bin_width) * bin_width, 12) AS bin_start,
-    ROUND((FLOOR(score / bin_width) + 1) * bin_width, 12) AS bin_end,
+    CASE WHEN isinf(score) AND score < 0
+         THEN '-Infinity'::DOUBLE
+         ELSE ROUND(FLOOR(score / bin_width) * bin_width, 12)
+    END AS bin_start,
+    CASE WHEN isinf(score) AND score < 0
+         THEN '-Infinity'::DOUBLE
+         ELSE ROUND((FLOOR(score / bin_width) + 1) * bin_width, 12)
+    END AS bin_end,
     COUNT(*) AS n_windows,
     COUNT(*)::DOUBLE / SUM(COUNT(*)) OVER () AS fraction
 FROM valid_scores

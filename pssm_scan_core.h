@@ -49,6 +49,9 @@ struct FlatPSSM {
 struct ScoreBlock {
     size_t blockStart = 0;
     std::vector<double> scores;
+    // Separates unavailable sequence (for example N under --skip-N) from a
+    // valid alignment whose unsmoothed motif score is negative infinity.
+    std::vector<bool> sequenceValid;
     std::uint64_t validWindows = 0;
     std::uint64_t skippedWindows = 0;
 };

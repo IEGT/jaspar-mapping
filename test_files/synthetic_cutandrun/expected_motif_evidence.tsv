@@ -1,0 +1,9 @@
+motif_index	chrom	start	end	motif_name	score	strand	ordinary_max_depth	effective_max_depth	supported	coverage_component_start	coverage_component_end	coverage_component_members
+1	1	10	14	TP73_A	10	+	1	1	1	8	16	embrace_A
+2	1	20	24	TP73_B	8	-	1	1	1	18	26	embrace_B
+3	1	30	34	TP73_C	6	+	2	2	1	28	36	embrace_C_1,embrace_C_2
+4	1	40	44	TP73_D	4	-	1	0	0	NA	NA	NA
+5	1	50	54	TP73_E	2	+	1	0	0	NA	NA	NA
+6	1	60	64	TP73_F	0	-	1	1	1	58	66	embrace_F
+7	1	70	74	TP73_G	-2	+	1	1	1	68	76	join_G_left,join_G_right
+8	1	80	84	TP73_H	-4	-	0	0	0	NA	NA	NA

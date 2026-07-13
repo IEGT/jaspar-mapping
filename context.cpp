@@ -1,288 +1,373 @@
-#include <iostream>
-#include <fstream>
-#include <sstream>
-#include <string>
-#include <queue>
-#include <vector>
-#include <tuple>
-#include <limits>
+#include "context_core.h"
+
+#include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <limits>
+#include <random>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <unordered_set>
+#include <vector>
 
-#include "compressed_file_reader.h"
+namespace {
 
-int debug=0;
+constexpr std::size_t DEFAULT_BATCH_SIZE = 32;
+constexpr std::size_t MAX_TEMPORARY_BATCH_FILES = 64;
+// The spool is deliberately fixed-width so its size can be checked before a
+// potentially very wide legacy context table is generated.
+constexpr std::uintmax_t SERIALIZED_ANNOTATION_BYTES =
+    3 * sizeof(double) + sizeof(std::uint64_t) + 2 * sizeof(std::uint8_t);
 
-/** \brief Function to get the basename of a file path
- * Should work on both Windows and Unix paths - crudely though
- * @param filePath - path to file
- * @return basename of the file
- */
-std::string basename(const std::string& filePath) {
-    const size_t lastSlash = filePath.find_last_of("/\\");
-    if (lastSlash == std::string::npos) {
-        return filePath; // No slash found, return the whole path
-    }
-    return filePath.substr(lastSlash + 1);
-}
-
-/** \brief Representation of single line in .bed file */
-struct BedEntry {
-    bool hasName=false;
-    std::string chrom;
-    int start;
-    int end;
-    std::string name;
-    double score;
-    std::string line;
-    char strand;
-
-    BedEntry(const std::string& chrom, int start, int end,
-            const std::string& name, const double& score,
-            const char strand = '.', const std::string& line = "", const bool hasName=false)
-        : chrom(chrom), start(start), end(end), name(name), score(score), strand(strand), line(line), hasName(hasName) {}
+struct Options {
+    std::int64_t flankBp = 150;
+    std::size_t batchSize = DEFAULT_BATCH_SIZE;
+    std::filesystem::path temporaryDirectory = std::filesystem::temp_directory_path();
+    bool excludeSameNamedLocus = true;
+    bool verbose = false;
+    std::string mainBedFile;
+    std::vector<std::string> otherBedFiles;
 };
 
-/** \brief Splits line of .bed file and retrieves values of relevance
- * @param line - line from .bed file
- * @param entry - BedEntry object to store values
- */
-bool parseBedLine(const std::string& line, BedEntry& entry, const bool hasName=false) {
-    std::istringstream iss(line);
-    std::string chrom;
-    int start, end;
-    std::string name;
-    double score;
-    char strand;
+struct BatchFile {
+    std::filesystem::path path;
+    std::size_t columnCount = 0;
+};
 
-    if ( hasName && iss >> chrom >> start >> end >> name >> score >> strand) {
-        entry = BedEntry(chrom, start, end, name, score, strand, line, true);
-        return true;
-    } else if (iss >> chrom >> start >> end >> score >> strand) {
-        entry = BedEntry(chrom, start, end, "", score, strand, line, false);
-        return true;
+class TemporaryFiles {
+public:
+    // Remove private spool files on success and on exception; final output is
+    // written by the Makefile through a separate atomic temporary file.
+    ~TemporaryFiles() {
+        for (const BatchFile& file : files_) {
+            std::error_code error;
+            std::filesystem::remove(file.path, error);
+        }
     }
-    std::cerr << "Error parsing line (hasName="<<hasName<<"): " << line << std::endl;
-    return false;
+
+    void add(BatchFile file) { files_.push_back(std::move(file)); }
+    const std::vector<BatchFile>& files() const { return files_; }
+
+private:
+    std::vector<BatchFile> files_;
+};
+
+void printHelp(const char* programName) {
+    std::cout
+        << "Usage: " << programName
+        << " [options] <main.bed> <other1.bed> [<other2.bed> ...]\n\n"
+        << "Annotate each anchor in main.bed with the strongest and the number of\n"
+        << "neighboring motif occurrences from each other BED file. Distances are\n"
+        << "between BED interval centers. The output is a legacy wide table on stdout.\n\n"
+        << "Options:\n"
+        << "  --flank BP          Center-to-center radius on each side (default: 150)\n"
+        << "  --batch-size N      Secondary files held per batch (default: 32)\n"
+        << "  --temp-dir DIR      Temporary wide-table spool directory\n"
+        << "  --include-self      Include an exact same-named anchor locus (default: exclude)\n"
+        << "  -v, --verbose       Report batch progress\n"
+        << "  -h, --help          Show this help and exit\n\n"
+        << "Inputs must be BED6+ sorted by chromosome and start; main.bed should\n"
+        << "contain one fixed-width anchor motif. _Shift is the\n"
+        << "motif-center displacement after orienting the anchor to '+'.\n"
+        << "_GenomicShift retains the unflipped genomic displacement.\n";
 }
 
-/** \brief Process main .bed file and list of other .bed files
- * @param mainBedFile - path to main .bed file
- * @param otherBedFiles - list of paths to other .bed files
- * 
- * The annotations vector stores tuples with the following elements:
- * 1. Distance in base pairs of the position of the feature minus the position of the reference. The strand/orientation will not affect the sign.
- * 2. The score value of the feature.
- * 3. Indication of the strand/orientation of the feature and the reference is the same (1 if yes, 0 if not).
- * 4. Counter about the number of features of the same kind within the window to the reference.
- */
-void processBedFiles(const std::string& mainBedFile,
-                     const std::vector<std::string>& otherBedFiles, const bool hasName=false) {
-    //std::ifstream mainFile(mainBedFile);
-    CompressedFileReader mainFile(mainBedFile);
-    /*if (!mainFile.is_open()) {
-        std::cerr << "Error opening main .bed file: " << mainBedFile << std::endl;
-        return;
-    }*/
-
-    /** open all other .bed files and add to otherFiles vector */
-    std::vector<std::unique_ptr<CompressedFileReader>> otherFiles;
-    for (const auto& file : otherBedFiles) {
-        otherFiles.emplace_back(std::make_unique<CompressedFileReader>(file,true));
+std::uint64_t parseUnsigned(const std::string& text, const std::string& option) {
+    std::size_t consumed = 0;
+    std::uint64_t value = 0;
+    try {
+        value = std::stoull(text, &consumed);
+    } catch (const std::exception&) {
+        throw std::invalid_argument(option + " expects a non-negative integer");
     }
+    if (consumed != text.size()) {
+        throw std::invalid_argument(option + " expects a non-negative integer");
+    }
+    return value;
+}
 
-    /** Create all the queues that buffer the lines in the .bed files. */
-    std::vector<std::queue<BedEntry>> queues(otherFiles.size());
-    std::vector<std::string> shortName(otherFiles.size());
-    for (size_t i = 0; i < shortName.size(); ++i) {
-        std::string base = basename(otherBedFiles[i]);
-        size_t pos = base.find('_');
-        if (pos != std::string::npos) {
-            pos = base.find('_', pos + 1);
-            if (pos != std::string::npos) {
-                //std::cerr << "A" << std::endl;
-                shortName[i] = base.substr(0, pos);
-            } else {
-                //std::cerr << "B" << std::endl;
-                shortName[i] = base;
+Options parseArguments(const int argc, const char* const argv[]) {
+    Options options;
+    std::vector<std::string> positional;
+    for (int index = 1; index < argc; ++index) {
+        const std::string argument = argv[index];
+        auto requireValue = [&](const std::string& option) -> std::string {
+            if (++index >= argc) throw std::invalid_argument(option + " requires a value");
+            return argv[index];
+        };
+
+        if (argument == "-h" || argument == "--help") {
+            printHelp(argv[0]);
+            std::exit(0);
+        }
+        if (argument == "-v" || argument == "--verbose") {
+            options.verbose = true;
+        } else if (argument == "--include-self") {
+            options.excludeSameNamedLocus = false;
+        } else if (argument == "--flank") {
+            const std::uint64_t value = parseUnsigned(requireValue(argument), argument);
+            if (value > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max() / 2)) {
+                throw std::invalid_argument("--flank is too large");
             }
+            options.flankBp = static_cast<std::int64_t>(value);
+        } else if (argument == "--batch-size") {
+            const std::uint64_t value = parseUnsigned(requireValue(argument), argument);
+            if (value == 0 || value > std::numeric_limits<std::size_t>::max()) {
+                throw std::invalid_argument("--batch-size must be greater than zero");
+            }
+            options.batchSize = static_cast<std::size_t>(value);
+        } else if (argument == "--temp-dir") {
+            options.temporaryDirectory = requireValue(argument);
+        } else if (!argument.empty() && argument.front() == '-') {
+            throw std::invalid_argument("unknown option: " + argument);
         } else {
-            //std::cerr << "C" << std::endl;
-            shortName[i] = base;
+            positional.push_back(argument);
         }
     }
 
-    /** Iterate over all lines in the main .bed file and annotate it. */
-    std::string line;
-    size_t lineCount = 0;
-    while (mainFile.getline(line)) {
+    if (positional.size() < 2) {
+        throw std::invalid_argument("a main BED and at least one neighboring BED are required");
+    }
+    options.mainBedFile = positional.front();
+    options.otherBedFiles.assign(positional.begin() + 1, positional.end());
+    return options;
+}
 
-        lineCount++;
-        bool readingHeader=0;
+std::string humanBytes(const std::uintmax_t bytes) {
+    static const char* units[] = {"B", "KiB", "MiB", "GiB", "TiB"};
+    double value = static_cast<double>(bytes);
+    std::size_t unit = 0;
+    while (value >= 1024.0 && unit + 1 < std::size(units)) {
+        value /= 1024.0;
+        ++unit;
+    }
+    std::ostringstream output;
+    output << std::fixed << std::setprecision(unit == 0 ? 0 : 1) << value << ' ' << units[unit];
+    return output.str();
+}
 
-        /** Read next entry of main .bed file. */
-        BedEntry mainEntry("", 0, 0, "", 0.0, '.', line, true);
+std::uintmax_t estimatedTemporaryBytes(const std::size_t rows, const std::size_t columns) {
+    if (rows != 0 && columns > std::numeric_limits<std::uintmax_t>::max() / rows) {
+        throw std::overflow_error("temporary-space estimate overflowed");
+    }
+    const std::uintmax_t cells = static_cast<std::uintmax_t>(rows) * columns;
+    if (cells > std::numeric_limits<std::uintmax_t>::max() / SERIALIZED_ANNOTATION_BYTES) {
+        throw std::overflow_error("temporary-space estimate overflowed");
+    }
+    return cells * SERIALIZED_ANNOTATION_BYTES;
+}
 
-        if (line.starts_with('#')) continue;
-        if (line.starts_with("Chr")) {
-            std::cerr << "D: Reading header line for main file" << std::endl;
-            std::cout << line;
-            readingHeader=1;
-        }
-
-        if (!readingHeader && !parseBedLine(line, mainEntry, true)) {
-            std::cerr << "Main file: Error parsing line " << lineCount << " in main .bed file:"
-                      << std::endl << line << std::endl;
-            continue;
-        }
-
-        if (readingHeader) {
-            std::cerr << "D: Header line to represent each other file's annotation" << std::endl;
-            // continue header line for other files - even though those files have not yet been read
-            for (size_t i = 0; i < otherFiles.size(); ++i) {
-                std::cerr << "   - " << shortName[i] << std::endl;
-                std::cout << "\t" << shortName[i]<<"_Shift" << "\t" << shortName[i]<<"_Score"
-                          << "\t" << shortName[i]<<"_StrandEqual" << "\t" << shortName[i]<<"_NumInWindow";
-            }
-            std::cout << std::endl;;
-            continue; // need valid mainEntry for the rest of the loop
-        }
-
-        /** Store the best annotation for each other file, see header of other files for details. */
-        std::vector<std::tuple<int, double, int, int>> annotations(otherFiles.size(),
-                    std::make_tuple(std::numeric_limits<int>::max(), -std::numeric_limits<double>::max(), 0, 0));
-        std::vector<std::size_t> otherLineCount(otherFiles.size(), 0);
-        std::vector<std::size_t> atEndOfFile(otherFiles.size(), 0);
-
-        //std::cerr << "Processing line " << lineCount << " : ";
-
-        for (size_t i = 0; i < otherFiles.size(); ++i) {
-            if (debug) std::cerr << ".";
-
-            /** Ensure that all queue elements beyond the 100 bp limit are removed from queue. */
-            while (!queues[i].empty()
-                && (   (queues[i].front().chrom < mainEntry.chrom)
-                    || (queues[i].front().chrom == mainEntry.chrom && queues[i].front().end < mainEntry.start - 100))) {
-                queues[i].pop();
-            }
-
-            /** Ensure that all queue elements within the 100 bp limit are added to queue. */
-            while (!atEndOfFile[i]) {
-                if (!otherFiles[i]->getline(line)) {
-                    //std::cerr << "End of file reached for " << otherBedFiles[i] << std::endl;
-                    atEndOfFile[i] = 1;
-                    break;
-                }
-                otherLineCount[i]++; // starting from 1
-
-                if (line.starts_with('#')) continue;
-                if (line.starts_with("Chr")) {
-                    continue; // skip header - may appear also at end after merge of bed files
-                }
-
-                BedEntry otherEntry("", 0, 0, "", 0.0, '.', line, true);
-                if (!parseBedLine(line, otherEntry, true)) {
-                    std::cerr << "Other file '" << otherBedFiles[i] << "': Error parsing line '" << otherLineCount[i] << "' in .bed file: " << line << std::endl;
-                    continue;
-                }
-                if (debug) std::cerr << "D: Other entry (" << otherBedFiles[i] << ":" << otherLineCount[i] << "): " << otherEntry.chrom << ":" << otherEntry.start << "-" << otherEntry.end << std::endl;
-
-
-                // proceeding to next line of putative interest
-                if (otherEntry.chrom < mainEntry.chrom) {
-                    // need to read more lines to reach chrom of mainEntry
-                    continue;
-                }
-
-                if (otherEntry.chrom > mainEntry.chrom) {
-                    // Unread the line if it's too far downstream or on the next chromosome
-                    otherFiles[i]->unread(line);
-                    break;
-                }
-
-                if ( otherEntry.chrom != mainEntry.chrom ) {
-                    std::cerr << "E: Logic error: otherEntry.chrom != mainEntry.chrom" << std::endl;
-                    abort();
-                }
-
-                // need to read more lines to reach 100 bp upstream
-                if ( otherEntry.start < mainEntry.start - 100 ) {
-                    continue; // skip this line, read next
-                }
-
-                if (otherEntry.end > mainEntry.end + 100) {
-                    // Unread the line if it's too far downstream or on the samechromosome
-                    otherFiles[i]->unread(line);
-                    break;
-                }
-
-                // This is a valid entry to be considered
-                queues[i].push(otherEntry);
-
-                if (debug) std::cerr << "D: Added to queue " << i << ": now with size " << queues[i].size() << std::endl;
-
-            } // while true
-
-            /** Find the best annotation within the 100 bp limit. */
-            if (queues[i].empty()) {
-                annotations[i] = std::make_tuple(-100000, -1E10, 0, 0);
-            }
-            else {
-                std::queue<BedEntry> tempQueue = queues[i];
-                size_t queueSize = tempQueue.size();
-                while (!tempQueue.empty()) {
-                    const auto& entry = tempQueue.front();
-                    if (entry.chrom == mainEntry.chrom && std::abs(entry.start - mainEntry.start) <= 100) {
-                        if (entry.score > std::get<1>(annotations[i])) {
-                            annotations[i] = std::make_tuple(entry.start - mainEntry.start, entry.score, entry.strand == mainEntry.strand ? 1 : 0, queueSize);
-                        }
-                    }
-                    tempQueue.pop();
-                }
-            }
-        } // for each other file
-        //if (debug) std::cerr << std::endl; // end of line processing
-
-        /** Write to stdout, first the complete line of the main .bed, then the extra columns for the other .bed files */
-        std::cout << mainEntry.line;
-        for (const auto& annotation : annotations) {
-            if (0 == std::get<3>(annotation)) {
-                std::cout << "\t" << "NA" << "\t" << "NA" << "\t" << "NA" << "\t" << std::get<3>(annotation);
-            }
-            else {
-                std::cout << "\t" << std::get<0>(annotation) << "\t" << std::get<1>(annotation) << "\t" << std::get<2>(annotation) << "\t" << std::get<3>(annotation);
-            }
-        }
-        std::cout << std::endl;
+void verifyTemporarySpace(const Options& options, const std::size_t rowCount) {
+    std::filesystem::create_directories(options.temporaryDirectory);
+    const std::uintmax_t estimate = estimatedTemporaryBytes(rowCount, options.otherBedFiles.size());
+    const std::filesystem::space_info available = std::filesystem::space(options.temporaryDirectory);
+    constexpr std::uintmax_t safetyMargin = 64ULL * 1024ULL * 1024ULL;
+    std::cerr << "I: Legacy wide context needs approximately " << humanBytes(estimate)
+              << " of temporary space in '" << options.temporaryDirectory.string()
+              << "' (available: " << humanBytes(available.available) << ").\n";
+    if (estimate > available.available
+        || available.available - estimate < safetyMargin) {
+        throw std::runtime_error("insufficient temporary disk space for legacy wide context output");
     }
 }
 
-/** \brief Main entry point.
- * Handling arguments and invoking "processBedFiles"
- */
-int main( int argc, const char* const argv[] ) {
-    if (argc < 3) {
-        std::cerr << "Usage: " << argv[0] << " <main.bed> <other1.bed> [<other2.bed> ...]" << std::endl;
-        std::cerr << argv[0] << " - Annotate a .bed file with annotations from other .bed files." << std::endl;
-        std::cerr << std::endl;
-        std::cerr << "The program reads the main .bed file and annotates each line with the highest-scoring annotation from the other .bed files within a 100 bp window. "
-                     "The output is written to stdout." << std::endl;
+std::filesystem::path uniqueBatchPath(const std::filesystem::path& directory,
+                                      const std::size_t batchIndex) {
+    const auto clockValue = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+    std::random_device random;
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        const std::string name = "jaspar-context-"
+                                 + std::to_string(static_cast<unsigned long long>(clockValue))
+                                 + "-" + std::to_string(batchIndex)
+                                 + "-" + std::to_string(random()) + ".bin";
+        const std::filesystem::path path = directory / name;
+        if (!std::filesystem::exists(path)) return path;
+    }
+    throw std::runtime_error("could not allocate a unique temporary context filename");
+}
 
-        std::cerr << "The .bed files must be sorted by chromosome and start position, "
-                     "chromosome names be withot a 'chr' prefix." << std::endl;
+template <typename Value>
+void writeBinary(std::ostream& output, const Value& value) {
+    output.write(reinterpret_cast<const char*>(&value), sizeof(value));
+    if (!output) throw std::runtime_error("failed writing temporary context data");
+}
 
-        std::cerr << "To start from a UNIX shell, you may use the following command:" << std::endl
-                  << argv[0] << " main.bed somefolder/*positive.bed" << std::endl;
+template <typename Value>
+void readBinary(std::istream& input, Value& value) {
+    input.read(reinterpret_cast<char*>(&value), sizeof(value));
+    if (!input) throw std::runtime_error("failed reading temporary context data");
+}
 
+void writeAnnotation(std::ostream& output, const motif_context::ContextAnnotation& annotation) {
+    const std::uint8_t hasMatch = annotation.hasMatch ? 1 : 0;
+    const std::uint8_t strandEqual = annotation.strandEqual ? 1 : 0;
+    writeBinary(output, annotation.genomicCenterShift);
+    writeBinary(output, annotation.anchorOrientedCenterShift);
+    writeBinary(output, annotation.score);
+    writeBinary(output, annotation.count);
+    writeBinary(output, hasMatch);
+    writeBinary(output, strandEqual);
+}
+
+motif_context::ContextAnnotation readAnnotation(std::istream& input) {
+    motif_context::ContextAnnotation annotation;
+    std::uint8_t hasMatch = 0;
+    std::uint8_t strandEqual = 0;
+    readBinary(input, annotation.genomicCenterShift);
+    readBinary(input, annotation.anchorOrientedCenterShift);
+    readBinary(input, annotation.score);
+    readBinary(input, annotation.count);
+    readBinary(input, hasMatch);
+    readBinary(input, strandEqual);
+    annotation.hasMatch = hasMatch != 0;
+    annotation.strandEqual = strandEqual != 0;
+    return annotation;
+}
+
+std::vector<std::string> contextColumnPrefixes(const std::vector<std::string>& files) {
+    std::vector<std::string> prefixes;
+    std::unordered_set<std::string> observed;
+    prefixes.reserve(files.size());
+    for (const std::string& file : files) {
+        const std::string prefix = motif_context::basenameWithoutContextSuffix(file);
+        if (!observed.insert(prefix).second) {
+            throw std::runtime_error("context output column prefix collision: " + prefix);
+        }
+        prefixes.push_back(prefix);
+    }
+    return prefixes;
+}
+
+std::size_t effectiveBatchSize(const Options& options) {
+    const std::size_t minimumForFileLimit =
+        (options.otherBedFiles.size() + MAX_TEMPORARY_BATCH_FILES - 1)
+        / MAX_TEMPORARY_BATCH_FILES;
+    return std::max(options.batchSize, std::max<std::size_t>(1, minimumForFileLimit));
+}
+
+void buildBatchFiles(const Options& options,
+                     const std::vector<motif_context::BedEntry>& anchors,
+                     TemporaryFiles& temporaryFiles) {
+    const std::size_t batchSize = effectiveBatchSize(options);
+    std::size_t batchIndex = 0;
+    for (std::size_t first = 0; first < options.otherBedFiles.size(); first += batchSize) {
+        const std::size_t last = std::min(first + batchSize, options.otherBedFiles.size());
+        std::vector<std::vector<motif_context::ContextAnnotation>> columns;
+        columns.reserve(last - first);
+        for (std::size_t index = first; index < last; ++index) {
+            if (options.verbose) {
+                std::cerr << "I: Context " << (index + 1) << "/"
+                          << options.otherBedFiles.size() << ": "
+                          << options.otherBedFiles[index] << '\n';
+            }
+            columns.push_back(motif_context::annotateFromBedFile(
+                anchors, options.otherBedFiles[index], options.flankBp,
+                options.excludeSameNamedLocus, false));
+        }
+
+        const std::filesystem::path path =
+            uniqueBatchPath(options.temporaryDirectory, batchIndex++);
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        if (!output) throw std::runtime_error("failed to create temporary file: " + path.string());
+        for (std::size_t row = 0; row < anchors.size(); ++row) {
+            for (const auto& column : columns) writeAnnotation(output, column[row]);
+        }
+        output.close();
+        if (!output) throw std::runtime_error("failed to close temporary file: " + path.string());
+        temporaryFiles.add({path, last - first});
+    }
+}
+
+void printDistance(const double value) {
+    const double rounded = std::round(value);
+    if (std::abs(value - rounded) < 1e-12) {
+        std::cout << static_cast<std::int64_t>(rounded);
+    } else {
+        std::cout << std::fixed << std::setprecision(1) << value << std::defaultfloat;
+    }
+}
+
+void writeWideOutput(const Options& options,
+                     const motif_context::BedTable& anchors,
+                     const std::vector<std::string>& prefixes,
+                     const TemporaryFiles& temporaryFiles) {
+    std::vector<std::ifstream> batchInputs;
+    batchInputs.reserve(temporaryFiles.files().size());
+    for (const BatchFile& file : temporaryFiles.files()) {
+        batchInputs.emplace_back(file.path, std::ios::binary);
+        if (!batchInputs.back()) {
+            throw std::runtime_error("failed opening temporary file: " + file.path.string());
+        }
+    }
+
+    if (!anchors.header.empty()) {
+        std::cout << anchors.header
+                  << "\tContextFlankBp\tContextDistanceMetric\tContextSelfMatchPolicy";
+        for (const std::string& prefix : prefixes) {
+            std::cout << '\t' << prefix << "_Shift"
+                      << '\t' << prefix << "_GenomicShift"
+                      << '\t' << prefix << "_Score"
+                      << '\t' << prefix << "_StrandEqual"
+                      << '\t' << prefix << "_NumInWindow";
+        }
+        std::cout << '\n';
+    }
+
+    for (const motif_context::BedEntry& anchor : anchors.entries) {
+        std::cout << anchor.line << '\t' << options.flankBp
+                  << "\tmotif_center\t"
+                  << (options.excludeSameNamedLocus ? "exclude_same_named_locus"
+                                                    : "include_self");
+        for (std::size_t batch = 0; batch < batchInputs.size(); ++batch) {
+            for (std::size_t column = 0;
+                 column < temporaryFiles.files()[batch].columnCount; ++column) {
+                const motif_context::ContextAnnotation annotation =
+                    readAnnotation(batchInputs[batch]);
+                if (!annotation.hasMatch) {
+                    std::cout << "\tNA\tNA\tNA\tNA\t0";
+                    continue;
+                }
+                std::cout << '\t';
+                printDistance(annotation.anchorOrientedCenterShift);
+                std::cout << '\t';
+                printDistance(annotation.genomicCenterShift);
+                std::cout << '\t' << std::setprecision(15) << annotation.score
+                          << '\t' << (annotation.strandEqual ? 1 : 0)
+                          << '\t' << annotation.count;
+            }
+        }
+        std::cout << '\n';
+    }
+}
+
+} // namespace
+
+int main(const int argc, const char* const argv[]) {
+    try {
+        const Options options = parseArguments(argc, argv);
+        const std::vector<std::string> prefixes =
+            contextColumnPrefixes(options.otherBedFiles);
+        const motif_context::BedTable anchors =
+            motif_context::readBedTable(options.mainBedFile, options.verbose);
+        if (anchors.entries.empty()) {
+            throw std::runtime_error("main BED contains no anchor rows");
+        }
+
+        verifyTemporarySpace(options, anchors.entries.size());
+        TemporaryFiles temporaryFiles;
+        buildBatchFiles(options, anchors.entries, temporaryFiles);
+        writeWideOutput(options, anchors, prefixes, temporaryFiles);
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << "E: " << error.what() << '\n';
+        std::cerr << "Try --help for usage.\n";
         return 1;
     }
-
-    std::string mainBedFile = argv[1];
-    std::vector<std::string> otherBedFiles;
-    for (int i = 2; i < argc; ++i) {
-        otherBedFiles.push_back(argv[i]);
-    }
-
-    processBedFiles(mainBedFile, otherBedFiles);
-
-    return 0;
 }

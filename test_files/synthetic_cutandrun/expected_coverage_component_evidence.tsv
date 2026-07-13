@@ -1,0 +1,9 @@
+component_index	chrom	start	end	source_interval_count	source_intervals	immersed_motif_count	best_immersed_motif_score
+1	1	8	16	1	embrace_A	1	10
+2	1	18	26	1	embrace_B	1	8
+3	1	28	36	2	embrace_C_1,embrace_C_2	1	6
+4	1	40	46	1	equal_left_D	0	NA
+5	1	48	54	1	equal_right_E	0	NA
+6	1	58	66	1	embrace_F	1	0
+7	1	68	76	2	join_G_left,join_G_right	1	-2
+8	1	90	98	1	background	0	NA

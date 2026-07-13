@@ -10,8 +10,11 @@ expected="$temporary/expected-scripts.txt"
 actual="$temporary/actual-scripts.txt"
 
 cat > "$expected" <<'EOF'
+scripts/analyze_cutandrun_containment.py
+scripts/analyze_dense_cutandrun_coverage.py
 scripts/bedtools_map_serial.sh
 scripts/build_fasta_index.py
+scripts/build_motif_context.py
 scripts/dense_tsv_to_parquet.sh
 scripts/export_dense_bed.py
 scripts/fetch_region_to_embl.py

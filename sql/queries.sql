@@ -142,3 +142,51 @@ ORDER BY cell_line, antibody, isoform, replicate, strand, bin_order;
 SELECT *
 FROM score_calibration_bin
 ORDER BY bin_order;
+
+-- Q10. TP73 tandem partners for one anchor. An exact same-span orientation
+--      alternative is retained in motif_context_pair but is not a tandem site.
+--      Params: $chrom, $start, $strand, $score_mode, $pseudocount
+SELECT
+    anchor_hit_id,
+    neighbor_hit_id,
+    neighbor_start,
+    neighbor_end,
+    neighbor_strand,
+    neighbor_score,
+    genomic_center_distance_bp,
+    anchor_oriented_center_distance_bp,
+    relative_orientation,
+    anchor_oriented_side
+FROM motif_context_pair
+WHERE chrom = $chrom
+  AND anchor_start = $start
+  AND anchor_strand = $strand
+  AND score_mode = $score_mode
+  AND pseudocount = $pseudocount
+  AND is_tandem_tp73
+ORDER BY absolute_center_distance_bp, neighbor_start, neighbor_strand;
+
+-- Q11. Compact TP73 context for anchors nearest a named gene. This is the
+--      sequence/transcript feature surface; CUT&RUN remains a separate layer.
+--      Params: $gene_name, $score_mode, $pseudocount
+SELECT
+    chrom,
+    start,
+    "end",
+    strand,
+    score,
+    pwm_relative_score,
+    nearest_tss_distance_bp,
+    primary_transcript_region,
+    in_any_intron,
+    has_tandem_tp73,
+    n_tandem_tp73_partners,
+    nearest_tandem_oriented_distance_bp,
+    nearest_tandem_relative_orientation,
+    n_context_neighbor_loci,
+    n_context_motifs
+FROM tp73_context_anchor
+WHERE nearest_gene_name = $gene_name
+  AND score_mode = $score_mode
+  AND pseudocount = $pseudocount
+ORDER BY ABS(nearest_tss_distance_bp), start, strand;

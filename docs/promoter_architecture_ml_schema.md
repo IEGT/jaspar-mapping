@@ -45,10 +45,17 @@ tables/jaspar2026/
   motif_cutandrun_score_bin_stats/
     motif_id=*/score_mode=*/pseudocount=*/chrom=*/…
                             # CUT&RUN enrichment by score bin
+  motif_cutandrun_containment_curve/
+    motif_id=*/score_mode=*/pseudocount=*/chrom=*/sample_id=*/…
+                            # merged-coverage immersion ROC/PR calibration
   motif_architecture/…       # layer 2a (tiny, motif-keyed dimension)
   hit_architecture/chrom=*/… # layer 2b (optional, per-hit, keyed to motif_hit)
-  cutandrun/chrom=*/…        # layer 3  (irreducible experimental)
-  gene/…  promoter/…  gene_set/…            # layer 4 dimensions
+  motif_context_pair/chrom=*/… # layer 2c TP73 anchor × neighboring motif hit
+  tp73_context_anchor/chrom=*/… # layer 2c tandem/local-context summary
+  cutandrun_coverage/chrom=*/… # layer 3 positive coverage intervals/signal
+  cutandrun/chrom=*/…        # layer 3 aggregated locus signal
+  gene/… promoter/… transcript/… intron/… gene_set/… # layer 4 dimensions
+  motif_transcript_context/… # layer 4 per-anchor/per-transcript bridge
   expression/…  expression_differential/…   # layer 4 label source
   jaspar2026.duckdb        # query index over Parquet plus materialized hot tables
 ```
@@ -67,10 +74,30 @@ Full column lists live in `sql/schema.sql`; the essentials:
 - **`motif_hit`** — `chrom, start, end, motif_id, motif_name, strand, score, score_mode, pseudocount, pwm_relative_score, matched_seq`. Straight from `pssm_scan`. `score_mode` plus `pseudocount` define the motif scoring transform; `pwm_relative_score` (0–1) is the cross-motif-comparable score to threshold on.
 - **`motif_score_dense`** — logical view over dense score blocks: `chrom, start, end, motif_id, motif_name, strand, score_mode, pseudocount, score`. Physical files store only `block_start` plus a `FLOAT[] scores` vector; `motif_id`, `score_mode`, `pseudocount`, `chrom`, and `strand` live in hive partitions, while requested range and N policy are encoded in collision-resistant part filenames.
 - **`motif_cutandrun_score_bin_stats`** — dense-score calibration output by score bin and CUT&RUN sample: window counts, covered-window counts, baseline fraction, enrichment ratio, log2 enrichment, and signal summaries.
+- **`motif_cutandrun_containment_curve`** — score-threshold calibration from
+  strict immersion in merged positive coverage: coverage-component recall,
+  motif precision, motif recall, false-positive rate, effective depth, ROC AUC,
+  and average precision. See
+  [`cutandrun_motif_score_calibration.md`](cutandrun_motif_score_calibration.md).
 - **`motif_architecture`** — one row per `motif_id`: family, `binding_unit_model`, half-site pattern, spacer range, `architecture_confidence`. Curated for the TP53 family, `unknown` elsewhere.
 - **`hit_architecture`** *(optional)* — per-hit decomposition (`spacer_bp`, half-site scores, `oligomer_compatible`), derived from `matched_seq`, kept separate so layer 1 stays stable.
+- **`motif_context_pair`** — every retained TP73-anchor/neighbor occurrence
+  within the broad capture radius, with genomic and anchor-oriented motif-center
+  distance, relative orientation, provisional-context membership, and a strict
+  same-motif/distinct-span tandem flag. See
+  [`tp73_motif_context.md`](tp73_motif_context.md).
+- **`tp73_context_anchor`** — one feature-ready row per TP73 occurrence with
+  tandem summary, local motif counts, nearest signed TSS distance, and
+  transcript/intron indicators. It never replaces the pair table.
+- **`cutandrun_coverage`** — BED/bedGraph/bigWig-derived positive coverage
+  components and signal with `sample_id` and sample facets. Overlapping and
+  adjacent intervals are merged for motif-immersion labels; depth remains a
+  separate signal.
 - **`cutandrun`** — `chrom, start, end, cell_line, isoform, antibody, replicate, signal`. The sample facets are columns, so a TA-vs-DN contrast is a `GROUP BY`, not a filename parse.
-- **`gene / promoter / gene_set`** — annotation dimensions; `promoter` carries the strand and TSS used for distance features.
+- **`gene / promoter / transcript / intron / gene_set`** — annotation
+  dimensions regenerated from the pinned GTF. Transcript-level intron state is
+  kept in `motif_transcript_context` because isoforms can classify one locus
+  differently.
 - **`expression_differential`** — `gene_id, cell_line, log2fc_ta_vs_dn, padj, …`. **This is the ML label.**
 
 Three materialized tables carry all the cost: `promoter_motif_hit` (the single
@@ -125,6 +152,13 @@ The comparison statistic is per score bin, strand, and CUT&RUN sample:
 `enrichment_ratio`, `log2_enrichment`, and optional mean/max signal. The
 genome-wide `motif_hit` threshold should be set just below the point where the
 coverage enrichment collapses toward baseline.
+
+For coverage data, additionally apply strict immersion in merged positive
+coverage rather than ordinary overlap. Evaluate one genomic span using the
+maximum score across orientations as the primary unstranded analysis, retain
+orientation-specific results secondarily, and report ROC AUC plus the more
+imbalance-sensitive precision-recall metrics. The storage threshold must be
+chosen across replicates, not from a synthetic fixture or ROC AUC alone.
 
 ## The ML framing (TA vs DN)
 
@@ -187,6 +221,9 @@ free-form access to raw genome-wide files:
 - `query_dense_score_region(motif_id, chrom, strand, score_mode, pseudocount, start, end)` -> query Q7 over `motif_score_dense`.
 - `get_score_calibration(motif_id, chrom, score_mode, pseudocount)` -> query Q8 over `motif_cutandrun_score_bin_stats`.
 - `get_score_calibration_bins()` -> query Q9 over `score_calibration_bin`.
+- `get_cutandrun_containment_curve(motif_id, chrom, score_mode, pseudocount, sample_id)` -> merged-coverage immersion threshold metrics.
+- `get_tp73_tandem_partners(chrom, start, strand, score_mode, pseudocount)` -> query Q10.
+- `get_tp73_gene_context(gene_name, score_mode, pseudocount)` -> query Q11.
 - `get_cutandrun_promoter_signal(gene_name, cell_line)` -> query Q4.
 - `export_ml_matrix(cell_line, score_mode, pseudocount, feature_set)` -> query
   Q3, pivot its bound long result in the client, or read a pinned Parquet export

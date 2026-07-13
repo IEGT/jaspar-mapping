@@ -7,13 +7,14 @@ readBedFile <- function(file) {
     return(dt)
 }
 
-# Function to find binding sites within 100 bp of TP73
-findNearbySites <- function(tf_sites, tp73_sites, buffer = 100) {
+# Find motif occurrences within a center-to-center radius of TP73 occurrences.
+findNearbySites <- function(tf_sites, tp73_sites, buffer = 150) {
     tf_sites[, IsNearbyTP73 := FALSE]
+    tf_sites[, Center := (Start + End) / 2]
+    tp73_sites[, Center := (Start + End) / 2]
     for (i in 1:nrow(tp73_sites)) {
-        tp73_start <- tp73_sites[i, Start]
-        tp73_end <- tp73_sites[i, End]
-        tf_sites[Start <= tp73_end + buffer & End >= tp73_start - buffer, IsNearbyTP73 := TRUE]
+        tp73_center <- tp73_sites[i, Center]
+        tf_sites[abs(Center - tp73_center) <= buffer, IsNearbyTP73 := TRUE]
     }
     return(tf_sites)
 }

@@ -46,9 +46,10 @@ pretty.table <- function(x,sep.inner=" (") {
 }
 
 ## Function to read the data table for a particular chromosome
-read.data.table.for.chromosome <- function(chromosome=22) {
+read.data.table.for.chromosome <- function(chromosome=22, context.flank.bp=150) {
 
-    filename <- paste("TP73_datatable_",chromosome,".bed.gz",sep="")
+    filename <- paste0("TP73_datatable_", chromosome, "_flank-",
+                       context.flank.bp, "_motif-center.bed.gz")
 
     if (!file.exists(filename)) {
         cat("E: File ",filename," not found - skipping\n",sep="")
@@ -64,6 +65,18 @@ read.data.table.for.chromosome <- function(chromosome=22) {
     m[, To := as.integer(To)]
     m[, Score := as.numeric(Score)]  # Preserve fractional motif scores
     m[, Strand := as.character(Strand)]  # Preserve BED + / - orientation
+
+    if (!all(c("ContextFlankBp", "ContextDistanceMetric",
+               "ContextSelfMatchPolicy") %in% colnames(m))) {
+        stop("E: Context table lacks its radius/distance provenance: ", filename)
+    }
+    if (any(m$ContextFlankBp != context.flank.bp, na.rm=TRUE)) {
+        stop("E: Context table contains a radius other than the requested ",
+             context.flank.bp, " bp: ", filename)
+    }
+    if (any(m$ContextDistanceMetric != "motif_center", na.rm=TRUE)) {
+        stop("E: Context table is not based on motif-center distance: ", filename)
+    }
 
     attr(m,"chromosome") <- chromosome
 
@@ -140,8 +153,9 @@ create.lists.for.chromosome <- function(m, reportdir="Reports",offset=0.01) {
     ## with columns representing the individual PSSM and the strand of the motif
     ## found in the genomic sequence.
     ## The rows represent the individual binding sites of the TF. The value is
-    ## NA if the motif was not found within the window of 100 bp to either side of the
-    ## TP73 binding site. A value of 0 stands for the oposite strand, 1 for the same strand.
+    ## NA if the motif was not found within the configured motif-center radius
+    ## (150 bp by default) to either side of the TP73 occurrence. A value of 0
+    ## stands for the opposite strand, 1 for the same strand.
     selected_columns.StrandEqual <- m[, ..cols.StrandEqual]
 
 

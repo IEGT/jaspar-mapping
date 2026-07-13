@@ -168,6 +168,111 @@ SELECT
 FROM read_parquet('tables/jaspar2026/hit_architecture/*/*.parquet', hive_partitioning = 1);
 
 -- ---------------------------------------------------------------------------
+-- Layer 2c: local motif syntax around TP73 anchors
+--   Pair rows retain the broad capture radius. The narrower context and tandem
+--   radii are flags/provenance, so changing a feature radius does not require a
+--   genome rescan or destroy observations outside the provisional boundary.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE VIEW motif_context_run_config AS
+SELECT
+    schema_version,
+    anchor_motif_id,
+    score_mode,
+    pseudocount,
+    capture_flank_bp,
+    context_flank_bp,
+    tandem_flank_bp,
+    distance_metric,
+    tandem_distance_metric,
+    oriented_distance_rule,
+    tandem_identity_rule,
+    motif_hit_source,
+    gtf_source
+FROM read_parquet('tables/jaspar2026/context_run_config.parquet');
+
+CREATE OR REPLACE VIEW motif_context_pair AS
+SELECT
+    anchor_hit_id,
+    CAST(chrom AS VARCHAR) AS chrom,
+    anchor_start,
+    anchor_end,
+    anchor_center_bp,
+    anchor_strand,
+    anchor_score,
+    anchor_pwm_relative_score,
+    neighbor_hit_id,
+    neighbor_start,
+    neighbor_end,
+    neighbor_center_bp,
+    neighbor_motif_id,
+    neighbor_motif_name,
+    neighbor_strand,
+    neighbor_score,
+    neighbor_pwm_relative_score,
+    genomic_center_distance_bp,
+    anchor_oriented_center_distance_bp,
+    absolute_center_distance_bp,
+    relative_orientation,       -- same | opposite
+    anchor_oriented_side,       -- upstream | downstream | coincident_center
+    same_alignment_span,
+    same_anchor_motif_span,     -- orientation alternative, not another locus
+    interval_overlap_bp,
+    inter_motif_gap_bp,
+    within_context_flank,
+    is_tandem_tp73,
+    score_mode,
+    pseudocount,
+    capture_flank_bp,
+    context_flank_bp,
+    tandem_flank_bp
+FROM read_parquet(
+    'tables/jaspar2026/motif_context_pair/*/*.parquet',
+    hive_partitioning = 1
+);
+
+CREATE OR REPLACE VIEW tp73_context_anchor AS
+SELECT
+    anchor_hit_id,
+    CAST(chrom AS VARCHAR) AS chrom,
+    start,
+    "end",
+    center_bp,
+    motif_id,
+    motif_name,
+    strand,
+    score,
+    score_mode,
+    pseudocount,
+    pwm_relative_score,
+    n_context_neighbor_hits,
+    n_context_neighbor_loci,
+    n_context_motifs,
+    has_tandem_tp73,
+    n_tandem_tp73_partners,
+    nearest_tandem_hit_id,
+    nearest_tandem_oriented_distance_bp,
+    nearest_tandem_genomic_distance_bp,
+    nearest_tandem_absolute_distance_bp,
+    nearest_tandem_relative_orientation,
+    nearest_tandem_score,
+    gene_annotation_available,
+    nearest_gene_id,
+    nearest_gene_name,
+    nearest_transcript_id,
+    nearest_tss_distance_bp,
+    in_any_transcript,
+    in_any_intron,
+    overlaps_any_intron_boundary,
+    primary_transcript_region,
+    capture_flank_bp,
+    context_flank_bp,
+    tandem_flank_bp
+FROM read_parquet(
+    'tables/jaspar2026/tp73_context_anchor/*/*.parquet',
+    hive_partitioning = 1
+);
+
+-- ---------------------------------------------------------------------------
 -- Layer 3: experimental evidence (CUT&RUN), long form
 --   One row per (locus, sample). Sample decomposed into its facets so TA/DN
 --   contrasts are a GROUP BY, not a column-name parse.
@@ -193,6 +298,36 @@ FROM read_parquet('tables/jaspar2026/gene/*.parquet');
 CREATE OR REPLACE VIEW promoter AS
 SELECT gene_id, transcript_id, chrom, strand, promoter_start, promoter_end, tss
 FROM read_parquet('tables/jaspar2026/promoter/*.parquet');
+
+-- Transcript and intron intervals are regenerated directly from the pinned
+-- GTF. A motif can be intronic for one transcript and non-intronic for another;
+-- keep that ambiguity in the long per-transcript bridge rather than flattening
+-- it into one premature gene-level label.
+CREATE OR REPLACE VIEW transcript AS
+SELECT gene_id, transcript_id, chrom, strand, transcript_start, transcript_end,
+       tss, gene_name, biotype
+FROM read_parquet('tables/jaspar2026/transcript.parquet');
+
+CREATE OR REPLACE VIEW intron AS
+SELECT gene_id, transcript_id, chrom, strand, start, "end", intron_number
+FROM read_parquet('tables/jaspar2026/intron.parquet');
+
+CREATE OR REPLACE VIEW motif_transcript_context AS
+SELECT
+    anchor_hit_id,
+    chrom,
+    anchor_start,
+    anchor_end,
+    gene_id,
+    gene_name,
+    transcript_id,
+    transcript_strand,
+    tss,
+    signed_tss_distance_bp,
+    fully_within_intron,
+    overlaps_intron,
+    transcript_region
+FROM read_parquet('tables/jaspar2026/motif_transcript_context.parquet');
 
 CREATE OR REPLACE VIEW gene_set AS
 SELECT gene_id, set_name           -- many-to-many (HALLMARK_*, KEGG_*, ...)

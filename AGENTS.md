@@ -7,6 +7,12 @@ integration, or agent-facing query surfaces, read
 [`docs/promoter_architecture_ml_schema.md`](docs/promoter_architecture_ml_schema.md)
 before designing or changing code.
 
+For motif-score calibration against raw CUT&RUN fragments, also read
+[`docs/cutandrun_motif_score_calibration.md`](docs/cutandrun_motif_score_calibration.md).
+
+For TP73-local motif spacing, tandem TP73 sites, or transcript/intron context,
+also read [`docs/tp73_motif_context.md`](docs/tp73_motif_context.md).
+
 Treat [`sql/schema.sql`](sql/schema.sql) and [`sql/queries.sql`](sql/queries.sql)
 as the draft query contract:
 

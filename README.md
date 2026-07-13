@@ -181,10 +181,13 @@ The dataset directory is derived from the supplied PSSM filename rather than
 hardcoded: a JASPAR 2026 filename maps to `jaspar2026`, while custom files use
 a sanitized filename stem. Dense part names include the requested range and N
 policy so partial calibrations cannot replace full-chromosome output.
-Skipped alignments, including unsmoothed zero-count sentinels and assembly gaps
-under `--skip-N`, are stored as `NULL` elements in the score vector. The
-derived `start`/`end` interval is the sequence span used for PSSM scoring; it
-is not intended to define the physical footprint of the bound TF complex.
+Under `--skip-N`, alignments crossing assembly gaps are stored as `NULL`
+elements. An unsmoothed `log2_relative_risk` alignment that selects an
+unobserved motif nucleotide is valid DNA with score `-Inf`, and is retained as
+such. This distinction keeps pseudocount comparisons on the same candidate
+set. The derived `start`/`end` interval is the sequence span used for PSSM
+scoring; it is not intended to define the physical footprint of the bound TF
+complex.
 Build the direct Parquet scanner with Apache Arrow/Parquet C++ available
 through `pkg-config`:
 
@@ -218,6 +221,13 @@ for examples and the precise compatibility boundary.
 The reproducible Slurm runner for the full chromosome 1 TP73, E2F1, SP1,
 PATZ1, and POU2F2 panel is documented in
 [`docs/chr1_2026_motif_panel.md`](docs/chr1_2026_motif_panel.md).
+The de novo TP73 motif-pair layer, provisional 150 bp context radius, 20 bp
+non-overlapping tandem-gap definition, orientation semantics, and
+transcript/intron features are documented in
+[`docs/tp73_motif_context.md`](docs/tp73_motif_context.md).
+The strict CUT&RUN coverage-immersion rule, synthetic local test, threshold
+metrics, and true-data landing convention are documented in
+[`docs/cutandrun_motif_score_calibration.md`](docs/cutandrun_motif_score_calibration.md).
 
 ## Automated reference checks
 
@@ -238,6 +248,11 @@ it as an integration check rather than a cheap default unit test. Override
 a different chromosome 1 interval or output location is needed.
 
 For an integration of data from a CUT&RUN experiment without referal to peaks, the bedGraph data may be transformed to .bed files and subsequently be used with bedtools to combined these data with TFBS data.
+
+For the coverage-immersion calibration, overlapping and directly adjacent
+positive intervals are deliberately merged before asking whether coverage
+extends beyond both boundaries of a motif-model span. BED, bedGraph, and
+bigWig are therefore suitable; this analysis does not retain read identity.
  
  . copy or link "*.clipped.clean.bedGraph" files to a local directory
  . inform Makefile about paths and transform .bedGraph to .bed by `make files_cutandrun_clean`

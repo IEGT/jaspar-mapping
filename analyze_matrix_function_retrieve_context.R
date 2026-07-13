@@ -26,7 +26,7 @@ retrieve_context_data_by_chromosome <- function(enriched_rows=NULL,confirmation=
     }
 
     cols.NumInWindow <- grepl("_NumInWindow$", colnames(m.contexts[[1]]))
-    cols.Shift <- grepl("__Shift$", colnames(m.contexts[[1]]))
+    cols.Shift <- grepl("_Shift$", colnames(m.contexts[[1]]))
 
     # Create a matrix to store column sums for each chromosome
     mean_by_chromosome <- col_sums_by_chromosome <- col_sums_by_chromosome_binary <- matrix(

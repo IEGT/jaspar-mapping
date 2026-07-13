@@ -173,6 +173,43 @@ bool isSkippedScore(double score) {
     return !std::isfinite(score) || score < SENTINEL_SCORE / 10.0;
 }
 
+namespace {
+
+struct GenomicWindowScore {
+    double score = SENTINEL_SCORE;
+    bool sequenceValid = false;
+};
+
+GenomicWindowScore scoreGenomicWindow(const std::vector<std::uint8_t>& codes,
+                                      const size_t sequenceLength,
+                                      const bool reverseComplementWindow,
+                                      const size_t genomicStart,
+                                      const FlatPSSM& pssm) {
+    if (pssm.motifLength == 0 || genomicStart > sequenceLength ||
+        pssm.motifLength > sequenceLength - genomicStart) {
+        return {};
+    }
+
+    const size_t codeStart = reverseComplementWindow ?
+        sequenceLength - genomicStart - pssm.motifLength : genomicStart;
+    if (codeStart > codes.size() || pssm.motifLength > codes.size() - codeStart) {
+        return {};
+    }
+
+    double score = 0.0;
+    for (size_t i = 0; i < pssm.motifLength; ++i) {
+        const std::uint8_t code = codes[codeStart + i];
+        const double contribution = pssm.scores[i * BASE_CODE_COUNT + code];
+        if (code == BASE_N && isSkippedScore(contribution)) {
+            return {};
+        }
+        score += contribution;
+    }
+    return {score, true};
+}
+
+}  // namespace
+
 double calculateScoreAt(const std::vector<std::uint8_t>& codes, size_t start, const FlatPSSM& pssm) {
     double score = 0.0;
 
@@ -186,18 +223,8 @@ double calculateScoreAt(const std::vector<std::uint8_t>& codes, size_t start, co
 double calculateScoreAtGenomicStart(const std::vector<std::uint8_t>& codes, size_t sequenceLength,
                                     bool reverseComplementWindow, size_t genomicStart,
                                     const FlatPSSM& pssm) {
-    if (pssm.motifLength == 0 || genomicStart > sequenceLength ||
-        pssm.motifLength > sequenceLength - genomicStart) {
-        return SENTINEL_SCORE;
-    }
-
-    const size_t codeStart = reverseComplementWindow ?
-        sequenceLength - genomicStart - pssm.motifLength :
-        genomicStart;
-    if (codeStart > codes.size() || pssm.motifLength > codes.size() - codeStart) {
-        return SENTINEL_SCORE;
-    }
-    return calculateScoreAt(codes, codeStart, pssm);
+    return scoreGenomicWindow(
+        codes, sequenceLength, reverseComplementWindow, genomicStart, pssm).score;
 }
 
 ScoreBlock calculateScoreBlock(const std::vector<std::uint8_t>& codes, size_t sequenceLength,
@@ -206,15 +233,17 @@ ScoreBlock calculateScoreBlock(const std::vector<std::uint8_t>& codes, size_t se
     ScoreBlock block;
     block.blockStart = blockStart;
     block.scores.reserve(windowCount);
+    block.sequenceValid.reserve(windowCount);
 
     for (size_t offset = 0; offset < windowCount; ++offset) {
-        const double score = calculateScoreAtGenomicStart(
+        const GenomicWindowScore result = scoreGenomicWindow(
             codes, sequenceLength, reverseComplementWindow, blockStart + offset, pssm);
-        block.scores.push_back(score);
-        if (isSkippedScore(score)) {
-            block.skippedWindows++;
-        } else {
+        block.scores.push_back(result.score);
+        block.sequenceValid.push_back(result.sequenceValid);
+        if (result.sequenceValid) {
             block.validWindows++;
+        } else {
+            block.skippedWindows++;
         }
     }
 

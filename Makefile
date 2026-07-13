@@ -91,12 +91,16 @@ DRY_RUN_TO?=3700000
 DRY_RUN_FULL_CHR1?=0
 DRY_RUN_OUTPUT?=dry_runs/chr1_patz1_tp73_$(if $(filter 1,$(DRY_RUN_FULL_CHR1)),full,from-$(DRY_RUN_FROM)-to-$(DRY_RUN_TO))
 DRY_RUN_RANGE_FLAGS=$(if $(filter 1,$(DRY_RUN_FULL_CHR1)),--full-chr1,--from $(DRY_RUN_FROM) --to $(DRY_RUN_TO))
+CONTEXT_FLANK?=150
+CONTEXT_BATCH_SIZE?=32
+CONTEXT_TMPDIR?=$(SCRATCHDIR)
+CONTEXT_DATATABLE=TP73_datatable_$(CHR)_flank-$(CONTEXT_FLANK)_motif-center.bed.gz
 
 .SUFFIXES: .gz .bed.gz .cpp .o .fasta .fa.gz _positive_$(CHR).bed _positive_$(CHR).bed.gz _negative_$(CHR).bed _negative_$(CHR).bed.gz _bidirect_$(CHR).bed.gz .bed .bedGraph .combined.bed
 
 BINARIES=pssm_scan gtf_file_region_retrieval context
 PARQUET_BINARIES=pssm_scan_parquet
-TEST_BINARIES=tests/test_pssm_scan tests/test_gtf_file_region tests/test_compressed_file_reader
+TEST_BINARIES=tests/test_pssm_scan tests/test_gtf_file_region tests/test_compressed_file_reader tests/test_context
 
 all: $(BINARIES)
 
@@ -104,6 +108,10 @@ all: $(BINARIES)
 	$(CXX) $(CXXFLAGS) -c $<
 
 compressed_file_reader.o: compressed_file_reader.cpp compressed_file_reader.h
+
+context_core.o: context_core.cpp context_core.h compressed_file_reader.h
+
+context.o: context.cpp context_core.h
 
 progress.o: progress.cpp progress.h
 
@@ -113,7 +121,7 @@ pssm_scan_core.o: pssm_scan_core.cpp pssm_scan_core.h pssm.h
 
 gtf_file_region.o: gtf_file_region.cpp gtf_file_region.h progress.h
 
-context: context.o compressed_file_reader.o
+context: context.o context_core.o compressed_file_reader.o
 	$(CXX) $(CXXFLAGS) -o $@ $^  $(LDFLAGS)
 
 pssm_scan: pssm_scan.cpp pssm.h pssm_scan_core.h progress.o pssm.o pssm_scan_core.o compressed_file_reader.o
@@ -131,14 +139,20 @@ tests/test_gtf_file_region: tests/test_gtf_file_region.cpp gtf_file_region.h gtf
 tests/test_compressed_file_reader: tests/test_compressed_file_reader.cpp compressed_file_reader.h compressed_file_reader.o
 	$(CXX) $(TEST_CXXFLAGS) -o $@ tests/test_compressed_file_reader.cpp compressed_file_reader.o $(LDFLAGS)
 
+tests/test_context: tests/test_context.cpp context_core.h context_core.o compressed_file_reader.o
+	$(CXX) $(TEST_CXXFLAGS) -o $@ tests/test_context.cpp context_core.o compressed_file_reader.o $(LDFLAGS)
+
 check: pssm_scan $(TEST_BINARIES)
 	./tests/test_pssm_scan
 	./tests/test_gtf_file_region
 	./tests/test_compressed_file_reader
+	./tests/test_context
+	bash tests/test_context_cli.sh
 	bash tests/test_fix_missing_bidirect.sh
 	bash tests/test_localMaxSkmelTADN.sh
 	bash tests/test_indexed_genome_scan.sh
 	bash tests/test_build_fasta_index.sh
+	bash tests/test_cutandrun_containment.sh
 	bash tests/test_script_help.sh
 
 check-r:
@@ -148,12 +162,24 @@ check-duckdb:
 	bash tests/test_duckdb_contract.sh
 	bash tests/test_chr1_dense_duckdb.sh
 	bash tests/test_export_dense_bed.sh
+	bash tests/test_dense_cutandrun_calibration.sh
+	bash tests/test_motif_context.sh
 
 check_synthetic_dense: pssm_scan_parquet
 	bash tests/test_synthetic_dense_dataset.sh
 
 synthetic_dense_example: pssm_scan_parquet
 	bash tests/test_synthetic_dense_dataset.sh dry_runs/synthetic_dense
+
+check_cutandrun_containment:
+	bash tests/test_cutandrun_containment.sh
+
+synthetic_cutandrun_example:
+	python3 scripts/analyze_cutandrun_containment.py \
+		--motifs test_files/synthetic_cutandrun/tp73_motifs.bed \
+		--coverage-bed test_files/synthetic_cutandrun/tp73_fragments.bed \
+		--output-dir dry_runs/synthetic_cutandrun_coverage_union \
+		--chrom 1 --sample-id synthetic_tp73 --score-mode synthetic_score
 
 gtf_file_region_retrieval: gtf_file_region_retrieval.cpp progress.o gtf_file_region.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
@@ -290,7 +316,7 @@ test_reference_tp73_promoter_chr1: pssm_scan $(JASPAR) $(GENOME) $(GENOME_INDEX)
 	fi ; \
 	echo "I: E2F1 hits in TP73 promoter reference window: $$hits"
 
-.PHONY: test check check-r check-duckdb check_synthetic_dense synthetic_dense_example all $(OUTPUTDIR)/$(CHR) jaspar genome genomegz genome_index scan_chr_all_motifs dry_run_chr1_patz1_tp73 inspect_chr1_patz1_tp73 genome_testdata count datatables files_cutandrun_clean TP73_datatable test_reference_tp73_promoter_chr1 score_distributions_chr1
+.PHONY: test check check-r check-duckdb check_synthetic_dense synthetic_dense_example check_cutandrun_containment synthetic_cutandrun_example all $(OUTPUTDIR)/$(CHR) jaspar genome genomegz genome_index scan_chr_all_motifs dry_run_chr1_patz1_tp73 inspect_chr1_patz1_tp73 genome_testdata count datatables files_cutandrun_clean TP73_datatable test_reference_tp73_promoter_chr1 score_distributions_chr1
 .PRECIOUS: $(GENOME) $(GENOMEGZ) %.bed %.bed.gz
 .SECONDARY:
 
@@ -369,13 +395,23 @@ datatables: context
 	#for chr in 2; do
 	@for chr in $(shell seq 1 22) X Y; do \
 	    echo "Chr $$chr" ; \
-	    $(MAKE) CHR=$$chr TP73_datatable.bed.gz ; \
+	    $(MAKE) CHR=$$chr TP73_datatable ; \
 	done
 
-TP73_datatable.bed.gz: TP73_datatable_$(CHR).bed.gz
+TP73_datatable: $(CONTEXT_DATATABLE)
 
-TP73_datatable_$(CHR).bed.gz: $(TP73_COMBINED_BED).gz
-	./context $< $(HIT_OUTPUTDIR)/*bidirect*.bed.gz | gzip -9 -n -c > $@ || echo "I: Check ulimit -n 3000 if failing to open files"
+$(CONTEXT_DATATABLE): $(TP73_COMBINED_BED).gz context
+	@mkdir -p "$(CONTEXT_TMPDIR)"
+	@set -euo pipefail; \
+	    temporary=$$(mktemp "$@.tmp.XXXXXX"); \
+	    trap 'rm -f "$$temporary"' EXIT HUP INT TERM; \
+	    ./context --flank "$(CONTEXT_FLANK)" \
+	        --batch-size "$(CONTEXT_BATCH_SIZE)" \
+	        --temp-dir "$(CONTEXT_TMPDIR)" \
+	        "$<" $(HIT_OUTPUTDIR)/*bidirect*.bed.gz \
+	      | gzip -9 -n -c > "$$temporary"; \
+	    mv "$$temporary" "$@"; \
+	    trap - EXIT HUP INT TERM
 
 
 count:
