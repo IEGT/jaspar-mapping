@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 
-"""Calibrate dense motif scores against merged CUT&RUN BED coverage."""
+"""Calibrate dense motif scores against merged CUT&RUN coverage.
+
+Fragment BED rows contribute unit depth; bedGraph rows preserve the signal in
+column 4 when maximum depth is calculated inside a strictly immersed motif.
+"""
 
 from __future__ import annotations
 
@@ -23,6 +27,15 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument("--package", required=True, type=Path)
     parser.add_argument("--coverage-bed", required=True, type=Path)
+    parser.add_argument(
+        "--coverage-format",
+        choices=("auto", "fragments", "bedgraph"),
+        default="auto",
+        help=(
+            "depth interpretation (default: auto; .bedGraph[.gz] uses column "
+            "4, other BED files contribute one per row)"
+        ),
+    )
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--sample-id", required=True)
     parser.add_argument("--motif-id", default="MA0861.2")
@@ -52,6 +65,59 @@ def sql_string(value: str | Path) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
+def resolve_coverage_format(requested: str, path: Path) -> str:
+    if requested != "auto":
+        return requested
+    filename = path.name.lower()
+    if filename.endswith(".gz"):
+        filename = filename[:-3]
+    return "bedgraph" if filename.endswith((".bedgraph", ".bdg")) else "fragments"
+
+
+def coverage_depth_semantics(coverage_format: str) -> str:
+    return (
+        "column_4_signal"
+        if coverage_format == "bedgraph"
+        else "unit_per_fragment_interval"
+    )
+
+
+def coverage_input_sql(arguments: argparse.Namespace) -> str:
+    source = sql_string(arguments.coverage_bed.resolve())
+    normalized_chrom = (
+        "CASE WHEN LOWER(LEFT(chrom, 3)) = 'chr' "
+        "THEN SUBSTR(chrom, 4) ELSE chrom END"
+    )
+    if arguments.coverage_format == "bedgraph":
+        return f"""
+SELECT
+    {normalized_chrom} AS chrom,
+    start::BIGINT AS start,
+    "end"::BIGINT AS "end",
+    depth::DOUBLE AS depth,
+    'run_' || ROW_NUMBER() OVER () AS source_name
+FROM read_csv(
+    {source}, delim='\\t', header=false, comment='#', null_padding=true,
+    columns={{
+        'chrom':'VARCHAR', 'start':'BIGINT', 'end':'BIGINT', 'depth':'DOUBLE'
+    }}
+)"""
+    return f"""
+SELECT
+    {normalized_chrom} AS chrom,
+    start::BIGINT AS start,
+    "end"::BIGINT AS "end",
+    1.0::DOUBLE AS depth,
+    COALESCE(NULLIF(name, ''), 'interval_' || ROW_NUMBER() OVER ()) AS source_name
+FROM read_csv(
+    {source}, delim='\\t', header=false, comment='#', null_padding=true,
+    columns={{
+        'chrom':'VARCHAR', 'start':'BIGINT', 'end':'BIGINT',
+        'name':'VARCHAR', 'score':'VARCHAR', 'strand':'VARCHAR'
+    }}
+)"""
+
+
 def build_sql(arguments: argparse.Namespace, output_dir: Path) -> str:
     dense_glob = (
         arguments.package
@@ -66,6 +132,8 @@ def build_sql(arguments: argparse.Namespace, output_dir: Path) -> str:
     component_tsv = output_dir / "coverage_component_evidence.tsv"
     summary_tsv = output_dir / "summary.tsv"
     score_mode_sql = ", ".join(sql_string(mode) for mode in arguments.score_modes)
+    coverage_sql = coverage_input_sql(arguments)
+    depth_semantics = coverage_depth_semantics(arguments.coverage_format)
     histogram_statements = []
     for index, score_mode in enumerate(arguments.score_modes):
         create_or_insert = (
@@ -119,33 +187,27 @@ CREATE TABLE run_config AS SELECT
     {sql_string(",".join(arguments.score_modes))}::VARCHAR AS score_modes,
     {arguments.bin_width}::DOUBLE AS score_bin_width,
     {sql_string(arguments.coverage_bed.resolve())}::VARCHAR AS coverage_source,
+    {sql_string(arguments.coverage_format)}::VARCHAR AS coverage_format,
+    {sql_string(depth_semantics)}::VARCHAR AS coverage_depth_semantics,
     {sql_string(dense_glob.resolve())}::VARCHAR AS dense_source_glob,
     'overlap_or_adjacent_union'::VARCHAR AS coverage_merge_rule,
     'component_start < motif_start AND component_end > motif_end'::VARCHAR
         AS immersion_rule,
     'max_orientation_score'::VARCHAR AS orientation_handling;
 
+CREATE TEMP VIEW coverage_input AS
+{coverage_sql};
+
 CREATE TABLE coverage_interval AS
 SELECT
     ROW_NUMBER() OVER ()::BIGINT AS interval_id,
-    CASE WHEN LOWER(LEFT(chrom, 3)) = 'chr' THEN SUBSTR(chrom, 4) ELSE chrom END
-        AS chrom,
+    chrom,
     start,
     "end",
-    COALESCE(NULLIF(name, ''), 'interval_' || ROW_NUMBER() OVER ()) AS source_name
-FROM read_csv(
-    {sql_string(arguments.coverage_bed.resolve())},
-    delim='\t',
-    header=false,
-    comment='#',
-    null_padding=true,
-    columns={{
-        'chrom':'VARCHAR', 'start':'BIGINT', 'end':'BIGINT',
-        'name':'VARCHAR', 'score':'VARCHAR', 'strand':'VARCHAR'
-    }}
-)
-WHERE CASE WHEN LOWER(LEFT(chrom, 3)) = 'chr' THEN SUBSTR(chrom, 4) ELSE chrom END
-      = {sql_string(arguments.chrom)};
+    depth,
+    source_name
+FROM coverage_input
+WHERE chrom = {sql_string(arguments.chrom)};
 
 SELECT CASE
     WHEN (SELECT COUNT(*) FROM coverage_interval) = 0
@@ -153,6 +215,9 @@ SELECT CASE
     WHEN EXISTS (
         SELECT 1 FROM coverage_interval WHERE start < 0 OR "end" <= start
     ) THEN error('coverage BED contains an invalid interval')
+    WHEN EXISTS (
+        SELECT 1 FROM coverage_interval WHERE NOT isfinite(depth) OR depth <= 0
+    ) THEN error('coverage depth must be finite and positive')
 END;
 
 CREATE TABLE coverage_component AS
@@ -247,7 +312,7 @@ CREATE TABLE immersed_motif AS
 WITH base_depth AS (
     SELECT m.score_mode, m.component_id, m.chrom, m.start, m."end", m.score,
            base,
-           COUNT(i.interval_id)::BIGINT AS depth
+           COALESCE(SUM(i.depth), 0.0)::DOUBLE AS depth
     FROM immersed_motif_raw m
     CROSS JOIN UNNEST(RANGE(m.start, m."end")) AS b(base)
     LEFT JOIN coverage_interval i
@@ -260,14 +325,14 @@ SELECT score_mode, component_id, chrom, start, "end", score,
             THEN {NEGATIVE_INFINITY_BIN}::BIGINT
             ELSE FLOOR(score / {arguments.bin_width})::BIGINT
        END AS bin_index,
-       MAX(depth)::BIGINT AS effective_max_depth
+       MAX(depth)::DOUBLE AS effective_max_depth
 FROM base_depth
 GROUP BY score_mode, component_id, chrom, start, "end", score;
 
 CREATE TABLE immersed_score_histogram AS
 SELECT score_mode, bin_index,
        COUNT(*)::BIGINT AS n_supported,
-       SUM(effective_max_depth)::HUGEINT AS effective_depth_sum
+       SUM(effective_max_depth)::DOUBLE AS effective_depth_sum
 FROM immersed_motif
 GROUP BY score_mode, bin_index;
 
@@ -280,7 +345,7 @@ CREATE TABLE threshold_curve AS
 WITH histogram AS (
     SELECT a.score_mode, a.bin_index, a.n_total,
            COALESCE(s.n_supported, 0)::BIGINT AS n_supported,
-           COALESCE(s.effective_depth_sum, 0)::HUGEINT AS effective_depth_sum
+           COALESCE(s.effective_depth_sum, 0.0)::DOUBLE AS effective_depth_sum
     FROM all_score_histogram a
     LEFT JOIN immersed_score_histogram s USING (score_mode, bin_index)
 ), cumulative AS (
@@ -297,7 +362,7 @@ WITH histogram AS (
         )::BIGINT AS supported_selected_motifs,
         SUM(effective_depth_sum) OVER (
             PARTITION BY score_mode ORDER BY bin_index DESC
-        )::HUGEINT AS selected_effective_depth
+        )::DOUBLE AS selected_effective_depth
     FROM histogram
 ), totals AS (
     SELECT score_mode, SUM(n_total)::BIGINT AS total_motifs,
@@ -387,7 +452,10 @@ WITH histogram AS (
            COUNT(*)::BIGINT AS n_score_bins
     FROM histogram GROUP BY score_mode
 )
-SELECT t.score_mode, {arguments.bin_width}::DOUBLE AS score_bin_width,
+SELECT t.score_mode,
+       {sql_string(arguments.coverage_format)}::VARCHAR AS coverage_format,
+       {sql_string(depth_semantics)}::VARCHAR AS coverage_depth_semantics,
+       {arguments.bin_width}::DOUBLE AS score_bin_width,
        t.n_valid_motifs, t.n_supported_motifs,
        t.n_supported_motifs::DOUBLE / t.n_valid_motifs AS support_prevalence,
        (SELECT COUNT(*) FROM coverage_interval) AS n_coverage_intervals,
@@ -418,6 +486,9 @@ COPY calibration_summary TO {sql_string(summary_tsv)}
 
 def main() -> int:
     arguments = parse_arguments()
+    arguments.coverage_format = resolve_coverage_format(
+        arguments.coverage_format, arguments.coverage_bed
+    )
     if arguments.bin_width <= 0:
         raise SystemExit("E: --bin-width must be greater than zero")
     if arguments.threads < 1:

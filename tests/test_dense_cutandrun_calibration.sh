@@ -30,11 +30,11 @@ duckdb :memory: -bail -c "
     ) TO '$temporary/package/tables/jaspar2026/motif_score_dense/motif_id=TEST.1/score_mode=log2_relative_risk/pseudocount=0/chrom=1/strand=minus/part-from=0-to=7-n_policy=skip-000000.parquet'
       (FORMAT PARQUET, COMPRESSION ZSTD);" >/dev/null
 
-printf 'chr1\t0\t4\timmerses_negative_infinity\t1\t+\n' > "$temporary/coverage.bed"
+printf 'chr1\t0\t4\t7.5\n' > "$temporary/coverage.bedGraph"
 
 "$repository_root/scripts/analyze_dense_cutandrun_coverage.py" \
     --package "$temporary/package" \
-    --coverage-bed "$temporary/coverage.bed" \
+    --coverage-bed "$temporary/coverage.bedGraph" \
     --output-dir "$temporary/result" \
     --sample-id synthetic_negative_infinity \
     --motif-id TEST.1 \
@@ -70,6 +70,19 @@ duckdb -readonly "$temporary/result/calibration.duckdb" -bail -c "
     SELECT CASE WHEN NOT EXISTS (
         SELECT 1 FROM immersed_motif
         WHERE start = 1 AND isinf(score) AND score < 0
-    ) THEN error('immersed negative-infinity score was not retained') END;" >/dev/null
+          AND effective_max_depth = 7.5
+    ) THEN error('bedGraph depth was not retained for an immersed score') END;
+
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM run_config
+        WHERE coverage_format = 'bedgraph'
+          AND coverage_depth_semantics = 'column_4_signal'
+    ) THEN error('bedGraph depth provenance is missing') END;
+
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM calibration_summary
+        WHERE coverage_format = 'bedgraph'
+          AND coverage_depth_semantics = 'column_4_signal'
+    ) THEN error('bedGraph provenance is missing from the summary') END;" >/dev/null
 
 echo "Dense CUT&RUN calibration tests passed."

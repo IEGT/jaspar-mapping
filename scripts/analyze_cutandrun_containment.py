@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 
-"""Evaluate strict CUT&RUN-fragment containment across motif-score thresholds."""
+"""Evaluate strict CUT&RUN coverage containment across motif-score thresholds.
+
+Fragment BED rows each contribute unit depth.  bedGraph rows instead contribute
+their fourth-column signal, preserving run-length encoded coverage depth.
+"""
 
 from __future__ import annotations
 
@@ -34,6 +38,7 @@ class CoverageInterval:
     start: int
     end: int
     name: str
+    depth: float
 
 
 @dataclass(frozen=True)
@@ -75,6 +80,15 @@ def parse_arguments() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--coverage-format",
+        choices=("auto", "fragments", "bedgraph"),
+        default="auto",
+        help=(
+            "depth interpretation (default: auto; .bedGraph[.gz] uses column "
+            "4, other BED files contribute one per row)"
+        ),
+    )
+    parser.add_argument(
         "--output-dir",
         required=True,
         type=Path,
@@ -100,6 +114,23 @@ def parse_arguments() -> argparse.Namespace:
 def canonical_chromosome(chrom: str) -> str:
     chrom = chrom.strip()
     return chrom[3:] if chrom.lower().startswith("chr") else chrom
+
+
+def resolve_coverage_format(requested: str, path: Path) -> str:
+    if requested != "auto":
+        return requested
+    filename = path.name.lower()
+    if filename.endswith(".gz"):
+        filename = filename[:-3]
+    return "bedgraph" if filename.endswith((".bedgraph", ".bdg")) else "fragments"
+
+
+def coverage_depth_semantics(coverage_format: str) -> str:
+    return (
+        "column_4_signal"
+        if coverage_format == "bedgraph"
+        else "unit_per_fragment_interval"
+    )
 
 
 def open_text(path: Path) -> TextIO:
@@ -197,7 +228,7 @@ def read_motifs(path: Path, selected_chrom: str | None) -> list[Motif]:
 
 
 def read_coverage_intervals(
-    path: Path, selected_chrom: str | None
+    path: Path, selected_chrom: str | None, coverage_format: str
 ) -> list[CoverageInterval]:
     intervals: list[CoverageInterval] = []
     for line_number, fields in data_rows(path):
@@ -211,7 +242,29 @@ def read_coverage_intervals(
         start = parse_coordinate(fields[1], path, line_number, "start")
         end = parse_coordinate(fields[2], path, line_number, "end")
         validate_interval(path, line_number, start, end)
-        name = fields[3] if len(fields) >= 4 and fields[3] else f"interval_{line_number}"
+        if coverage_format == "bedgraph":
+            if len(fields) < 4:
+                raise ValueError(
+                    f"{path}:{line_number}: bedGraph requires depth in column 4"
+                )
+            try:
+                depth = float(fields[3])
+            except ValueError as error:
+                raise ValueError(
+                    f"{path}:{line_number}: invalid bedGraph depth: {fields[3]!r}"
+                ) from error
+            if not math.isfinite(depth) or depth <= 0:
+                raise ValueError(
+                    f"{path}:{line_number}: bedGraph depth must be finite and positive"
+                )
+            name = f"run_{line_number}"
+        else:
+            depth = 1.0
+            name = (
+                fields[3]
+                if len(fields) >= 4 and fields[3]
+                else f"interval_{line_number}"
+            )
         intervals.append(
             CoverageInterval(
                 index=len(intervals) + 1,
@@ -219,6 +272,7 @@ def read_coverage_intervals(
                 start=start,
                 end=end,
                 name=name,
+                depth=depth,
             )
         )
     if not intervals:
@@ -273,16 +327,17 @@ def merge_coverage_intervals(
 
 def ordinary_max_depth(
     motif: Motif, intervals: Iterable[CoverageInterval]
-) -> int:
-    deltas: dict[int, int] = defaultdict(int)
+) -> float:
+    # Fragment BED rows carry depth 1; bedGraph runs carry their encoded depth.
+    deltas: dict[int, float] = defaultdict(float)
     for interval in intervals:
         overlap_start = max(motif.start, interval.start)
         overlap_end = min(motif.end, interval.end)
         if overlap_start < overlap_end:
-            deltas[overlap_start] += 1
-            deltas[overlap_end] -= 1
-    depth = 0
-    maximum = 0
+            deltas[overlap_start] += interval.depth
+            deltas[overlap_end] -= interval.depth
+    depth = 0.0
+    maximum = 0.0
     for position in sorted(deltas):
         depth += deltas[position]
         maximum = max(maximum, depth)
@@ -343,7 +398,7 @@ def evaluate_containment(
                 "score": motif.score,
                 "strand": motif.strand,
                 "ordinary_max_depth": maximum_depth,
-                "effective_max_depth": maximum_depth if immersed else 0,
+                "effective_max_depth": maximum_depth if immersed else 0.0,
                 "supported": immersed,
                 "coverage_component_start": component.start if component else None,
                 "coverage_component_end": component.end if component else None,
@@ -389,7 +444,7 @@ def threshold_curve(
         selected = [row for row in motif_rows if float(row["score"]) >= threshold]
         true_positive = sum(bool(row["supported"]) for row in selected)
         false_positive = len(selected) - true_positive
-        selected_depth = sum(int(row["effective_max_depth"]) for row in selected)
+        selected_depth = sum(float(row["effective_max_depth"]) for row in selected)
         precision = divide(true_positive, len(selected))
         recall = divide(true_positive, total_positive)
         false_positive_rate = divide(false_positive, total_negative)
@@ -524,6 +579,10 @@ def build_summary(
     return {
         "sample_id": arguments.sample_id,
         "score_mode": arguments.score_mode,
+        "coverage_format": arguments.coverage_format,
+        "coverage_depth_semantics": coverage_depth_semantics(
+            arguments.coverage_format
+        ),
         "containment_rule": "component_start < motif_start and component_end > motif_end",
         "coverage_merge_rule": "overlapping or directly adjacent intervals",
         "coordinate_mode": "BED 0-based half-open",
@@ -546,11 +605,16 @@ def build_summary(
 
 def main() -> int:
     arguments = parse_arguments()
+    arguments.coverage_format = resolve_coverage_format(
+        arguments.coverage_format, arguments.coverage_bed
+    )
     selected_chrom = (
         canonical_chromosome(arguments.chrom) if arguments.chrom else None
     )
     motifs = read_motifs(arguments.motifs, selected_chrom)
-    intervals = read_coverage_intervals(arguments.coverage_bed, selected_chrom)
+    intervals = read_coverage_intervals(
+        arguments.coverage_bed, selected_chrom, arguments.coverage_format
+    )
     components = merge_coverage_intervals(intervals)
     motif_rows, component_rows = evaluate_containment(
         motifs, intervals, components

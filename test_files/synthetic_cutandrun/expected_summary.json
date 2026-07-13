@@ -2,6 +2,8 @@
   "average_precision": 0.8761904761904762,
   "containment_rule": "component_start < motif_start and component_end > motif_end",
   "coordinate_mode": "BED 0-based half-open",
+  "coverage_depth_semantics": "unit_per_fragment_interval",
+  "coverage_format": "fragments",
   "coverage_merge_rule": "overlapping or directly adjacent intervals",
   "f1": 0.8333333333333333,
   "f1_threshold": -2.0,

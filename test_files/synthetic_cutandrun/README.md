@@ -30,6 +30,13 @@ and `join_G_right=[72,76)` are adjacent and jointly form `[68,76)`, which
 immerses TP73_G although neither source interval does so alone. The two
 overlapping intervals covering TP73_C produce effective maximum depth 2.
 
+`tp73_coverage.bedGraph` encodes the same support pattern as positive
+run-length coverage. Its fourth column is depth rather than a fragment name.
+The expected ordinary/effective maxima for A through H are respectively
+`3/3`, `2/2`, `4/4`, `5/0`, `6/0`, `7/7`, `9.5/9.5`, and `0/0`. The fractional
+value deliberately verifies that bedGraph signal is neither counted as one row
+nor truncated to an integer.
+
 The five supported motifs have scores 10, 8, 6, 0, and -2. The three
 unsupported motifs have scores 4, 2, and -4. This gives a non-perfect ROC AUC
 of 0.7333 and average precision of 0.8762. Maximum Youden J selects threshold

@@ -32,7 +32,8 @@ alone.
 
 The local audit table records:
 
-- `ordinary_max_depth`: maximum input-interval depth within the motif;
+- `ordinary_max_depth`: maximum input depth within the motif (overlapping
+  fragment count or bedGraph column-4 signal);
 - `effective_max_depth`: ordinary maximum depth when a merged component
   strictly immerses the motif, otherwise 0; and
 - the supporting component coordinates and source interval names.
@@ -52,9 +53,17 @@ read identity is not part of the label:
   union, while their signal supplies maximum depth.
 - BAM may be converted to BED/bedGraph or streamed into the same union.
 
-The synthetic analyzer accepts BED3+ (plain or gzip-compressed). The full
-DuckDB run will consume BED/bedGraph directly and use a bigWig reader when the
-true source is bigWig; an intermediate motif BED or TSV is not required.
+Both analyzers accept BED3+ and bedGraph, plain or gzip-compressed. Use
+`--coverage-format fragments` when each BED row is one fragment and contributes
+unit depth. Use `--coverage-format bedgraph` when column 4 is a positive finite
+depth or signal. The default `auto` selects bedGraph semantics only for
+`.bedGraph[.gz]` or `.bdg[.gz]`; all other names retain fragment semantics.
+This conservative rule avoids mistaking a numeric BED name for depth.
+
+BigWig is conceptually sufficient but is not read directly by these scripts;
+convert it to bedGraph first. Prefer the supplied `.clipped.bedGraph` files over
+the larger legacy `.clipped.clean.bed` copies because the original bedGraph
+keeps depth unambiguously in column 4.
 
 ## Threshold metrics
 
@@ -91,6 +100,7 @@ The human-readable inputs are:
 
 - `test_files/synthetic_cutandrun/tp73_motifs.bed`
 - `test_files/synthetic_cutandrun/tp73_fragments.bed`
+- `test_files/synthetic_cutandrun/tp73_coverage.bedGraph`
 
 Run:
 
@@ -190,6 +200,9 @@ pseudocount; the hive path keeps them separate even in one output package:
 
 Run `scripts/analyze_dense_cutandrun_coverage.py` once per pseudocount with the
 same `--package`, `--coverage-bed`, and `--score-mode log2_relative_risk`.
+For the Rostock run-length coverage tracks, pass
+`--coverage-format bedgraph`; the resolved format and depth semantics are
+stored in `run_config` and `calibration_summary`.
 
 ### Memory safety
 
