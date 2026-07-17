@@ -158,15 +158,19 @@ check: pssm_scan $(TEST_BINARIES)
 check-r:
 	Rscript tests/test_analyze_bed_cutandrun.R
 
-check-duckdb:
+check-duckdb: pssm_scan_parquet
 	bash tests/test_duckdb_contract.sh
 	bash tests/test_chr1_dense_duckdb.sh
 	bash tests/test_export_dense_bed.sh
 	bash tests/test_dense_cutandrun_calibration.sh
 	bash tests/test_motif_context.sh
+	bash tests/test_sparse_parquet.sh
 
 check_synthetic_dense: pssm_scan_parquet
 	bash tests/test_synthetic_dense_dataset.sh
+
+check_synthetic_sparse: pssm_scan_parquet
+	bash tests/test_sparse_parquet.sh
 
 synthetic_dense_example: pssm_scan_parquet
 	bash tests/test_synthetic_dense_dataset.sh dry_runs/synthetic_dense
@@ -316,7 +320,7 @@ test_reference_tp73_promoter_chr1: pssm_scan $(JASPAR) $(GENOME) $(GENOME_INDEX)
 	fi ; \
 	echo "I: E2F1 hits in TP73 promoter reference window: $$hits"
 
-.PHONY: test check check-r check-duckdb check_synthetic_dense synthetic_dense_example check_cutandrun_containment synthetic_cutandrun_example all $(OUTPUTDIR)/$(CHR) jaspar genome genomegz genome_index scan_chr_all_motifs dry_run_chr1_patz1_tp73 inspect_chr1_patz1_tp73 genome_testdata count datatables files_cutandrun_clean TP73_datatable test_reference_tp73_promoter_chr1 score_distributions_chr1
+.PHONY: test check check-r check-duckdb check_synthetic_dense check_synthetic_sparse synthetic_dense_example check_cutandrun_containment synthetic_cutandrun_example all $(OUTPUTDIR)/$(CHR) jaspar genome genomegz genome_index scan_chr_all_motifs dry_run_chr1_patz1_tp73 inspect_chr1_patz1_tp73 genome_testdata count datatables files_cutandrun_clean TP73_datatable test_reference_tp73_promoter_chr1 score_distributions_chr1
 .PRECIOUS: $(GENOME) $(GENOMEGZ) %.bed %.bed.gz
 .SECONDARY:
 

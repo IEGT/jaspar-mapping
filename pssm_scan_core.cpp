@@ -62,6 +62,21 @@ std::string coordinateModeFileLabel(const CoordinateMode coordinateMode) {
     return coordinateMode == CoordinateMode::Bed ? "bed" : "legacy";
 }
 
+std::string numericPartitionValue(const double value) {
+    if (!std::isfinite(value)) {
+        return "none";
+    }
+    std::ostringstream formatted;
+    formatted << std::setprecision(12) << value;
+    return sanitizePathComponent(formatted.str());
+}
+
+std::string sparseHitPartFilename(const long from, const long to) {
+    const std::string fromLabel = from > 0L ? std::to_string(from) : "0";
+    const std::string toLabel = to > 0L ? std::to_string(to) : "end";
+    return "part-from=" + fromLabel + "-to=" + toLabel + "-000000.parquet";
+}
+
 } // namespace
 
 char complementBase(char base) {
@@ -145,6 +160,38 @@ std::string motifDatasetLabelFromPSSMFile(const std::filesystem::path& pssmFile)
         return static_cast<char>(std::tolower(c));
     });
     return sanitizePathComponent(stem);
+}
+
+std::filesystem::path sparseHitParquetOutputPath(
+    const std::filesystem::path& outdir,
+    const std::filesystem::path& pssmFile,
+    const std::string& motifID,
+    const HitOutputOptions& options,
+    const std::string& chromosome,
+    const std::string& strand,
+    const long from,
+    const long to) {
+    std::filesystem::path outputPath = outdir;
+    outputPath /= "tables";
+    outputPath /= motifDatasetLabelFromPSSMFile(pssmFile);
+    outputPath /= "motif_hit";
+    outputPath /= "motif_id=" + sanitizePathComponent(motifID);
+    outputPath /= "score_mode=" + sanitizePathComponent(options.scoreMode);
+    outputPath /= "pseudocount=" + numericPartitionValue(options.pseudocount);
+    outputPath /= "minimum_score=" +
+        (options.thresholdSet ? numericPartitionValue(options.threshold) : "none");
+    outputPath /= "minimum_pwm_relative_score=" +
+        numericPartitionValue(options.minPwmRelativeScore);
+    outputPath /= "maximum_pwm_relative_score=" +
+        numericPartitionValue(options.maxPwmRelativeScore);
+    outputPath /= "chrom=" + sanitizePathComponent(chromosome);
+    outputPath /= "strand=" + sanitizePathComponent(
+        strand == "-" ? "minus" : "plus");
+    outputPath /= std::string("n_policy=") + (options.skipN ? "skip" : "neutral");
+    outputPath /= std::string("matched_sequence=") +
+        (options.showSequence ? "included" : "omitted");
+    outputPath /= sparseHitPartFilename(from, to);
+    return outputPath;
 }
 
 std::string denseScorePartFilename(const long from, const long to, const bool skipN,

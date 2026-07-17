@@ -328,6 +328,17 @@ void testOutputNaming() {
     );
     expectEqual(motifDatasetLabelFromPSSMFile("/tmp/Custom motifs.pfm"),
                 "custom-motifs", "custom dense dataset label is sanitized");
+    expectEqual(
+        sparseHitParquetOutputPath(
+            "out", "/tmp/JASPAR2026_CORE_non-redundant_pfms_jaspar.txt",
+            "MA0861.2", options, "1", "+", 100, 200).generic_string(),
+        "out/tables/jaspar2026/motif_hit/motif_id=MA0861.2/"
+        "score_mode=log2_relative_risk/pseudocount=1/minimum_score=0/"
+        "minimum_pwm_relative_score=0.8/maximum_pwm_relative_score=none/"
+        "chrom=1/strand=plus/n_policy=skip/matched_sequence=included/"
+        "part-from=100-to=200-000000.parquet",
+        "sparse Parquet path moves constant hit identity into partitions"
+    );
     expectEqual(denseScorePartFilename(100, 200, true, ".parquet"),
                 "part-from=100-to=200-n_policy=skip-000000.parquet",
                 "dense range and N policy in part filename");

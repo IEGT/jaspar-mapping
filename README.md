@@ -155,6 +155,30 @@ an invocation without a threshold uses `threshold-none`; those runs therefore
 cannot overwrite each other. The motif, strand, chromosome, and optional
 range remain in the BED basename.
 
+With Apache Arrow available, thresholded hits can instead be streamed directly
+to ZSTD-compressed Parquet without a BED/TSV intermediate. This mode requires an
+explicit score threshold and BED coordinates:
+
+```sh
+make pssm_scan_parquet
+./pssm_scan_parquet --sparse-parquet \
+  --outdir sparse_tp73_chr1 \
+  --genome Homo_sapiens.GRCh38.dna.primary_assembly.fasta \
+  --pssm JASPAR2026_CORE_non-redundant_pfms_jaspar.txt \
+  --motif MA0861.2 --chr 1 --strand both \
+  --score-mode log2_relative_risk --pseudocount 1 \
+  --threshold -1 --coordinate-mode bed --skip-N
+```
+
+Each motif/chromosome/strand file contains only the per-hit columns `start`,
+`end`, float32 `score`, float32 `pwm_relative_score`, and nullable
+`matched_seq`. Row-constant identity and run configuration live in Hive-style
+partitions below `tables/INPUT_DATASET/motif_hit/`. Record batches are bounded,
+so memory use does not grow with the number of retained hits. A completed file
+is published from a staging path only after Parquet closes successfully, and an
+existing result is never replaced silently. `--sparse-parquet` does not yet
+accept `--regions`; use a chromosome with optional `--from`/`--to` bounds.
+
 To inspect subthreshold scores without writing one row per genomic window, use
 `./pssm_scan --score-distribution` or `make score_distributions_chr1`. The Make
 target scans chromosome 1 on the forward strand for every JASPAR motif and

@@ -88,6 +88,15 @@ std::string formatDoubleForFileLabel(double value);
 std::filesystem::path hitOutputDirectory(const std::filesystem::path& outdir,
                                          const HitOutputOptions& options);
 std::string motifDatasetLabelFromPSSMFile(const std::filesystem::path& pssmFile);
+std::filesystem::path sparseHitParquetOutputPath(
+    const std::filesystem::path& outdir,
+    const std::filesystem::path& pssmFile,
+    const std::string& motifID,
+    const HitOutputOptions& options,
+    const std::string& chromosome,
+    const std::string& strand,
+    long from,
+    long to);
 std::string denseScorePartFilename(long from, long to, bool skipN,
                                    const std::string& extension);
 std::uint8_t codeForBase(char base);

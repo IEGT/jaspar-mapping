@@ -37,7 +37,11 @@ tables/jaspar2026/
   manifest.json            # source commit, JASPAR 2026 sha256, Ensembl release, row counts
   checksums.sha256
   motif_metadata/…          # tiny motif dimension: motif_id, name, length, source
-  motif_hit/chrom=*/…        # layer 1  (large, regenerable)
+  motif_hit/
+    motif_id=*/score_mode=*/pseudocount=*/minimum_score=*/
+    minimum_pwm_relative_score=*/maximum_pwm_relative_score=*/
+    chrom=*/strand=*/n_policy=*/matched_sequence=*/…
+                            # thresholded layer 1 (large, regenerable)
   motif_score_dense/
     motif_id=*/score_mode=*/pseudocount=*/chrom=*/strand=*/…
                             # range and N policy are encoded in each part filename
@@ -60,8 +64,8 @@ tables/jaspar2026/
   jaspar2026.duckdb        # query index over Parquet plus materialized hot tables
 ```
 
-Only non-zero facts are stored for the genome-wide hit layer — `motif_hit`
-holds actual hits, `cutandrun` one row per (locus, sample),
+Only threshold-retained facts are stored for the genome-wide hit layer —
+`motif_hit` holds selected sequence matches, `cutandrun` one row per (locus, sample),
 `promoter_arch_feature` one row per (gene, motif). Dense calibration runs are
 the explicit exception: for selected motifs/chromosomes they store one score
 per motif-model alignment start and strand in block vectors, with repeated
@@ -71,7 +75,7 @@ identity moved into partition paths.
 
 Full column lists live in `sql/schema.sql`; the essentials:
 
-- **`motif_hit`** — `chrom, start, end, motif_id, motif_name, strand, score, score_mode, pseudocount, pwm_relative_score, matched_seq`. Straight from `pssm_scan`. `score_mode` plus `pseudocount` define the motif scoring transform; `pwm_relative_score` (0–1) is the cross-motif-comparable score to threshold on.
+- **`motif_hit`** — logical columns `chrom, start, end, motif_id, motif_name, strand, score, score_mode, pseudocount, pwm_relative_score, matched_seq`. `pssm_scan_parquet --sparse-parquet` physically stores only `start`, `end`, float32 `score`, float32 `pwm_relative_score`, and nullable `matched_seq`; motif/run identity lives in Hive partitions and `motif_name` comes from `motif_metadata`. `score_mode` plus `pseudocount` define the motif scoring transform; `pwm_relative_score` (0–1) is the cross-motif-comparable score to threshold on.
 - **`motif_score_dense`** — logical view over dense score blocks: `chrom, start, end, motif_id, motif_name, strand, score_mode, pseudocount, score`. Physical files store only `block_start` plus a `FLOAT[] scores` vector; `motif_id`, `score_mode`, `pseudocount`, `chrom`, and `strand` live in hive partitions, while requested range and N policy are encoded in collision-resistant part filenames.
 - **`motif_cutandrun_score_bin_stats`** — dense-score calibration output by score bin and CUT&RUN sample: window counts, covered-window counts, baseline fraction, enrichment ratio, log2 enrichment, and signal summaries.
 - **`motif_cutandrun_containment_curve`** — score-threshold calibration from

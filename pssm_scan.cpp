@@ -364,6 +364,163 @@ std::filesystem::path denseScoreOutputPath(const std::string& outdir, const PSSM
 }
 
 #ifdef PSSM_SCAN_WITH_PARQUET
+class SparseHitParquetWriter {
+public:
+    explicit SparseHitParquetWriter(const size_t rowsPerRecordBatch = DEFAULT_SCORE_BLOCK_SIZE)
+        : rowsPerRecordBatch_(std::max<size_t>(1, rowsPerRecordBatch)) {}
+
+    bool open(const std::filesystem::path& outputFilePath, std::string& error) {
+        schema_ = arrow::schema({
+            arrow::field("start", arrow::int64(), false),
+            arrow::field("end", arrow::int64(), false),
+            arrow::field("score", arrow::float32(), false),
+            arrow::field("pwm_relative_score", arrow::float32(), false),
+            arrow::field("matched_seq", arrow::utf8(), true)
+        });
+
+        auto outputResult = arrow::io::FileOutputStream::Open(outputFilePath.string());
+        if (!outputResult.ok()) {
+            error = "opening sparse Parquet output: " + outputResult.status().ToString();
+            return false;
+        }
+        outputStream_ = *outputResult;
+
+        parquet::WriterProperties::Builder writerPropertiesBuilder;
+        writerPropertiesBuilder.compression(parquet::Compression::ZSTD);
+        auto writerProperties = writerPropertiesBuilder.build();
+
+        parquet::ArrowWriterProperties::Builder arrowPropertiesBuilder;
+        arrowPropertiesBuilder.store_schema();
+        auto arrowProperties = arrowPropertiesBuilder.build();
+
+        auto writerResult = parquet::arrow::FileWriter::Open(
+            *schema_, arrow::default_memory_pool(), outputStream_,
+            writerProperties, arrowProperties);
+        if (!writerResult.ok()) {
+            error = "opening sparse Parquet writer: " + writerResult.status().ToString();
+            return false;
+        }
+        writer_ = std::move(writerResult).ValueOrDie();
+        resetBuilders();
+        return true;
+    }
+
+    bool append(const std::int64_t start, const std::int64_t end,
+                const double score, const double pwmRelativeScore,
+                const std::string* matchedSequence, std::string& error) {
+        if (!writer_) {
+            error = "Sparse Parquet writer is not open.";
+            return false;
+        }
+
+        auto status = startBuilder_->Append(start);
+        if (status.ok()) status = endBuilder_->Append(end);
+        if (status.ok()) status = scoreBuilder_->Append(static_cast<float>(score));
+        if (status.ok()) {
+            status = pwmRelativeScoreBuilder_->Append(static_cast<float>(pwmRelativeScore));
+        }
+        if (status.ok()) {
+            status = matchedSequence == nullptr ? matchedSequenceBuilder_->AppendNull() :
+                matchedSequenceBuilder_->Append(*matchedSequence);
+        }
+        if (!status.ok()) {
+            error = "appending sparse hit: " + status.ToString();
+            return false;
+        }
+
+        ++pendingRows_;
+        ++rowsWritten_;
+        if (pendingRows_ >= rowsPerRecordBatch_) {
+            return flush(error);
+        }
+        return true;
+    }
+
+    bool close(std::string& error) {
+        if (writer_) {
+            if (!flush(error)) {
+                return false;
+            }
+            const auto status = writer_->Close();
+            if (!status.ok()) {
+                error = "closing sparse Parquet writer: " + status.ToString();
+                return false;
+            }
+            writer_.reset();
+        }
+        if (outputStream_) {
+            const auto status = outputStream_->Close();
+            if (!status.ok()) {
+                error = "closing sparse Parquet output: " + status.ToString();
+                return false;
+            }
+            outputStream_.reset();
+        }
+        return true;
+    }
+
+    std::uint64_t rowsWritten() const {
+        return rowsWritten_;
+    }
+
+private:
+    void resetBuilders() {
+        auto* pool = arrow::default_memory_pool();
+        startBuilder_ = std::make_unique<arrow::Int64Builder>(pool);
+        endBuilder_ = std::make_unique<arrow::Int64Builder>(pool);
+        scoreBuilder_ = std::make_unique<arrow::FloatBuilder>(pool);
+        pwmRelativeScoreBuilder_ = std::make_unique<arrow::FloatBuilder>(pool);
+        matchedSequenceBuilder_ = std::make_unique<arrow::StringBuilder>(pool);
+        pendingRows_ = 0;
+    }
+
+    bool flush(std::string& error) {
+        if (pendingRows_ == 0) {
+            return true;
+        }
+
+        std::shared_ptr<arrow::Array> startArray;
+        std::shared_ptr<arrow::Array> endArray;
+        std::shared_ptr<arrow::Array> scoreArray;
+        std::shared_ptr<arrow::Array> pwmRelativeScoreArray;
+        std::shared_ptr<arrow::Array> matchedSequenceArray;
+        auto status = startBuilder_->Finish(&startArray);
+        if (status.ok()) status = endBuilder_->Finish(&endArray);
+        if (status.ok()) status = scoreBuilder_->Finish(&scoreArray);
+        if (status.ok()) status = pwmRelativeScoreBuilder_->Finish(&pwmRelativeScoreArray);
+        if (status.ok()) status = matchedSequenceBuilder_->Finish(&matchedSequenceArray);
+        if (!status.ok()) {
+            error = "finishing sparse hit arrays: " + status.ToString();
+            return false;
+        }
+
+        const auto batch = arrow::RecordBatch::Make(
+            schema_, static_cast<std::int64_t>(pendingRows_),
+            {startArray, endArray, scoreArray, pwmRelativeScoreArray,
+             matchedSequenceArray});
+        status = writer_->WriteRecordBatch(*batch);
+        if (!status.ok()) {
+            error = "writing sparse Parquet record batch: " + status.ToString();
+            return false;
+        }
+
+        resetBuilders();
+        return true;
+    }
+
+    size_t rowsPerRecordBatch_;
+    size_t pendingRows_ = 0;
+    std::uint64_t rowsWritten_ = 0;
+    std::shared_ptr<arrow::Schema> schema_;
+    std::shared_ptr<arrow::io::FileOutputStream> outputStream_;
+    std::unique_ptr<parquet::arrow::FileWriter> writer_;
+    std::unique_ptr<arrow::Int64Builder> startBuilder_;
+    std::unique_ptr<arrow::Int64Builder> endBuilder_;
+    std::unique_ptr<arrow::FloatBuilder> scoreBuilder_;
+    std::unique_ptr<arrow::FloatBuilder> pwmRelativeScoreBuilder_;
+    std::unique_ptr<arrow::StringBuilder> matchedSequenceBuilder_;
+};
+
 class DenseScoreParquetWriter {
 public:
     explicit DenseScoreParquetWriter(const size_t blocksPerRecordBatch = 64)
@@ -647,24 +804,22 @@ void writeSparseHitHeader(std::ostream& outFile, bool showSequence) {
  * @param scoreMode - score mode used for the Score column
  * @return 0 if successful, else -1
  */
-int scanSequence(const std::string& chromosome, const EncodedChromosome& encodedChromosome, const std::string& strand,
-                 const PSSM& pssm, const FlatPSSM& flatPssm,
-                 std::ofstream& outFile, double threshold, double minPwmRelativeScore,
-                 double maxPwmRelativeScore, long from, long to, bool showHeader,
-                 bool showSequence, const std::string& scoreMode, double pseudocount, const ScoreRange& scoreRange,
-                 CoordinateMode coordinateMode) {
-    //size_t motifLength = pssm.begin()->second.size();
+template <typename HitConsumer>
+int scanSparseHits(const std::string& chromosome,
+                   const EncodedChromosome& encodedChromosome,
+                   const std::string& strand, const PSSM& pssm,
+                   const FlatPSSM& flatPssm, const double threshold,
+                   const double minPwmRelativeScore,
+                   const double maxPwmRelativeScore, const long from,
+                   const long to, const ScoreRange& scoreRange,
+                   const CoordinateMode coordinateMode,
+                   HitConsumer&& consumeHit) {
     const size_t motifLength = pssm.motifLength;
     const std::string& sequence = encodedChromosome.sequence;
     const size_t sequenceLength = sequence.size();
     const size_t reportInterval = std::max<size_t>(1, sequenceLength / 100 / 10);  // Update progress every 0.1%
 
     if (showDebug) std::cerr << "D: Sequence length=" << sequenceLength << ". report interval=" << reportInterval << std::endl;
-
-
-    if (showHeader) {
-        writeSparseHitHeader(outFile, showSequence);
-    }
 
     size_t posStart=0L;
     if (from>0L) {
@@ -730,21 +885,155 @@ int scanSequence(const std::string& chromosome, const EncodedChromosome& encoded
 
         const size_t outputStart = outputStartForCoordinateMode(coordinateMode, i);
         const size_t outputEnd = outputEndForCoordinateMode(coordinateMode, i, motifLength);
-        outFile << chromosome << "\t" << outputStart << "\t" << outputEnd << "\t" << pssm.motifName
-                              << "\t" << std::fixed << std::setprecision(3) << score << "\t" << strand;
-        if (showSequence) {
-            outFile << "\t" << sequenceWindowForOutput(sequence, i, motifLength, reverseComplementWindow);
+        if (!consumeHit(i, outputStart, outputEnd, score, relativeScore,
+                        reverseComplementWindow)) {
+            return -1;
         }
-        outFile << "\t" << scoreMode
-                << "\t" << std::fixed << std::setprecision(6) << pseudocount
-                << "\t" << std::fixed << std::setprecision(6) << relativeScore
-                << "\t" << coordinateModeName(coordinateMode);
-        outFile << '\n';
-
     }
     maybePrintRequestedProgress("scan", pssm, chromosome, strand, posStart, posEnd, motifLength, posEnd - motifLength);
     return 0;
 }
+
+int scanSequence(const std::string& chromosome,
+                 const EncodedChromosome& encodedChromosome,
+                 const std::string& strand, const PSSM& pssm,
+                 const FlatPSSM& flatPssm, std::ofstream& outFile,
+                 const double threshold, const double minPwmRelativeScore,
+                 const double maxPwmRelativeScore, const long from,
+                 const long to, const bool showHeader, const bool showSequence,
+                 const std::string& scoreMode, const double pseudocount,
+                 const ScoreRange& scoreRange,
+                 const CoordinateMode coordinateMode) {
+    if (showHeader) {
+        writeSparseHitHeader(outFile, showSequence);
+    }
+
+    return scanSparseHits(
+        chromosome, encodedChromosome, strand, pssm, flatPssm, threshold,
+        minPwmRelativeScore, maxPwmRelativeScore, from, to, scoreRange,
+        coordinateMode,
+        [&](const size_t genomicStart, const size_t outputStart,
+            const size_t outputEnd, const double score,
+            const double relativeScore, const bool reverseComplementWindow) {
+            outFile << chromosome << "\t" << outputStart << "\t" << outputEnd
+                    << "\t" << pssm.motifName << "\t" << std::fixed
+                    << std::setprecision(3) << score << "\t" << strand;
+            if (showSequence) {
+                outFile << "\t" << sequenceWindowForOutput(
+                    encodedChromosome.sequence, genomicStart, pssm.motifLength,
+                    reverseComplementWindow);
+            }
+            outFile << "\t" << scoreMode << "\t" << std::fixed
+                    << std::setprecision(6) << pseudocount << "\t"
+                    << std::fixed << std::setprecision(6) << relativeScore
+                    << "\t" << coordinateModeName(coordinateMode) << '\n';
+            return outFile.good();
+        });
+}
+
+#ifdef PSSM_SCAN_WITH_PARQUET
+int scanSequenceToSparseParquet(
+    const std::string& chromosome,
+    const EncodedChromosome& encodedChromosome,
+    const std::string& strand, const PSSM& pssm,
+    const FlatPSSM& flatPssm, SparseHitParquetWriter& writer,
+    const double threshold, const double minPwmRelativeScore,
+    const double maxPwmRelativeScore, const long from, const long to,
+    const bool showSequence, const ScoreRange& scoreRange) {
+    return scanSparseHits(
+        chromosome, encodedChromosome, strand, pssm, flatPssm, threshold,
+        minPwmRelativeScore, maxPwmRelativeScore, from, to, scoreRange,
+        CoordinateMode::Bed,
+        [&](const size_t genomicStart, const size_t outputStart,
+            const size_t outputEnd, const double score,
+            const double relativeScore, const bool reverseComplementWindow) {
+            std::string matchedSequence;
+            const std::string* matchedSequencePointer = nullptr;
+            if (showSequence) {
+                matchedSequence = sequenceWindowForOutput(
+                    encodedChromosome.sequence, genomicStart, pssm.motifLength,
+                    reverseComplementWindow);
+                matchedSequencePointer = &matchedSequence;
+            }
+            std::string error;
+            if (!writer.append(static_cast<std::int64_t>(outputStart),
+                               static_cast<std::int64_t>(outputEnd), score,
+                               relativeScore, matchedSequencePointer, error)) {
+                std::cerr << "E: " << error << std::endl;
+                return false;
+            }
+            return true;
+        });
+}
+
+int writeSparseHitParquet(
+    const std::filesystem::path& outputFilePath,
+    const std::string& chromosome,
+    const EncodedChromosome& encodedChromosome,
+    const std::string& strand, const PSSM& pssm,
+    const FlatPSSM& flatPssm, const double threshold,
+    const double minPwmRelativeScore, const double maxPwmRelativeScore,
+    const long from, const long to, const bool showSequence,
+    const ScoreRange& scoreRange) {
+    std::error_code filesystemError;
+    std::filesystem::create_directories(outputFilePath.parent_path(),
+                                        filesystemError);
+    if (filesystemError) {
+        std::cerr << "E: Could not create sparse Parquet directory '"
+                  << outputFilePath.parent_path().string() << "': "
+                  << filesystemError.message() << std::endl;
+        return -1;
+    }
+    if (std::filesystem::exists(outputFilePath)) {
+        std::cerr << "E: Refusing to replace existing sparse Parquet file '"
+                  << outputFilePath.string() << "'." << std::endl;
+        return -1;
+    }
+
+    std::filesystem::path stagingPath = outputFilePath;
+    stagingPath += ".tmp";
+    if (std::filesystem::exists(stagingPath)) {
+        std::cerr << "E: Sparse Parquet staging file already exists: '"
+                  << stagingPath.string() << "'." << std::endl;
+        return -1;
+    }
+
+    SparseHitParquetWriter writer;
+    std::string error;
+    if (!writer.open(stagingPath, error)) {
+        std::cerr << "E: " << error << std::endl;
+        return -1;
+    }
+    if (scanSequenceToSparseParquet(
+            chromosome, encodedChromosome, strand, pssm, flatPssm, writer,
+            threshold, minPwmRelativeScore, maxPwmRelativeScore, from, to,
+            showSequence, scoreRange) != 0) {
+        std::string closeError;
+        if (!writer.close(closeError)) {
+            std::cerr << "E: " << closeError << std::endl;
+        }
+        std::cerr << "E: Incomplete sparse Parquet data remains at '"
+                  << stagingPath.string() << "'." << std::endl;
+        return -1;
+    }
+
+    const std::uint64_t rowsWritten = writer.rowsWritten();
+    if (!writer.close(error)) {
+        std::cerr << "E: " << error << std::endl;
+        return -1;
+    }
+    std::filesystem::rename(stagingPath, outputFilePath, filesystemError);
+    if (filesystemError) {
+        std::cerr << "E: Could not publish sparse Parquet file '"
+                  << outputFilePath.string() << "': "
+                  << filesystemError.message() << std::endl;
+        return -1;
+    }
+    std::cout << "Sparse Parquet hits saved to: " << outputFilePath.string()
+              << " (" << rowsWritten << " rows)" << std::endl;
+    return 0;
+}
+#endif
 
 /** \brief Slide the PSSM across one sequence and collect score distribution bins.
  */
@@ -1306,8 +1595,8 @@ struct PreparedMotif {
     std::unique_ptr<ScoreDistribution> distribution;
 };
 
-void printHelp(const std::string& programName, const std::string& genomeFile, const std::string& fastaIndexFile, const std::string& gzipIndexFile, const std::string& pssmFile, const std::string& targetMotifID, double threshold, double minPwmRelativeScore, double maxPwmRelativeScore, double pseudocount, const std::string& chromosome, long from, long to, const std::string& regions, const std::string& outdir, bool showSequence, const std::string& scoreMode, bool scoreDistribution, const std::string& distributionBinWidth, bool denseScores, size_t denseBlockSize, StrandMode strandMode, CoordinateMode coordinateMode) {
-    std::cout << "Usage: " << programName << " [-v] [-c chromosome] [-t toBp] [-f fromBp] [-g genome_file] [-p pssm_file] [-m motif_id] [--score-mode log2_relative_risk|log_odds] [--pseudocount value] [--strand +|-|both] [--coordinate-mode legacy|bed] [--score-distribution] [--distribution-bin-width adaptive|width] [--dense-scores] [--dense-block-size windows] [--skip-N | --neutral-N] [--skip-normalization]" << std::endl;
+void printHelp(const std::string& programName, const std::string& genomeFile, const std::string& fastaIndexFile, const std::string& gzipIndexFile, const std::string& pssmFile, const std::string& targetMotifID, double threshold, double minPwmRelativeScore, double maxPwmRelativeScore, double pseudocount, const std::string& chromosome, long from, long to, const std::string& regions, const std::string& outdir, bool showSequence, const std::string& scoreMode, bool scoreDistribution, const std::string& distributionBinWidth, bool sparseParquet, bool denseScores, size_t denseBlockSize, StrandMode strandMode, CoordinateMode coordinateMode) {
+    std::cout << "Usage: " << programName << " [-v] [-c chromosome] [-t toBp] [-f fromBp] [-g genome_file] [-p pssm_file] [-m motif_id] [--score-mode log2_relative_risk|log_odds] [--pseudocount value] [--strand +|-|both] [--coordinate-mode legacy|bed] [--score-distribution] [--distribution-bin-width adaptive|width] [--sparse-parquet] [--dense-scores] [--dense-block-size windows] [--skip-N | --neutral-N] [--skip-normalization]" << std::endl;
     std::cout << " -v, --verbose        Allow verbose output (set to " << beVerbose << ")" << std::endl;
     std::cout << " -d, --debug          Allow debug output (set to " << showDebug << ")" << std::endl;
     std::cout << " -g, --genome         Path to genome FASTA file (set to '" << genomeFile  << "')" << std::endl;
@@ -1330,6 +1619,7 @@ void printHelp(const std::string& programName, const std::string& genomeFile, co
     std::cout << " --coordinate-mode    Output coordinate convention: legacy or bed (set to '" << coordinateModeName(coordinateMode) << "')" << std::endl;
     std::cout << " --score-distribution Write a score histogram instead of BED hits; default strand is + unless --strand is set (set to " << scoreDistribution << ")" << std::endl;
     std::cout << " --distribution-bin-width Score histogram bin width or adaptive ladder (set to '" << distributionBinWidth << "')" << std::endl;
+    std::cout << " --sparse-parquet     Write thresholded hits directly to partitioned Parquet (set to " << sparseParquet << "; requires Arrow build, explicit --threshold, and BED coordinates)" << std::endl;
     std::cout << " --dense-scores       Write dense " << denseScoreFormatName() << " score blocks for one motif and one chromosome (set to " << denseScores << ")" << std::endl;
     std::cout << " --dense-block-size   Dense alignment scores per output block (set to " << denseBlockSize << ")" << std::endl;
     std::cout << " --skip-N             Skip windows containing 'N'" << std::endl;
@@ -1374,6 +1664,7 @@ int main(int argc, char* argv[]) {
     std::string scoreMode = "log2_relative_risk";
     bool scoreDistribution = false;
     std::string distributionBinWidth = "adaptive";
+    bool sparseParquet = false;
     bool denseScores = false;
     size_t denseBlockSize = DEFAULT_SCORE_BLOCK_SIZE;
     StrandMode strandMode = StrandMode::Both;
@@ -1404,6 +1695,7 @@ int main(int argc, char* argv[]) {
         {"coordinate-mode", required_argument, 0, 0},
         {"score-distribution", no_argument, 0, 0},
         {"distribution-bin-width", required_argument, 0, 0},
+        {"sparse-parquet", no_argument, 0, 0},
         {"dense-scores", no_argument, 0, 0},
         {"dense-block-size", required_argument, 0, 0},
         {"skip-N", no_argument, 0, 0},
@@ -1464,10 +1756,16 @@ int main(int argc, char* argv[]) {
             case 'o':
                 outdir = optarg;
                 if (!std::filesystem::is_directory(outdir)) {
-                    if (std::filesystem::create_directory(outdir)) {
+                    std::error_code directoryError;
+                    if (std::filesystem::create_directories(outdir, directoryError)) {
                         std::cerr << "I: Created output directory '" << outdir << "'." << std::endl;
                     } else {
-                        std::cerr << "E: Output directory '" << outdir << "' not existing and could not be created." << std::endl;
+                        std::cerr << "E: Output directory '" << outdir
+                                  << "' not existing and could not be created";
+                        if (directoryError) {
+                            std::cerr << ": " << directoryError.message();
+                        }
+                        std::cerr << "." << std::endl;
                     }
                 }
                 break;
@@ -1539,6 +1837,8 @@ int main(int argc, char* argv[]) {
                         std::cerr << "E: --distribution-bin-width must be 'adaptive' or greater than 0." << std::endl;
                         showHelp = 1;
                     }
+                } else if (std::string(long_options[option_index].name) == "sparse-parquet") {
+                    sparseParquet = true;
                 } else if (std::string(long_options[option_index].name) == "dense-scores") {
                     denseScores = true;
                 } else if (std::string(long_options[option_index].name) == "dense-block-size") {
@@ -1565,7 +1865,7 @@ int main(int argc, char* argv[]) {
 		showDebug = 1;
                 break;
             case 'h':
-                printHelp(argv[0],genomeFile,fastaIndexFile,gzipIndexFile,pssmFile,targetMotifID,threshold,minPwmRelativeScore,maxPwmRelativeScore,pseudocount,targetChromosome,targetFrom,targetTo,regionsFile,outdir,showSequence,scoreMode,scoreDistribution,distributionBinWidth,denseScores,denseBlockSize,strandMode,coordinateMode);
+                printHelp(argv[0],genomeFile,fastaIndexFile,gzipIndexFile,pssmFile,targetMotifID,threshold,minPwmRelativeScore,maxPwmRelativeScore,pseudocount,targetChromosome,targetFrom,targetTo,regionsFile,outdir,showSequence,scoreMode,scoreDistribution,distributionBinWidth,sparseParquet,denseScores,denseBlockSize,strandMode,coordinateMode);
                 return 0;
             default:
                 showHelp = 1;
@@ -1573,18 +1873,20 @@ int main(int argc, char* argv[]) {
         }
 
         if (showHelp) {
-            printHelp(argv[0],genomeFile,fastaIndexFile,gzipIndexFile,pssmFile,targetMotifID,threshold,minPwmRelativeScore,maxPwmRelativeScore,pseudocount,targetChromosome,targetFrom,targetTo,regionsFile,outdir,showSequence,scoreMode,scoreDistribution,distributionBinWidth,denseScores,denseBlockSize,strandMode,coordinateMode);
+            printHelp(argv[0],genomeFile,fastaIndexFile,gzipIndexFile,pssmFile,targetMotifID,threshold,minPwmRelativeScore,maxPwmRelativeScore,pseudocount,targetChromosome,targetFrom,targetTo,regionsFile,outdir,showSequence,scoreMode,scoreDistribution,distributionBinWidth,sparseParquet,denseScores,denseBlockSize,strandMode,coordinateMode);
             return 1;
         }
     }
 
     if (minPwmRelativeScore > maxPwmRelativeScore) {
         std::cerr << "E: --min-pwm-relative-score must not be greater than --max-pwm-relative-score." << std::endl;
-        printHelp(argv[0],genomeFile,fastaIndexFile,gzipIndexFile,pssmFile,targetMotifID,threshold,minPwmRelativeScore,maxPwmRelativeScore,pseudocount,targetChromosome,targetFrom,targetTo,regionsFile,outdir,showSequence,scoreMode,scoreDistribution,distributionBinWidth,denseScores,denseBlockSize,strandMode,coordinateMode);
+        printHelp(argv[0],genomeFile,fastaIndexFile,gzipIndexFile,pssmFile,targetMotifID,threshold,minPwmRelativeScore,maxPwmRelativeScore,pseudocount,targetChromosome,targetFrom,targetTo,regionsFile,outdir,showSequence,scoreMode,scoreDistribution,distributionBinWidth,sparseParquet,denseScores,denseBlockSize,strandMode,coordinateMode);
         return 1;
     }
-    if (scoreDistribution && denseScores) {
-        std::cerr << "E: --score-distribution and --dense-scores are separate output modes; choose one." << std::endl;
+    const unsigned int specialOutputModes = static_cast<unsigned int>(scoreDistribution) +
+        static_cast<unsigned int>(sparseParquet) + static_cast<unsigned int>(denseScores);
+    if (specialOutputModes > 1U) {
+        std::cerr << "E: --score-distribution, --sparse-parquet, and --dense-scores are separate output modes; choose one." << std::endl;
         return 1;
     }
 
@@ -1629,6 +1931,20 @@ int main(int argc, char* argv[]) {
             std::cerr << "W: --dense-scores ignores --show-sequence." << std::endl;
         }
     }
+    if (sparseParquet) {
+#ifndef PSSM_SCAN_WITH_PARQUET
+        std::cerr << "E: --sparse-parquet requires the Arrow build; run 'make pssm_scan_parquet' and use ./pssm_scan_parquet." << std::endl;
+        return 1;
+#endif
+        if (!thresholdSet) {
+            std::cerr << "E: --sparse-parquet requires an explicit --threshold to prevent accidental dense output." << std::endl;
+            return 1;
+        }
+        if (coordinateMode != CoordinateMode::Bed) {
+            std::cerr << "E: --sparse-parquet requires --coordinate-mode bed." << std::endl;
+            return 1;
+        }
+    }
     const bool scanMinusStrandRequested = strandMode == StrandMode::Minus || strandMode == StrandMode::Both;
 
     if (!regionsFile.empty()) {
@@ -1647,20 +1963,24 @@ int main(int argc, char* argv[]) {
         std::cerr << "E: --dense-scores does not support --regions; use --chr with optional --from/--to." << std::endl;
         return 1;
     }
+    if (sparseParquet && !regions.empty()) {
+        std::cerr << "E: --sparse-parquet does not support --regions; use --chr with optional --from/--to." << std::endl;
+        return 1;
+    }
 
+    const HitOutputOptions hitOutputOptions{
+        effectiveScoreMode,
+        effectivePseudocount,
+        thresholdSet,
+        threshold,
+        minPwmRelativeScore,
+        maxPwmRelativeScore,
+        coordinateMode,
+        showSequence,
+        skipN
+    };
     std::filesystem::path sparseHitOutputDirectory;
-    if (!scoreDistribution && !denseScores) {
-        const HitOutputOptions hitOutputOptions{
-            effectiveScoreMode,
-            effectivePseudocount,
-            thresholdSet,
-            threshold,
-            minPwmRelativeScore,
-            maxPwmRelativeScore,
-            coordinateMode,
-            showSequence,
-            skipN
-        };
+    if (!scoreDistribution && !sparseParquet && !denseScores) {
         sparseHitOutputDirectory = hitOutputDirectory(outdir, hitOutputOptions);
         std::error_code directoryError;
         std::filesystem::create_directories(sparseHitOutputDirectory, directoryError);
@@ -1929,6 +2249,47 @@ int main(int argc, char* argv[]) {
                 }
 
                 continue;
+            }
+
+            if (sparseParquet) {
+#ifdef PSSM_SCAN_WITH_PARQUET
+                const bool scanPlusStrand = strandMode == StrandMode::Plus ||
+                    strandMode == StrandMode::Both;
+                const bool scanMinusStrand = strandMode == StrandMode::Minus ||
+                    strandMode == StrandMode::Both;
+
+                if (scanPlusStrand) {
+                    const std::filesystem::path outputFilePath =
+                        sparseHitParquetOutputPath(
+                            outdir, pssmFile, motifID, hitOutputOptions,
+                            chromosome, "+", targetFrom, targetTo);
+                    if (writeSparseHitParquet(
+                            outputFilePath, chromosome, encodedChromosome, "+",
+                            preparedPssm, flatPssm, threshold,
+                            minPwmRelativeScore, maxPwmRelativeScore, targetFrom,
+                            targetTo, showSequence, scoreRange) != 0) {
+                        return 1;
+                    }
+                }
+                if (scanMinusStrand) {
+                    const std::filesystem::path outputFilePath =
+                        sparseHitParquetOutputPath(
+                            outdir, pssmFile, motifID, hitOutputOptions,
+                            chromosome, "-", targetFrom, targetTo);
+                    if (writeSparseHitParquet(
+                            outputFilePath, chromosome, encodedChromosome, "-",
+                            preparedPssm, flatPssm, threshold,
+                            minPwmRelativeScore, maxPwmRelativeScore, targetFrom,
+                            targetTo, showSequence, scoreRange) != 0) {
+                        return 1;
+                    }
+                }
+                continue;
+#else
+                std::cerr << "E: Internal error: sparse Parquet mode lacks Arrow support."
+                          << std::endl;
+                return 1;
+#endif
             }
 
             std::filesystem::path outputFilePathPositive = sparseHitOutputDirectory;

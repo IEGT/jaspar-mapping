@@ -31,18 +31,25 @@ FROM read_parquet('tables/jaspar2026/motif_metadata/*.parquet');
 
 CREATE OR REPLACE VIEW motif_hit AS
 SELECT
-    CAST(chrom AS VARCHAR) AS chrom, -- e.g. '1', 'X'  (partition key)
-    start,                -- 0-based half-open
-    "end",
-    motif_id,             -- JASPAR accession, e.g. 'MA0861.2'
-    motif_name,           -- e.g. 'TP73'
-    strand,               -- '+' / '-'
-    score,                -- PSSM score in the run's score_mode
-    score_mode,           -- log2_relative_risk | log_odds | raw_counts
-    pseudocount,          -- count added to each A/C/G/T motif entry before normalization
-    pwm_relative_score,   -- 0..1, comparable across motifs
-    matched_seq           -- nullable; present only if scanned with --show-sequence
-FROM read_parquet('tables/jaspar2026/motif_hit/*/*.parquet', hive_partitioning = 1);
+    CAST(h.chrom AS VARCHAR) AS chrom, -- e.g. '1', 'X'  (partition key)
+    h.start,                -- 0-based half-open
+    h."end",
+    h.motif_id,             -- JASPAR accession, e.g. 'MA0861.2' (partition key)
+    m.motif_name,           -- e.g. 'TP73' (small dimension, not repeated per hit)
+    CASE WHEN h.strand IN ('plus', '+') THEN '+'
+         WHEN h.strand IN ('minus', '-') THEN '-'
+         ELSE h.strand END AS strand,
+    CAST(h.score AS DOUBLE) AS score,
+    h.score_mode,           -- log2_relative_risk | log_odds | raw_counts
+    CAST(h.pseudocount AS DOUBLE) AS pseudocount,
+    CAST(h.pwm_relative_score AS DOUBLE) AS pwm_relative_score,
+    h.matched_seq           -- nullable; NULL unless scanned with --show-sequence
+FROM read_parquet(
+    'tables/jaspar2026/motif_hit/**/*.parquet',
+    hive_partitioning = 1,
+    union_by_name = 1
+) h
+JOIN motif_metadata m USING (motif_id);
 
 -- Dense score blocks for calibration runs. Each score belongs to one PSSM
 -- alignment start, not to an asserted TF footprint. Physical Parquet stores
