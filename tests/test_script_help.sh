@@ -15,7 +15,11 @@ scripts/analyze_dense_cutandrun_coverage.py
 scripts/bedtools_map_serial.sh
 scripts/build_fasta_index.py
 scripts/build_motif_context.py
+scripts/build_tp73_cutandrun_calibration_duckdb.sh
+scripts/compare_tp73_cofactor_summaries.R
 scripts/dense_tsv_to_parquet.sh
+scripts/evaluate_tp73_multifactor_model.R
+scripts/export_bigwig_chrom_bedgraph.R
 scripts/export_dense_bed.py
 scripts/fetch_region_to_embl.py
 scripts/fix_missing_bidirect.sh
@@ -27,6 +31,8 @@ scripts/run_chr1_2026_motif_panel.sh
 scripts/run_chr1_patz1_tp73_dry_run.sh
 scripts/run_what_is_missing.sh
 scripts/shift_bed.awk
+scripts/summarize_tp73_cutandrun_threshold.R
+scripts/summarize_tp73_patz1_cutandrun_threshold.R
 EOF
 
 (

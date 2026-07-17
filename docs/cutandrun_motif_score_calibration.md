@@ -9,6 +9,17 @@ score changes:
    span; and
 2. the maximum CUT&RUN depth within that span.
 
+The completed real-data chromosome-1 threshold analysis is recorded in
+[`tp73_chr1_cutandrun_threshold_20260713.md`](tp73_chr1_cutandrun_threshold_20260713.md).
+The follow-up using the highest local PATZ1 score for each TP73 alignment is
+recorded in
+[`tp73_patz1_chr1_cutandrun_20260714.md`](tp73_patz1_chr1_cutandrun_20260714.md).
+The corresponding E2F1 and three-model TFAP2C comparison is recorded in
+[`tp73_e2f1_tfap2c_chr1_cutandrun_20260714.md`](tp73_e2f1_tfap2c_chr1_cutandrun_20260714.md).
+The negative-predictor analysis using the strongest local POU2F2 score is
+recorded in
+[`tp73_pou2f2_chr1_cutandrun_20260717.md`](tp73_pou2f2_chr1_cutandrun_20260717.md).
+
 The scored span is the PSSM alignment interval `[start,end)`. It remains a
 computational interval rather than an assertion about the complete physical
 footprint of the TP73 complex. Here it is the requested minimum interval that
@@ -150,20 +161,40 @@ analysis. Existing files need not be renamed if `samples.tsv` maps them.
 
 ## Full chromosome implementation
 
-The full run consumes dense Parquet blocks and CUT&RUN coverage directly. For
-TP73 motif length `L`, one merged component `[c_start,c_end)` can immerse only
-alignment starts in:
+For threshold calibration, `cutandrun_score_calibration` is the production
+full-chromosome path. It streams paired plus/minus dense Parquet blocks and any
+number of sorted, non-overlapping positive-depth bedGraph tracks. It advances
+through each score and coverage stream once, writes only compact histograms and
+curves, and never materializes chromosome-wide per-position evidence.
+
+For an explicitly row-level downstream model, add `--feature-parquet FILE` to
+a joint anchor/context run. The option writes one Zstandard-compressed Parquet
+row for each anchor at or above `--minimum-anchor-score`; it is disabled by
+default. Each row contains the exact anchor and best local context score,
+0-based half-open spans, strand codes (`1` for plus and `-1` for minus), signed
+center distance, orientation agreement, and one strict-support/maximum-depth
+column pair per coverage track. The context is still the highest
+orientation-collapsed score within `--context-flank`, with the existing
+earliest-start/plus-orientation tie rule. Use the exact table when several
+cofactor maxima must be joined by anchor coordinate; the compact joint
+histogram cannot recover that co-occurrence after aggregation.
+
+For TP73 motif length `L`, one merged component `[c_start,c_end)` can immerse
+only alignment starts in:
 
 ```text
 [c_start + 1, c_end - L)
 ```
 
-DuckDB can generate those starts, look scores up directly in dense block
-vectors, and aggregate positive evidence without expanding the complete dense
-chromosome into a stored row table. The all-candidate score histogram comes
-directly from per-block list histograms; requested score modes are processed
-sequentially. Combining those compact summaries is sufficient for exact or
-user-selected thresholds, ROC/PR metrics, and depth summaries.
+The streaming calibrator tests this condition while maintaining the maximum
+active bedGraph depth across each motif span. Combining the resulting compact
+summaries is sufficient for fixed-bin thresholds, ROC/PR metrics, coverage
+component recall, and depth summaries.
+
+`scripts/analyze_dense_cutandrun_coverage.py` remains useful when a bounded
+region needs a row-level `immersed_motif_evidence` audit. Its detailed
+per-position output and base expansion are not the production path for a full,
+deeply covered chromosome.
 
 ### Pseudocount comparison
 
@@ -198,20 +229,21 @@ pseudocount; the hive path keeps them separate even in one output package:
   --score-mode log2_relative_risk --pseudocount 1
 ```
 
-Run `scripts/analyze_dense_cutandrun_coverage.py` once per pseudocount with the
-same `--package`, `--coverage-bed`, and `--score-mode log2_relative_risk`.
-For the Rostock run-length coverage tracks, pass
-`--coverage-format bedgraph`; the resolved format and depth semantics are
-stored in `run_config` and `calibration_summary`.
+Run `cutandrun_score_calibration` once per score definition and pass all
+coverage tracks for that comparison as repeated `--coverage ID=FILE`
+arguments. For a bounded row-level audit, run
+`scripts/analyze_dense_cutandrun_coverage.py` once per pseudocount with the
+same `--package`, `--coverage-bed`, and
+`--score-mode log2_relative_risk`.
 
 ### Memory safety
 
-`scripts/analyze_dense_cutandrun_coverage.py` defaults to one DuckDB thread, a
-`6GB` DuckDB memory limit, disabled insertion-order preservation, and at most
-`40GB` of temporary spill data below its output directory. These are deliberate
-defaults for a 16 GB workstation. A DuckDB `Out of Memory Error` at the stated
-limit is a controlled query failure; it prevents the query from consuming all
-system memory. Do not remove the limit merely to make such a query continue.
+The streaming C++ calibrator keeps coverage runs, components, compact
+histograms, and one Parquet record batch in memory. It does not need a DuckDB
+spill directory. The detailed Python/DuckDB auditor defaults to one DuckDB
+thread, a `6GB` memory limit, disabled insertion-order preservation, and at
+most `40GB` of temporary spill data. Those limits remain deliberate for
+bounded audits on a 16 GB workstation.
 
 On macOS, inspect system pressure and the DuckDB worker while a run is active:
 
@@ -227,13 +259,46 @@ as the stop signal. A large but bounded RSS alone is not sufficient if
 beforehand because `--max-temp-size` is a ceiling rather than a reservation.
 
 The primary unstranded analysis collapses the two orientation records to one
-genomic span using their maximum score. A secondary table retains
-orientation-specific results. `log2_relative_risk` and `log_odds` are evaluated
-independently with pseudocount 1 and explicit provenance.
+genomic span using their maximum score. `log2_relative_risk` and `log_odds`
+are evaluated independently with explicit pseudocount provenance.
 
-Canonical outputs are Parquet tables for positive span evidence, threshold
-curves, and one compact calibration summary per sample and score mode. The
-final genome-wide storage threshold should not be selected from Youden J alone.
-Report Youden and F1 candidates, then choose the lowest score that preserves an
-agreed coverage-component recall while maintaining useful motif-precision
-enrichment across biological replicates.
+Canonical production outputs are compact score histograms, threshold curves,
+and one calibration summary per sample and score mode. Detailed positive-span
+Parquet remains an optional bounded audit artifact. The final genome-wide
+storage threshold must not be selected from Youden J alone. Report Youden and
+F1 candidates, then declare an effect-size and storage rule against matched
+controls, as in the completed TP73 chromosome-1 analysis.
+
+### Optional second-motif score
+
+The streaming calibrator can also attach the single highest orientation-
+collapsed context-motif score to each anchor without materializing a genomic
+join. Supply paired context Parquet files plus the context motif length and
+center-distance flank:
+
+```sh
+./cutandrun_score_calibration \
+  --plus-parquet TP73_PLUS.parquet --minus-parquet TP73_MINUS.parquet \
+  --context-plus-parquet PATZ1_PLUS.parquet \
+  --context-minus-parquet PATZ1_MINUS.parquet \
+  --context-motif-id MA1961.2 --context-motif-length 11 \
+  --context-flank 150 --minimum-anchor-score -10 \
+  --coverage SAMPLE=TRACK.bedGraph --output-dir RUN/joint_risk_p1
+```
+
+`joint_score_histogram.tsv` records the two score bins, support/depth evidence,
+orientation agreement, and aggregate center distances. `joint_run_config.tsv`
+pins both Parquet inputs and the deterministic tie rule. The ordinary TP73
+histogram and curve are still emitted and should agree with a TP73-only pass.
+
+After matched anti-p73 and IgG passes, use
+`summarize_tp73_patz1_cutandrun_threshold.R`. Despite its historical filename,
+`--context-label` makes its tables and plots cofactor-generic. It compares a
+context-motif gate and assisted lower-TP73 rescue rule with a TP73-only
+expectation at exactly the same storage count. The exact count match
+interpolates within one tied 0.2-score bin; it does not invent a finer
+deterministic TP73 threshold. Summary tables retain the minimum, median, and
+maximum across the six TA/DN comparisons and nominate an exploratory beneficial
+or detrimental rule only when all six support and depth effects agree on its
+direction. Use `compare_tp73_cofactor_summaries.R` to compare the resulting
+selected-policy tables at approximately equal retention.

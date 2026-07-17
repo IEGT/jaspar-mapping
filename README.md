@@ -212,8 +212,8 @@ such. This distinction keeps pseudocount comparisons on the same candidate
 set. The derived `start`/`end` interval is the sequence span used for PSSM
 scoring; it is not intended to define the physical footprint of the bound TF
 complex.
-Build the direct Parquet scanner with Apache Arrow/Parquet C++ available
-through `pkg-config`:
+Build the direct Parquet scanner with Apache Arrow/Parquet C++ available through
+`pkg-config`:
 
 ```
 make pssm_scan_parquet
@@ -252,6 +252,18 @@ transcript/intron features are documented in
 The strict CUT&RUN coverage-immersion rule, synthetic local test, threshold
 metrics, and true-data landing convention are documented in
 [`docs/cutandrun_motif_score_calibration.md`](docs/cutandrun_motif_score_calibration.md).
+The completed chromosome-1 anti-p73/IgG threshold comparison and operational
+TP73 cutoffs are recorded in
+[`docs/tp73_chr1_cutandrun_threshold_20260713.md`](docs/tp73_chr1_cutandrun_threshold_20260713.md).
+The matched-storage follow-up using the strongest PATZ1 score within +/-150 bp
+of each TP73 alignment is recorded in
+[`docs/tp73_patz1_chr1_cutandrun_20260714.md`](docs/tp73_patz1_chr1_cutandrun_20260714.md).
+The same chromosome-1 analysis for E2F1 and all three current JASPAR 2026
+TFAP2C models, including a count-matched cofactor comparison, is recorded in
+[`docs/tp73_e2f1_tfap2c_chr1_cutandrun_20260714.md`](docs/tp73_e2f1_tfap2c_chr1_cutandrun_20260714.md).
+The corresponding POU2F2 analysis confirms a strong negative count-matched
+association and is recorded in
+[`docs/tp73_pou2f2_chr1_cutandrun_20260717.md`](docs/tp73_pou2f2_chr1_cutandrun_20260717.md).
 
 ## Automated reference checks
 

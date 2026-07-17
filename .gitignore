@@ -21,6 +21,7 @@ __pycache__/
 gtf_file_region_retrieval 
 pssm_scan
 pssm_scan_parquet
+cutandrun_score_calibration
 context
 tests/test_pssm_scan
 tests/test_gtf_file_region

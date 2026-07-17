@@ -99,7 +99,7 @@ CONTEXT_DATATABLE=TP73_datatable_$(CHR)_flank-$(CONTEXT_FLANK)_motif-center.bed.
 .SUFFIXES: .gz .bed.gz .cpp .o .fasta .fa.gz _positive_$(CHR).bed _positive_$(CHR).bed.gz _negative_$(CHR).bed _negative_$(CHR).bed.gz _bidirect_$(CHR).bed.gz .bed .bedGraph .combined.bed
 
 BINARIES=pssm_scan gtf_file_region_retrieval context
-PARQUET_BINARIES=pssm_scan_parquet
+PARQUET_BINARIES=pssm_scan_parquet cutandrun_score_calibration
 TEST_BINARIES=tests/test_pssm_scan tests/test_gtf_file_region tests/test_compressed_file_reader tests/test_context
 
 all: $(BINARIES)
@@ -130,6 +130,9 @@ pssm_scan: pssm_scan.cpp pssm.h pssm_scan_core.h progress.o pssm.o pssm_scan_cor
 pssm_scan_parquet: pssm_scan.cpp pssm.h pssm_scan_core.h progress.o pssm.o pssm_scan_core.o compressed_file_reader.o
 	$(CXX) $(CXXFLAGS) -DPSSM_SCAN_WITH_PARQUET $(PARQUET_CXXFLAGS) -o $@ pssm_scan.cpp progress.o pssm.o pssm_scan_core.o compressed_file_reader.o $(LDFLAGS) $(PARQUET_LDFLAGS)
 
+cutandrun_score_calibration: cutandrun_score_calibration.cpp
+	$(CXX) $(CXXFLAGS) $(PARQUET_CXXFLAGS) -o $@ $< $(LDFLAGS) $(PARQUET_LDFLAGS)
+
 tests/test_pssm_scan: tests/test_pssm_scan.cpp pssm_scan_core.h pssm.h pssm.o pssm_scan_core.o
 	$(CXX) $(TEST_CXXFLAGS) -o $@ tests/test_pssm_scan.cpp pssm.o pssm_scan_core.o
 
@@ -158,11 +161,12 @@ check: pssm_scan $(TEST_BINARIES)
 check-r:
 	Rscript tests/test_analyze_bed_cutandrun.R
 
-check-duckdb: pssm_scan_parquet
+check-duckdb: cutandrun_score_calibration pssm_scan_parquet
 	bash tests/test_duckdb_contract.sh
 	bash tests/test_chr1_dense_duckdb.sh
 	bash tests/test_export_dense_bed.sh
 	bash tests/test_dense_cutandrun_calibration.sh
+	bash tests/test_streaming_cutandrun_calibration.sh
 	bash tests/test_motif_context.sh
 	bash tests/test_sparse_parquet.sh
 
