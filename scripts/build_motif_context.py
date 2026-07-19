@@ -10,6 +10,11 @@ it must be a distinct, non-overlapping TP73 span whose edge-to-edge gap is at
 most ``--tandem-flank``.  Distances describe centers of scored sequence spans,
 not inferred physical footprints of bound proteins.
 
+The raw pair table preserves orientation-specific scoring records.  A separate
+TP73 pair-feature table collapses records for the same neighboring alignment
+span into one partner locus.  A locus represented on both strands is labelled
+orientation-ambiguous instead of being counted as two physical partners.
+
 When a GTF is supplied, coordinates are converted directly from GTF 1-based
 inclusive to BED-style 0-based half-open coordinates.  The output is a movable
 DuckDB-plus-Parquet package; no BED or TSV intermediate is produced.
@@ -18,8 +23,11 @@ DuckDB-plus-Parquet package; no BED or TSV intermediate is produced.
 from __future__ import annotations
 
 import argparse
+import csv
 import glob
+import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -58,6 +66,16 @@ def nonnegative_float(value: str) -> float:
     return result
 
 
+def finite_float(value: str) -> float:
+    try:
+        result = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("expected a finite number") from error
+    if not math.isfinite(result):
+        raise argparse.ArgumentTypeError("expected a finite number")
+    return result
+
+
 def argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -82,11 +100,37 @@ def argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--anchor-motif", default="MA0861.2",
                         help="anchor motif accession (default: MA0861.2)")
     parser.add_argument(
+        "--motif-set-id",
+        required=True,
+        help="explicit motif-set identity carried into every derived table",
+    )
+    parser.add_argument(
+        "--genome-id",
+        required=True,
+        help="explicit reference-genome identity carried into every derived table",
+    )
+    parser.add_argument(
         "--score-mode",
         default="log2_relative_risk",
         choices=("log2_relative_risk", "log_odds"),
     )
     parser.add_argument("--pseudocount", type=nonnegative_float, default=1.0)
+    parser.add_argument(
+        "--background-model-id", default="uniform_acgt_v1",
+        help="scoring background identity (default: uniform_acgt_v1)",
+    )
+    parser.add_argument(
+        "--pseudocount-scheme", default="additive_per_base",
+        help="pseudocount semantics (default: additive_per_base)",
+    )
+    parser.add_argument(
+        "--anchor-minimum-score", required=True, type=finite_float,
+        help="inclusive score floor for TP73 anchors",
+    )
+    parser.add_argument(
+        "--partner-minimum-score", required=True, type=finite_float,
+        help="inclusive score floor for TP73 tandem partners",
+    )
     parser.add_argument(
         "--chrom",
         action="append",
@@ -394,11 +438,60 @@ FROM anchor_hit;
 """
 
 
+def parquet_columns(executable: str, motif_glob: str) -> set[str]:
+    query = (
+        "DESCRIBE SELECT * FROM read_parquet("
+        f"{sql_string(motif_glob)}, hive_partitioning=1);"
+    )
+    process = subprocess.run(
+        [executable, "-csv", "-noheader", ":memory:", "-c", query],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if process.returncode != 0:
+        detail = process.stderr.strip() or "DuckDB DESCRIBE failed"
+        raise ContextBuildError(f"could not inspect motif-hit schema: {detail}")
+    return {row[0] for row in csv.reader(process.stdout.splitlines()) if row}
+
+
 def build_sql(arguments: argparse.Namespace, motif_glob: str,
-              chromosomes: list[str], gtf: Path | None) -> str:
+              chromosomes: list[str], gtf: Path | None,
+              source_columns: set[str]) -> str:
     chrom_clause = chromosome_filter(chromosomes)
     annotation_sql = gtf_sql(gtf, chromosomes) if gtf is not None else no_gtf_sql()
     gtf_source = sql_string(gtf) if gtf is not None else "NULL"
+    motif_name = (
+        "COALESCE(NULLIF(motif_name::VARCHAR, ''), motif_id::VARCHAR)"
+        if "motif_name" in source_columns else "motif_id::VARCHAR"
+    )
+    genome_id = (
+        "genome_id::VARCHAR" if "genome_id" in source_columns
+        else f"{sql_string(arguments.genome_id)}::VARCHAR"
+    )
+    motif_set_id = (
+        "motif_set_id::VARCHAR" if "motif_set_id" in source_columns
+        else f"{sql_string(arguments.motif_set_id)}::VARCHAR"
+    )
+    identity_filters = ""
+    if "genome_id" in source_columns:
+        identity_filters += (
+            f"\n      AND genome_id = {sql_string(arguments.genome_id)}"
+        )
+    if "motif_set_id" in source_columns:
+        identity_filters += (
+            f"\n      AND motif_set_id = {sql_string(arguments.motif_set_id)}"
+        )
+    if "background_model_id" in source_columns:
+        identity_filters += (
+            "\n      AND background_model_id = "
+            f"{sql_string(arguments.background_model_id)}"
+        )
+    if "pseudocount_scheme" in source_columns:
+        identity_filters += (
+            "\n      AND pseudocount_scheme = "
+            f"{sql_string(arguments.pseudocount_scheme)}"
+        )
     return f"""
 SET threads={arguments.threads};
 SET memory_limit={sql_string(arguments.memory_limit)};
@@ -408,10 +501,16 @@ SET max_temp_directory_size={sql_string(arguments.max_temp_size)};
 PRAGMA enable_progress_bar;
 
 CREATE TEMP TABLE context_run_config AS SELECT
-    1::INTEGER AS schema_version,
+    3::INTEGER AS schema_version,
+    {sql_string(arguments.genome_id)}::VARCHAR AS genome_id,
+    {sql_string(arguments.motif_set_id)}::VARCHAR AS motif_set_id,
     {sql_string(arguments.anchor_motif)}::VARCHAR AS anchor_motif_id,
     {sql_string(arguments.score_mode)}::VARCHAR AS score_mode,
     {sql_number(arguments.pseudocount)}::DOUBLE AS pseudocount,
+    {sql_string(arguments.background_model_id)}::VARCHAR AS background_model_id,
+    {sql_string(arguments.pseudocount_scheme)}::VARCHAR AS pseudocount_scheme,
+    {sql_number(arguments.anchor_minimum_score)}::DOUBLE AS anchor_minimum_score,
+    {sql_number(arguments.partner_minimum_score)}::DOUBLE AS partner_minimum_score,
     {arguments.capture_flank}::INTEGER AS capture_flank_bp,
     {arguments.context_flank}::INTEGER AS context_flank_bp,
     {arguments.tandem_flank}::INTEGER AS tandem_flank_bp,
@@ -419,6 +518,9 @@ CREATE TEMP TABLE context_run_config AS SELECT
     'nonoverlapping_edge_gap'::VARCHAR AS tandem_distance_metric,
     'anchor_minus_strand_flips_sign'::VARCHAR AS oriented_distance_rule,
     'same_motif_id_nonoverlapping_distinct_span'::VARCHAR AS tandem_identity_rule,
+    'same_alignment_span_collapses_orientation_records'::VARCHAR
+        AS partner_locus_identity_rule,
+    'singleton_same_opposite_mixed_or_ambiguous'::VARCHAR AS pair_class_rule,
     {sql_string(motif_glob)}::VARCHAR AS motif_hit_source,
     {gtf_source}::VARCHAR AS gtf_source;
 
@@ -432,15 +534,26 @@ SELECT * EXCLUDE (duplicate_rank)
 FROM (
     SELECT
         md5(concat_ws('|', CAST(chrom AS VARCHAR), start::VARCHAR, "end"::VARCHAR,
-                      motif_id, strand, score_mode, printf('%.17g', pseudocount)))
+                      {genome_id}, {motif_set_id}, motif_id, strand, score_mode,
+                      printf('%.17g', pseudocount::DOUBLE)))
             AS hit_id,
+        {genome_id} AS genome_id,
+        {motif_set_id} AS motif_set_id,
         CAST(chrom AS VARCHAR) AS chrom,
         start::BIGINT AS start,
         "end"::BIGINT AS "end",
         (start::DOUBLE + "end"::DOUBLE) / 2.0 AS center_bp,
+        FLOOR(
+            ((start::DOUBLE + "end"::DOUBLE) / 2.0) /
+            {max(arguments.capture_flank, 1)}
+        )::BIGINT AS capture_bin,
         motif_id::VARCHAR AS motif_id,
-        motif_name::VARCHAR AS motif_name,
-        strand::VARCHAR AS strand,
+        {motif_name} AS motif_name,
+        CASE lower(strand::VARCHAR)
+            WHEN 'plus' THEN '+'
+            WHEN 'minus' THEN '-'
+            ELSE strand::VARCHAR
+        END AS strand,
         score::DOUBLE AS score,
         score_mode::VARCHAR AS score_mode,
         pseudocount::DOUBLE AS pseudocount,
@@ -453,17 +566,32 @@ FROM (
     FROM read_parquet({sql_string(motif_glob)}, hive_partitioning=1)
     WHERE score_mode = {sql_string(arguments.score_mode)}
       AND pseudocount = {sql_number(arguments.pseudocount)}
+      {identity_filters}
       {chrom_clause}
 )
 WHERE duplicate_rank = 1;
 
+SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM configured_hit WHERE strand NOT IN ('+', '-')
+) THEN error('motif-hit strand must be +/-, plus/minus') END;
+
 CREATE TEMP TABLE anchor_hit AS
 SELECT hit_id AS anchor_hit_id, * EXCLUDE (hit_id)
 FROM configured_hit
-WHERE motif_id = {sql_string(arguments.anchor_motif)};
+WHERE motif_id = {sql_string(arguments.anchor_motif)}
+  AND score >= {sql_number(arguments.anchor_minimum_score)};
 
 SELECT CASE WHEN (SELECT COUNT(*) FROM anchor_hit) = 0
     THEN error('no anchor motif hits matched the requested configuration') END;
+
+-- Expand each neighbor into the three anchor bins that can contain a center
+-- within capture_flank. The resulting equality join avoids a chromosome-wide
+-- all-pairs range join while the exact center-distance predicate below retains
+-- the original semantics.
+CREATE TEMP VIEW candidate_neighbor_hit AS
+SELECT n.*, n.capture_bin + offsets.bin_offset AS anchor_capture_bin
+FROM configured_hit n
+CROSS JOIN (VALUES (-1), (0), (1)) AS offsets(bin_offset);
 
 -- Keep the broad de novo pair layer lossless with respect to local alignments.
 -- same_anchor_motif_span lets summaries suppress the opposite orientation of
@@ -471,6 +599,8 @@ SELECT CASE WHEN (SELECT COUNT(*) FROM anchor_hit) = 0
 CREATE TEMP TABLE motif_context_pair AS
 SELECT
     a.anchor_hit_id,
+    a.genome_id,
+    a.motif_set_id,
     a.chrom,
     a.start AS anchor_start,
     a."end" AS anchor_end,
@@ -515,6 +645,7 @@ SELECT
         AS within_context_flank,
     n.motif_id = a.motif_id
         AND NOT (n.start = a.start AND n."end" = a."end")
+        AND n.score >= {sql_number(arguments.partner_minimum_score)}
         AND LEAST(a."end", n."end") <= GREATEST(a.start, n.start)
         AND (CASE WHEN n.start >= a."end" THEN n.start - a."end"
                   WHEN a.start >= n."end" THEN a.start - n."end"
@@ -522,12 +653,19 @@ SELECT
         AS is_tandem_tp73,
     a.score_mode,
     a.pseudocount,
+    {sql_string(arguments.background_model_id)}::VARCHAR AS background_model_id,
+    {sql_string(arguments.pseudocount_scheme)}::VARCHAR AS pseudocount_scheme,
+    {sql_number(arguments.anchor_minimum_score)}::DOUBLE AS anchor_minimum_score,
+    {sql_number(arguments.partner_minimum_score)}::DOUBLE AS partner_minimum_score,
     {arguments.capture_flank}::INTEGER AS capture_flank_bp,
     {arguments.context_flank}::INTEGER AS context_flank_bp,
     {arguments.tandem_flank}::INTEGER AS tandem_flank_bp
 FROM anchor_hit a
-JOIN configured_hit n
-  ON a.chrom = n.chrom
+JOIN candidate_neighbor_hit n
+  ON a.genome_id = n.genome_id
+ AND a.motif_set_id = n.motif_set_id
+ AND a.chrom = n.chrom
+ AND a.capture_bin = n.anchor_capture_bin
  AND n.center_bp BETWEEN a.center_bp - {arguments.capture_flank}
                      AND a.center_bp + {arguments.capture_flank}
 WHERE n.hit_id <> a.anchor_hit_id;
@@ -536,7 +674,138 @@ SELECT CASE WHEN (SELECT COUNT(*) FROM motif_context_pair) = 0
     THEN error('anchor hits have no neighboring motif hits inside capture flank') END;
 
 COPY motif_context_pair TO 'tables/jaspar2026/motif_context_pair'
-    (FORMAT PARQUET, PARTITION_BY (chrom), COMPRESSION ZSTD);
+    (FORMAT PARQUET, PARTITION_BY (genome_id, chrom), COMPRESSION ZSTD);
+
+-- A near-palindromic motif can produce two strand records for one neighboring
+-- alignment span. Preserve both records above, but collapse them here so the
+-- feature layer counts physical partner loci rather than orientation choices.
+CREATE TEMP TABLE tandem_partner_locus AS
+WITH orientation_records AS (
+    SELECT
+        anchor_hit_id,
+        chrom,
+        neighbor_start,
+        neighbor_end,
+        neighbor_center_bp,
+        genomic_center_distance_bp,
+        anchor_oriented_center_distance_bp,
+        absolute_center_distance_bp,
+        inter_motif_gap_bp,
+        BOOL_OR(relative_orientation = 'same') AS has_same_orientation,
+        BOOL_OR(relative_orientation = 'opposite') AS has_opposite_orientation,
+        COUNT(*)::BIGINT AS n_orientation_records,
+        MAX(neighbor_score) AS partner_score,
+        MAX(neighbor_pwm_relative_score) AS partner_pwm_relative_score
+    FROM motif_context_pair
+    WHERE is_tandem_tp73
+    GROUP BY anchor_hit_id, chrom, neighbor_start, neighbor_end,
+             neighbor_center_bp, genomic_center_distance_bp,
+             anchor_oriented_center_distance_bp,
+             absolute_center_distance_bp, inter_motif_gap_bp
+)
+SELECT
+    *,
+    CASE WHEN has_same_orientation AND has_opposite_orientation
+             THEN 'ambiguous'
+         WHEN has_same_orientation THEN 'same'
+         ELSE 'opposite' END AS partner_orientation
+FROM orientation_records;
+
+CREATE TEMP TABLE tandem_partner_summary AS
+SELECT
+    anchor_hit_id,
+    COUNT(*)::BIGINT AS n_tandem_tp73_partner_loci,
+    COUNT(*) FILTER (WHERE partner_orientation = 'same')::BIGINT
+        AS n_same_orientation_partner_loci,
+    COUNT(*) FILTER (WHERE partner_orientation = 'opposite')::BIGINT
+        AS n_opposite_orientation_partner_loci,
+    COUNT(*) FILTER (WHERE partner_orientation = 'ambiguous')::BIGINT
+        AS n_ambiguous_orientation_partner_loci,
+    MIN(inter_motif_gap_bp)::BIGINT AS nearest_tandem_inter_motif_gap_bp,
+    MIN(absolute_center_distance_bp) AS nearest_tandem_absolute_center_distance_bp,
+    MIN(inter_motif_gap_bp) FILTER (WHERE partner_orientation = 'same')::BIGINT
+        AS nearest_same_orientation_gap_bp,
+    MIN(inter_motif_gap_bp) FILTER (WHERE partner_orientation = 'opposite')::BIGINT
+        AS nearest_opposite_orientation_gap_bp,
+    MIN(inter_motif_gap_bp) FILTER (WHERE partner_orientation = 'ambiguous')::BIGINT
+        AS nearest_ambiguous_orientation_gap_bp,
+    MAX(partner_score) AS best_partner_score,
+    MAX(partner_pwm_relative_score) AS best_partner_pwm_relative_score,
+    MAX(partner_score) FILTER (WHERE partner_orientation = 'same')
+        AS best_same_orientation_partner_score,
+    MAX(partner_score) FILTER (WHERE partner_orientation = 'opposite')
+        AS best_opposite_orientation_partner_score,
+    MAX(partner_score) FILTER (WHERE partner_orientation = 'ambiguous')
+        AS best_ambiguous_orientation_partner_score
+FROM tandem_partner_locus
+GROUP BY anchor_hit_id;
+
+-- These are sequence-compatible architecture features, not observations of a
+-- protein complex or its quaternary structure.
+CREATE TEMP TABLE tp73_pair_feature AS
+SELECT
+    a.anchor_hit_id,
+    a.genome_id,
+    a.motif_set_id,
+    a.chrom,
+    a.start,
+    a."end",
+    a.center_bp,
+    a.motif_id,
+    a.motif_name,
+    a.strand,
+    a.score,
+    a.score_mode,
+    a.pseudocount,
+    {sql_string(arguments.background_model_id)}::VARCHAR AS background_model_id,
+    {sql_string(arguments.pseudocount_scheme)}::VARCHAR AS pseudocount_scheme,
+    {sql_number(arguments.anchor_minimum_score)}::DOUBLE AS anchor_minimum_score,
+    {sql_number(arguments.partner_minimum_score)}::DOUBLE AS partner_minimum_score,
+    a.pwm_relative_score,
+    CASE
+        WHEN COALESCE(s.n_tandem_tp73_partner_loci, 0) = 0
+            THEN 'singleton'
+        WHEN COALESCE(s.n_ambiguous_orientation_partner_loci, 0) > 0
+            THEN 'tandem_orientation_ambiguous'
+        WHEN COALESCE(s.n_same_orientation_partner_loci, 0) > 0
+         AND COALESCE(s.n_opposite_orientation_partner_loci, 0) > 0
+            THEN 'tandem_mixed_orientation'
+        WHEN COALESCE(s.n_same_orientation_partner_loci, 0) > 0
+            THEN 'tandem_same_orientation'
+        ELSE 'tandem_opposite_orientation'
+    END AS pair_class,
+    COALESCE(s.n_tandem_tp73_partner_loci, 0)::BIGINT
+        AS n_tandem_tp73_partner_loci,
+    COALESCE(s.n_same_orientation_partner_loci, 0)::BIGINT
+        AS n_same_orientation_partner_loci,
+    COALESCE(s.n_opposite_orientation_partner_loci, 0)::BIGINT
+        AS n_opposite_orientation_partner_loci,
+    COALESCE(s.n_ambiguous_orientation_partner_loci, 0)::BIGINT
+        AS n_ambiguous_orientation_partner_loci,
+    COALESCE(s.n_tandem_tp73_partner_loci, 0) > 1
+        AS has_multiple_tandem_partner_loci,
+    s.nearest_tandem_inter_motif_gap_bp,
+    s.nearest_tandem_absolute_center_distance_bp,
+    s.nearest_same_orientation_gap_bp,
+    s.nearest_opposite_orientation_gap_bp,
+    s.nearest_ambiguous_orientation_gap_bp,
+    s.best_partner_score,
+    s.best_partner_pwm_relative_score,
+    s.best_same_orientation_partner_score,
+    s.best_opposite_orientation_partner_score,
+    s.best_ambiguous_orientation_partner_score,
+    CASE WHEN s.best_partner_score IS NULL THEN NULL
+         ELSE LEAST(a.score, s.best_partner_score) END AS best_pair_min_score,
+    a.score + s.best_partner_score AS best_pair_sum_score,
+    CASE WHEN s.best_partner_pwm_relative_score IS NULL THEN NULL
+         ELSE LEAST(a.pwm_relative_score, s.best_partner_pwm_relative_score)
+         END AS best_pair_min_pwm_relative_score,
+    {arguments.tandem_flank}::INTEGER AS tandem_flank_bp
+FROM anchor_hit a
+LEFT JOIN tandem_partner_summary s USING (anchor_hit_id);
+
+COPY tp73_pair_feature TO 'tables/jaspar2026/tp73_pair_feature'
+    (FORMAT PARQUET, PARTITION_BY (genome_id, chrom), COMPRESSION ZSTD);
 
 CREATE TEMP TABLE pair_summary AS
 SELECT
@@ -584,6 +853,8 @@ WHERE tandem_rank = 1;
 CREATE TEMP TABLE tp73_context_anchor AS
 SELECT
     a.anchor_hit_id,
+    a.genome_id,
+    a.motif_set_id,
     a.chrom,
     a.start,
     a."end",
@@ -594,12 +865,22 @@ SELECT
     a.score,
     a.score_mode,
     a.pseudocount,
+    {sql_string(arguments.background_model_id)}::VARCHAR AS background_model_id,
+    {sql_string(arguments.pseudocount_scheme)}::VARCHAR AS pseudocount_scheme,
+    {sql_number(arguments.anchor_minimum_score)}::DOUBLE AS anchor_minimum_score,
+    {sql_number(arguments.partner_minimum_score)}::DOUBLE AS partner_minimum_score,
     a.pwm_relative_score,
     COALESCE(s.n_context_neighbor_hits, 0)::BIGINT AS n_context_neighbor_hits,
     COALESCE(s.n_context_neighbor_loci, 0)::BIGINT AS n_context_neighbor_loci,
     COALESCE(s.n_context_motifs, 0)::BIGINT AS n_context_motifs,
     COALESCE(s.n_tandem_tp73_partners, 0) > 0 AS has_tandem_tp73,
     COALESCE(s.n_tandem_tp73_partners, 0)::BIGINT AS n_tandem_tp73_partners,
+    f.pair_class,
+    f.n_tandem_tp73_partner_loci,
+    f.n_same_orientation_partner_loci,
+    f.n_opposite_orientation_partner_loci,
+    f.n_ambiguous_orientation_partner_loci,
+    f.has_multiple_tandem_partner_loci,
     t.neighbor_hit_id AS nearest_tandem_hit_id,
     t.anchor_oriented_center_distance_bp AS nearest_tandem_oriented_distance_bp,
     t.genomic_center_distance_bp AS nearest_tandem_genomic_distance_bp,
@@ -621,23 +902,49 @@ SELECT
 FROM anchor_hit a
 LEFT JOIN pair_summary s USING (anchor_hit_id)
 LEFT JOIN nearest_tandem t USING (anchor_hit_id)
+JOIN tp73_pair_feature f USING (anchor_hit_id)
 JOIN anchor_gene_context g USING (anchor_hit_id);
 
 COPY tp73_context_anchor TO 'tables/jaspar2026/tp73_context_anchor'
-    (FORMAT PARQUET, PARTITION_BY (chrom), COMPRESSION ZSTD);
+    (FORMAT PARQUET, PARTITION_BY (genome_id, chrom), COMPRESSION ZSTD);
 
 DROP TABLE context_run_config;
 DROP TABLE motif_context_pair;
+DROP TABLE tp73_pair_feature;
 DROP TABLE tp73_context_anchor;
 CREATE VIEW context_run_config AS
 SELECT * FROM read_parquet('tables/jaspar2026/context_run_config.parquet');
 CREATE VIEW motif_context_pair AS
 SELECT * FROM read_parquet(
-    'tables/jaspar2026/motif_context_pair/*/*.parquet', hive_partitioning=1
+    'tables/jaspar2026/motif_context_pair/**/*.parquet', hive_partitioning=1
 );
+CREATE VIEW tp73_pair_feature AS
+SELECT * FROM read_parquet(
+    'tables/jaspar2026/tp73_pair_feature/**/*.parquet', hive_partitioning=1
+);
+CREATE VIEW tp73_context_pair_feature AS
+SELECT
+    p.*,
+    f.motif_id AS anchor_motif_id,
+    f.pair_class AS anchor_pair_class,
+    f.n_tandem_tp73_partner_loci,
+    f.n_same_orientation_partner_loci,
+    f.n_opposite_orientation_partner_loci,
+    f.n_ambiguous_orientation_partner_loci,
+    CASE
+        WHEN p.is_tandem_tp73 THEN 'same_motif_tandem'
+        WHEN p.neighbor_motif_id = f.motif_id AND p.interval_overlap_bp > 0
+            THEN 'same_motif_overlapping_alignment'
+        WHEN p.neighbor_motif_id = f.motif_id THEN 'same_motif_context'
+        ELSE 'heterotypic_context'
+    END AS pair_relation,
+    FLOOR(p.anchor_oriented_center_distance_bp / 5.0) * 5.0
+        AS oriented_distance_bin_start_bp
+FROM motif_context_pair p
+JOIN tp73_pair_feature f USING (anchor_hit_id);
 CREATE VIEW tp73_context_anchor AS
 SELECT * FROM read_parquet(
-    'tables/jaspar2026/tp73_context_anchor/*/*.parquet', hive_partitioning=1
+    'tables/jaspar2026/tp73_context_anchor/**/*.parquet', hive_partitioning=1
 );
 """ + (
         """
@@ -673,8 +980,30 @@ def build_package(arguments: argparse.Namespace) -> None:
         raise ContextBuildError("--context-flank cannot exceed --capture-flank")
     if arguments.tandem_flank > arguments.capture_flank:
         raise ContextBuildError("--tandem-flank cannot exceed --capture-flank")
+    identifier_pattern = re.compile(r"^[A-Za-z0-9._-]+$")
+    for option, value in (
+        ("--motif-set-id", arguments.motif_set_id),
+        ("--genome-id", arguments.genome_id),
+        ("--background-model-id", arguments.background_model_id),
+        ("--pseudocount-scheme", arguments.pseudocount_scheme),
+    ):
+        if not identifier_pattern.fullmatch(value):
+            raise ContextBuildError(
+                f"{option} must contain only letters, digits, '.', '_', or '-'"
+            )
 
     motif_glob = resolve_parquet_glob(arguments.motif_hits)
+    columns = parquet_columns(arguments.duckdb, motif_glob)
+    required_columns = {
+        "chrom", "start", "end", "motif_id", "strand", "score",
+        "score_mode", "pseudocount", "pwm_relative_score",
+    }
+    missing_columns = sorted(required_columns - columns)
+    if missing_columns:
+        raise ContextBuildError(
+            "motif-hit Parquet lacks required columns: "
+            + ", ".join(missing_columns)
+        )
     chromosomes = parse_chromosomes(arguments.chrom)
     gtf = arguments.gtf.expanduser().resolve() if arguments.gtf else None
     if gtf is not None and not gtf.is_file():
@@ -688,7 +1017,10 @@ def build_package(arguments: argparse.Namespace) -> None:
     staging = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=output.parent))
     try:
         (staging / "tables" / "jaspar2026").mkdir(parents=True)
-        sql = build_sql(arguments, motif_glob, chromosomes, gtf)
+        sql = build_sql(
+            arguments, motif_glob, chromosomes, gtf,
+            source_columns=columns,
+        )
         run_duckdb(arguments.duckdb, staging, sql)
         shutil.rmtree(staging / "duckdb_tmp", ignore_errors=True)
 

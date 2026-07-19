@@ -289,7 +289,11 @@ void testOutputNaming() {
         std::numeric_limits<double>::infinity(),
         CoordinateMode::Bed,
         true,
-        true
+        true,
+        "jaspar2026_core_nonredundant",
+        "homo_sapiens_grch38_ensembl113_primary",
+        "uniform_acgt_v1",
+        "additive_per_base"
     };
     const std::filesystem::path outputDirectory = hitOutputDirectory("out", options);
     expectEqual(
@@ -322,23 +326,27 @@ void testOutputNaming() {
                "PWM-relative score bounds change the output path");
 
     expectEqual(
-        motifDatasetLabelFromPSSMFile("/tmp/JASPAR2026_CORE_non-redundant_pfms_jaspar.txt"),
-        "jaspar2026",
-        "dense dataset label derived from JASPAR filename"
-    );
-    expectEqual(motifDatasetLabelFromPSSMFile("/tmp/Custom motifs.pfm"),
-                "custom-motifs", "custom dense dataset label is sanitized");
-    expectEqual(
         sparseHitParquetOutputPath(
-            "out", "/tmp/JASPAR2026_CORE_non-redundant_pfms_jaspar.txt",
-            "MA0861.2", options, "1", "+", 100, 200).generic_string(),
-        "out/tables/jaspar2026/motif_hit/motif_id=MA0861.2/"
-        "score_mode=log2_relative_risk/pseudocount=1/minimum_score=0/"
+            "out", "MA0861.2", options, "1", "+", 100, 200).generic_string(),
+        "out/tables/jaspar2026/motif_hit/"
+        "motif_set_id=jaspar2026_core_nonredundant/"
+        "genome_id=homo_sapiens_grch38_ensembl113_primary/"
+        "motif_id=MA0861.2/score_mode=log2_relative_risk/pseudocount=1/"
+        "background_model_id=uniform_acgt_v1/"
+        "pseudocount_scheme=additive_per_base/minimum_score=0/"
         "minimum_pwm_relative_score=0.8/maximum_pwm_relative_score=none/"
         "chrom=1/strand=plus/n_policy=skip/matched_sequence=included/"
         "part-from=100-to=200-000000.parquet",
         "sparse Parquet path moves constant hit identity into partitions"
     );
+    HitOutputOptions mouseGenome = options;
+    mouseGenome.genomeID = "mus_musculus_grcm39_ensembl113_primary";
+    expectTrue(
+        sparseHitParquetOutputPath("out", "MA0861.2", mouseGenome,
+                                   "1", "+", 100, 200) !=
+        sparseHitParquetOutputPath("out", "MA0861.2", options,
+                                   "1", "+", 100, 200),
+        "genome identity changes the sparse Parquet path");
     expectEqual(denseScorePartFilename(100, 200, true, ".parquet"),
                 "part-from=100-to=200-n_policy=skip-000000.parquet",
                 "dense range and N policy in part filename");

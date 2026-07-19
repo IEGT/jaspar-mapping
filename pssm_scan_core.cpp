@@ -132,39 +132,8 @@ std::filesystem::path hitOutputDirectory(const std::filesystem::path& outdir,
     return outputPath;
 }
 
-std::string motifDatasetLabelFromPSSMFile(const std::filesystem::path& pssmFile) {
-    std::string filename = pssmFile.filename().string();
-    std::transform(filename.begin(), filename.end(), filename.begin(), [](const unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
-
-    const size_t jasparPosition = filename.find("jaspar");
-    if (jasparPosition != std::string::npos) {
-        size_t versionStart = jasparPosition + std::string("jaspar").size();
-        while (versionStart < filename.size() &&
-               !std::isdigit(static_cast<unsigned char>(filename[versionStart]))) {
-            ++versionStart;
-        }
-        size_t versionEnd = versionStart;
-        while (versionEnd < filename.size() &&
-               std::isdigit(static_cast<unsigned char>(filename[versionEnd]))) {
-            ++versionEnd;
-        }
-        if (versionEnd > versionStart) {
-            return "jaspar" + filename.substr(versionStart, versionEnd - versionStart);
-        }
-    }
-
-    std::string stem = pssmFile.stem().string();
-    std::transform(stem.begin(), stem.end(), stem.begin(), [](const unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
-    return sanitizePathComponent(stem);
-}
-
 std::filesystem::path sparseHitParquetOutputPath(
     const std::filesystem::path& outdir,
-    const std::filesystem::path& pssmFile,
     const std::string& motifID,
     const HitOutputOptions& options,
     const std::string& chromosome,
@@ -173,11 +142,17 @@ std::filesystem::path sparseHitParquetOutputPath(
     const long to) {
     std::filesystem::path outputPath = outdir;
     outputPath /= "tables";
-    outputPath /= motifDatasetLabelFromPSSMFile(pssmFile);
+    outputPath /= "jaspar2026";
     outputPath /= "motif_hit";
+    outputPath /= "motif_set_id=" + sanitizePathComponent(options.motifSetID);
+    outputPath /= "genome_id=" + sanitizePathComponent(options.genomeID);
     outputPath /= "motif_id=" + sanitizePathComponent(motifID);
     outputPath /= "score_mode=" + sanitizePathComponent(options.scoreMode);
     outputPath /= "pseudocount=" + numericPartitionValue(options.pseudocount);
+    outputPath /= "background_model_id=" +
+        sanitizePathComponent(options.backgroundModelID);
+    outputPath /= "pseudocount_scheme=" +
+        sanitizePathComponent(options.pseudocountScheme);
     outputPath /= "minimum_score=" +
         (options.thresholdSet ? numericPartitionValue(options.threshold) : "none");
     outputPath /= "minimum_pwm_relative_score=" +
@@ -222,16 +197,11 @@ bool isSkippedScore(double score) {
 
 namespace {
 
-struct GenomicWindowScore {
-    double score = SENTINEL_SCORE;
-    bool sequenceValid = false;
-};
-
-GenomicWindowScore scoreGenomicWindow(const std::vector<std::uint8_t>& codes,
-                                      const size_t sequenceLength,
-                                      const bool reverseComplementWindow,
-                                      const size_t genomicStart,
-                                      const FlatPSSM& pssm) {
+ScoredWindow scoreGenomicWindow(const std::vector<std::uint8_t>& codes,
+                                const size_t sequenceLength,
+                                const bool reverseComplementWindow,
+                                const size_t genomicStart,
+                                const FlatPSSM& pssm) {
     if (pssm.motifLength == 0 || genomicStart > sequenceLength ||
         pssm.motifLength > sequenceLength - genomicStart) {
         return {};
@@ -267,6 +237,14 @@ double calculateScoreAt(const std::vector<std::uint8_t>& codes, size_t start, co
     return score;
 }
 
+ScoredWindow scoreWindowAtGenomicStart(
+    const std::vector<std::uint8_t>& codes, const size_t sequenceLength,
+    const bool reverseComplementWindow, const size_t genomicStart,
+    const FlatPSSM& pssm) {
+    return scoreGenomicWindow(
+        codes, sequenceLength, reverseComplementWindow, genomicStart, pssm);
+}
+
 double calculateScoreAtGenomicStart(const std::vector<std::uint8_t>& codes, size_t sequenceLength,
                                     bool reverseComplementWindow, size_t genomicStart,
                                     const FlatPSSM& pssm) {
@@ -283,7 +261,7 @@ ScoreBlock calculateScoreBlock(const std::vector<std::uint8_t>& codes, size_t se
     block.sequenceValid.reserve(windowCount);
 
     for (size_t offset = 0; offset < windowCount; ++offset) {
-        const GenomicWindowScore result = scoreGenomicWindow(
+        const ScoredWindow result = scoreGenomicWindow(
             codes, sequenceLength, reverseComplementWindow, blockStart + offset, pssm);
         block.scores.push_back(result.score);
         block.sequenceValid.push_back(result.sequenceValid);

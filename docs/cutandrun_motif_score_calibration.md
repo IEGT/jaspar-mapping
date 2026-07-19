@@ -19,6 +19,9 @@ The corresponding E2F1 and three-model TFAP2C comparison is recorded in
 The negative-predictor analysis using the strongest local POU2F2 score is
 recorded in
 [`tp73_pou2f2_chr1_cutandrun_20260717.md`](tp73_pou2f2_chr1_cutandrun_20260717.md).
+The follow-up stratifying TP73 candidates by nearby TP73 pair architecture and
+combining PATZ1, TFAP2C, POU2F2, and E2F1 is reported in
+[`tp73_pair_stratified_chr1_cutandrun_20260718.md`](tp73_pair_stratified_chr1_cutandrun_20260718.md).
 
 The scored span is the PSSM alignment interval `[start,end)`. It remains a
 computational interval rather than an assertion about the complete physical
@@ -220,12 +223,16 @@ pseudocount; the hive path keeps them separate even in one output package:
   --genome Homo_sapiens.GRCh38.dna.primary_assembly.fasta \
   --pssm JASPAR2026_CORE_non-redundant_pfms_jaspar.txt \
   --motif MA0861.2 --chr 1 --strand both \
+  --motif-set-id jaspar2026_core_nonredundant \
+  --genome-id homo_sapiens_grch38_ensembl113_primary \
   --score-mode log2_relative_risk --pseudocount 0
 
 ./pssm_scan_parquet --dense-scores --outdir RUN/dense \
   --genome Homo_sapiens.GRCh38.dna.primary_assembly.fasta \
   --pssm JASPAR2026_CORE_non-redundant_pfms_jaspar.txt \
   --motif MA0861.2 --chr 1 --strand both \
+  --motif-set-id jaspar2026_core_nonredundant \
+  --genome-id homo_sapiens_grch38_ensembl113_primary \
   --score-mode log2_relative_risk --pseudocount 1
 ```
 

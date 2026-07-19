@@ -154,6 +154,7 @@ check: pssm_scan $(TEST_BINARIES)
 	bash tests/test_fix_missing_bidirect.sh
 	bash tests/test_localMaxSkmelTADN.sh
 	bash tests/test_indexed_genome_scan.sh
+	bash tests/test_progress_signal.sh
 	bash tests/test_build_fasta_index.sh
 	bash tests/test_cutandrun_containment.sh
 	bash tests/test_script_help.sh
@@ -169,6 +170,7 @@ check-duckdb: cutandrun_score_calibration pssm_scan_parquet
 	bash tests/test_streaming_cutandrun_calibration.sh
 	bash tests/test_motif_context.sh
 	bash tests/test_sparse_parquet.sh
+	bash tests/test_genome_scan_manager.sh
 
 check_synthetic_dense: pssm_scan_parquet
 	bash tests/test_synthetic_dense_dataset.sh

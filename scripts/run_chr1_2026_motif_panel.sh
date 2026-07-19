@@ -10,6 +10,8 @@ readonly EXPECTED_CHR1_LENGTH=248956422
 readonly SCAN_COUNT=20
 readonly SCAN_MEMORY_MB=3072
 readonly REQUIRED_JOB_MEMORY_MB=$((SCAN_COUNT * SCAN_MEMORY_MB + 4096))
+readonly MOTIF_SET_ID="jaspar2026_core_nonredundant"
+readonly GENOME_ID="homo_sapiens_grch38_ensembl113_primary"
 
 readonly -a MOTIF_IDS=(MA0861.2 MA0024.3 MA0079.5 MA1961.2 MA0507.3)
 readonly -a MOTIF_NAMES=(TP73 E2F1 SP1 PATZ1 POU2F2)
@@ -328,7 +330,7 @@ run_one() {
     strand_name=$(strand_label "$strand")
     local label="${motif_id}_${score_mode}_${strand_name}"
     local expected_windows=$((chromosome_length - motif_length + 1))
-    local relative_file="tables/jaspar2026/motif_score_dense/motif_id=${motif_id}/score_mode=${score_mode}/pseudocount=1/chrom=1/strand=${strand_name}/part-from=0-to=end-n_policy=skip-000000.parquet"
+    local relative_file="tables/jaspar2026/motif_score_dense/motif_set_id=${MOTIF_SET_ID}/genome_id=${GENOME_ID}/motif_id=${motif_id}/score_mode=${score_mode}/pseudocount=1/background_model_id=uniform_acgt_v1/pseudocount_scheme=additive_per_base/chrom=1/strand=${strand_name}/part-from=0-to=end-n_policy=skip-000000.parquet"
     local final_file="$package_dir/$relative_file"
 
     if [[ -e $final_file ]]; then
@@ -350,6 +352,7 @@ run_one() {
         --outdir "$task_stage" \
         --genome "$genome_file" --fasta-index "$fasta_index" \
         --pssm "$jaspar_file" --motif "$motif_id" --chr 1 \
+        --motif-set-id "$MOTIF_SET_ID" --genome-id "$GENOME_ID" \
         --strand "$strand" --coordinate-mode bed \
         --score-mode "$score_mode" --pseudocount 1 --skip-N \
         > "$logs_dir/${SLURM_JOB_ID}_${label}.out" \
@@ -397,12 +400,13 @@ if [[ ! -e $metadata_file ]]; then
     [[ ! -e $metadata_stage ]] || { echo "E: Metadata staging file exists." >&2; exit 1; }
     duckdb :memory: -bail -c "COPY (
         SELECT * FROM (VALUES
-            ('MA0861.2', 'TP73', 16, 2026, '$JASPAR_SHA256'),
-            ('MA0024.3', 'E2F1', 12, 2026, '$JASPAR_SHA256'),
-            ('MA0079.5', 'SP1', 9, 2026, '$JASPAR_SHA256'),
-            ('MA1961.2', 'PATZ1', 11, 2026, '$JASPAR_SHA256'),
-            ('MA0507.3', 'POU2F2', 13, 2026, '$JASPAR_SHA256')
-        ) AS t(motif_id, motif_name, motif_length, jaspar_version, source_sha256)
+            ('$MOTIF_SET_ID', 'MA0861.2', 'TP73', 16, 2026, '$JASPAR_SHA256'),
+            ('$MOTIF_SET_ID', 'MA0024.3', 'E2F1', 12, 2026, '$JASPAR_SHA256'),
+            ('$MOTIF_SET_ID', 'MA0079.5', 'SP1', 9, 2026, '$JASPAR_SHA256'),
+            ('$MOTIF_SET_ID', 'MA1961.2', 'PATZ1', 11, 2026, '$JASPAR_SHA256'),
+            ('$MOTIF_SET_ID', 'MA0507.3', 'POU2F2', 13, 2026, '$JASPAR_SHA256')
+        ) AS t(motif_set_id, motif_id, motif_name, motif_length,
+               jaspar_version, source_sha256)
     ) TO '$(sql_quote "$metadata_stage")' (FORMAT PARQUET, COMPRESSION ZSTD);"
     mkdir -p "$metadata_dir"
     [[ ! -e $metadata_file ]] || { echo "E: Metadata appeared concurrently." >&2; exit 1; }
@@ -446,7 +450,7 @@ if [[ ! -e $database_file ]]; then
                 THEN error('expected 20 dense configurations') END;
             SELECT CASE WHEN EXISTS (
                 SELECT 1 FROM dense_run_inventory i
-                JOIN motif_metadata m USING (motif_id)
+                JOIN motif_metadata m USING (motif_set_id, motif_id)
                 WHERE i.part_files <> 1 OR i.alignment_start_begin <> 0
                    OR i.alignment_start_end <> $chromosome_length - m.motif_length + 1
                    OR i.n_windows <> $chromosome_length - m.motif_length + 1

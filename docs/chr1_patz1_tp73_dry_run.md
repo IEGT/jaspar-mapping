@@ -72,6 +72,9 @@ scripts/inspect_chr1_dense_dry_run.sh shell
 Use `--package DIR` before the command for a non-default package. The `shell`
 command opens DuckDB read-only from the package root, which is required because
 the persisted views deliberately use package-relative Parquet paths.
+The inspector defaults to `homo_sapiens_grch38_ensembl113_primary` and
+`jaspar2026_core_nonredundant`; use `--genome-id ID` and `--motif-set-id ID`
+before the command when inspecting another package.
 
 The schema in [`../sql/chr1_dense_dry_run_schema.sql`](../sql/chr1_dense_dry_run_schema.sql)
 provides:
@@ -81,7 +84,8 @@ provides:
 - `motif_metadata`: motif identity and model length.
 - `motif_score_dense_block`: physical Parquet blocks without list expansion.
 - `dense_run_inventory`: cheap file/block/window validation.
-- `dense_scores_region(...)`: row expansion for a bounded start range.
+- `dense_scores_region(genome_id, motif_set_id, ...)`: row expansion for a
+  bounded start range without mixing assemblies or motif collections.
 - `dense_score_summary(...)`: valid/skipped counts and score quantiles.
 - `dense_score_histogram(...)`: arbitrary positive fixed-width bins.
 - `dense_score_calibration_bins(...)`: the shared biologically motivated bins.
@@ -106,6 +110,8 @@ Count a proposed TP73 selection before writing it:
 ```sh
 scripts/export_dense_bed.py \
   --package dry_runs/chr1_patz1_tp73_from-3600000-to-3700000 \
+  --genome-id homo_sapiens_grch38_ensembl113_primary \
+  --motif-set-id jaspar2026_core_nonredundant \
   --motif MA0861.2 --score-mode log_odds --pseudocount 1 \
   --chrom 1 --strand both --from 3651800 --to 3652600 \
   --min-score 0 --count-only
@@ -116,13 +122,17 @@ Then stream the same selection directly to compressed BED:
 ```sh
 scripts/export_dense_bed.py \
   --package dry_runs/chr1_patz1_tp73_from-3600000-to-3700000 \
+  --genome-id homo_sapiens_grch38_ensembl113_primary \
+  --motif-set-id jaspar2026_core_nonredundant \
   --motif MA0861.2 --score-mode log_odds --pseudocount 1 \
   --chrom 1 --strand both --from 3651800 --to 3652600 \
   --min-score 0 --columns provenance \
   --output TP73_MA0861.2_log_odds_chr1_3651800-3652600.bed.gz
 ```
 
-`--chrom` is repeatable and accepts comma-separated values. `--min-score` and
+The exporter requires `--genome-id` and `--motif-set-id` for every data
+selection; `--list-configs` reports both identities. `--chrom` is repeatable
+and accepts comma-separated values. `--min-score` and
 `--max-score` are inclusive; the historical lower threshold of zero is the
 default, while `--all-scores` explicitly removes it. `--no-header` supports
 strict BED consumers, and `--score-decimals 3` reproduces the old display

@@ -8,28 +8,34 @@
 
 -- Q0. Hot promoter card — first lookup for an agent answering "what do we know
 --     about this gene's promoter architecture?"
---     Params: $gene_name, $score_mode, $pseudocount
+--     Params: $genome_id, $motif_set_id, $gene_name, $score_mode, $pseudocount
 SELECT *
 FROM promoter_card
-WHERE gene_name = $gene_name
+WHERE genome_id = $genome_id
+  AND motif_set_id = $motif_set_id
+  AND gene_name = $gene_name
   AND score_mode = $score_mode
   AND pseudocount = $pseudocount;
 
 -- Q1. Region browse — every motif hit in a window. Prunes by chrom partition
 --     + start zonemap, so latency is ~row-group scan, not full table.
---     Params: $chrom, $start, $end
-SELECT chrom, start, "end", motif_id, motif_name, strand, score_mode, pseudocount, pwm_relative_score
+--     Params: $genome_id, $motif_set_id, $chrom, $start, $end
+SELECT genome_id, motif_set_id, chrom, start, "end", motif_id, motif_name,
+       strand, score_mode, pseudocount, minimum_score, pwm_relative_score
 FROM motif_hit
-WHERE chrom = $chrom AND start >= $start AND "end" <= $end
+WHERE genome_id = $genome_id AND motif_set_id = $motif_set_id
+  AND chrom = $chrom AND start >= $start AND "end" <= $end
 ORDER BY start;
 
 -- Q2. Promoter architecture for one gene — what the ML sees, human-readable.
---     Params: $gene_name, $score_mode, $pseudocount
+--     Params: $genome_id, $motif_set_id, $gene_name, $score_mode, $pseudocount
 SELECT f.motif_id, f.score_mode, f.pseudocount, f.tf_family, f.binding_unit_model,
        f.n_hits, f.n_strong_hits, f.max_rel_score, f.min_abs_tss_distance
 FROM promoter_arch_feature f
-JOIN gene g ON g.gene_id = f.gene_id
-WHERE g.gene_name = $gene_name
+JOIN gene g ON g.genome_id = f.genome_id AND g.gene_id = f.gene_id
+WHERE f.genome_id = $genome_id
+  AND f.motif_set_id = $motif_set_id
+  AND g.gene_name = $gene_name
   AND f.score_mode = $score_mode
   AND f.pseudocount = $pseudocount
 ORDER BY f.n_strong_hits DESC, f.max_rel_score DESC;
@@ -38,8 +44,10 @@ ORDER BY f.n_strong_hits DESC, f.max_rel_score DESC;
 --     data-driven PIVOT columns while binding a statement, so a dynamic PIVOT
 --     cannot contain parameters in its source. Bind this query first, then
 --     pivot its result in the ML client/exporter.
---     Params: $cell_line, $score_mode, $pseudocount
+--     Params: $genome_id, $motif_set_id, $cell_line, $score_mode, $pseudocount
 SELECT
+    m.genome_id,
+    m.motif_set_id,
     m.gene_id,
     m.cell_line,
     m.score_mode,
@@ -54,34 +62,39 @@ SELECT
     m.padj,
     m.label_ta_up
 FROM ml_ta_vs_dn m
-WHERE m.cell_line = $cell_line
+WHERE m.genome_id = $genome_id
+  AND m.motif_set_id = $motif_set_id
+  AND m.cell_line = $cell_line
   AND m.score_mode = $score_mode
   AND m.pseudocount = $pseudocount
   AND m.tf_family IS NOT NULL
-GROUP BY m.gene_id, m.cell_line, m.score_mode, m.pseudocount, m.tf_family,
+GROUP BY m.genome_id, m.motif_set_id, m.gene_id, m.cell_line,
+         m.score_mode, m.pseudocount, m.tf_family,
          m.log2fc_ta_vs_dn, m.padj, m.label_ta_up
 ORDER BY m.gene_id, m.tf_family;
 
 -- Q4. Experimental cross-check — TA-vs-DN differential CUT&RUN signal at a
 --     gene's promoter loci, kept separate by antibody. Keep this OUT of the
 --     sequence-only feature set (leakage); use it to validate predictions.
---     Params: $gene_name, $cell_line
-SELECT c.chrom, c.start, c."end", c.cell_line, c.antibody,
+--     Params: $genome_id, $gene_name, $cell_line
+SELECT c.genome_id, c.chrom, c.start, c."end", c.cell_line, c.antibody,
        AVG(c.signal) FILTER (WHERE c.isoform = 'TA') AS ta_signal,
        AVG(c.signal) FILTER (WHERE c.isoform = 'DN') AS dn_signal,
        AVG(c.signal) FILTER (WHERE c.isoform = 'TA')
      - AVG(c.signal) FILTER (WHERE c.isoform = 'DN') AS ta_minus_dn
 FROM cutandrun c
 JOIN promoter p
-  ON c.chrom = p.chrom AND c.start < p.promoter_end AND c."end" > p.promoter_start
-JOIN gene g ON g.gene_id = p.gene_id
-WHERE g.gene_name = $gene_name AND c.cell_line = $cell_line
-GROUP BY c.chrom, c.start, c."end", c.cell_line, c.antibody
+  ON c.genome_id = p.genome_id AND c.chrom = p.chrom
+ AND c.start < p.promoter_end AND c."end" > p.promoter_start
+JOIN gene g ON g.genome_id = p.genome_id AND g.gene_id = p.gene_id
+WHERE c.genome_id = $genome_id
+  AND g.gene_name = $gene_name AND c.cell_line = $cell_line
+GROUP BY c.genome_id, c.chrom, c.start, c."end", c.cell_line, c.antibody
 ORDER BY ABS(ta_minus_dn) DESC;
 
 -- Q5. Architecture enrichment — do dimer-of-dimers TP53-family sites associate
 --     with TA-up genes? A quick 2x2 signal before any modelling.
---     Params: $cell_line, $score_mode, $pseudocount
+--     Params: $genome_id, $motif_set_id, $cell_line, $score_mode, $pseudocount
 SELECT has_arch,
        AVG(label_ta_up)          AS frac_ta_up,
        COUNT(*)                  AS n_genes
@@ -90,7 +103,9 @@ FROM (
            MAX(CASE WHEN m.has_dimer_of_dimers THEN 1 ELSE 0 END) AS has_arch,
            MAX(m.label_ta_up)                                     AS label_ta_up
     FROM ml_ta_vs_dn m
-    WHERE m.cell_line = $cell_line
+    WHERE m.genome_id = $genome_id
+      AND m.motif_set_id = $motif_set_id
+      AND m.cell_line = $cell_line
       AND m.score_mode = $score_mode
       AND m.pseudocount = $pseudocount
     GROUP BY m.gene_id
@@ -99,22 +114,27 @@ GROUP BY has_arch;
 
 -- Q6. Gene-set slice — restrict the ML frame to a pathway (e.g. an EMT set) so a
 --     model can be trained per program.
---     Params: $set_name, $cell_line, $score_mode, $pseudocount
+--     Params: $genome_id, $motif_set_id, $set_name, $cell_line, $score_mode, $pseudocount
 SELECT m.*
 FROM ml_ta_vs_dn m
-JOIN gene_set s ON s.gene_id = m.gene_id
-WHERE s.set_name = $set_name
+JOIN gene_set s ON s.genome_id = m.genome_id AND s.gene_id = m.gene_id
+WHERE m.genome_id = $genome_id
+  AND m.motif_set_id = $motif_set_id
+  AND s.set_name = $set_name
   AND m.cell_line = $cell_line
   AND m.score_mode = $score_mode
   AND m.pseudocount = $pseudocount;
 
 -- Q7. Dense score slice — reconstruct PSSM alignment-score rows from dense
---     score blocks for a small genomic interval. Params: $motif_id, $chrom, $strand,
+--     score blocks for a small genomic interval. Params: $genome_id,
+--     $motif_set_id, $motif_id, $chrom, $strand,
 --     $score_mode, $pseudocount, $start, $end
 SELECT chrom, start, "end", motif_id, motif_name, strand,
        score_mode, pseudocount, score
 FROM motif_score_dense
-WHERE motif_id = $motif_id
+WHERE genome_id = $genome_id
+  AND motif_set_id = $motif_set_id
+  AND motif_id = $motif_id
   AND chrom = $chrom
   AND strand = $strand
   AND score_mode = $score_mode
@@ -124,14 +144,17 @@ WHERE motif_id = $motif_id
 ORDER BY start;
 
 -- Q8. Dense calibration result — compare CUT&RUN support by score bin for one
---     motif/scoring run. Params: $motif_id, $chrom, $score_mode, $pseudocount
+--     motif/scoring run. Params: $genome_id, $motif_set_id, $motif_id, $chrom,
+--     $score_mode, $pseudocount
 SELECT motif_id, motif_name, chrom, strand, score_mode, pseudocount,
        bin_order, bin_label, lower_bound, upper_bound,
        cell_line, isoform, antibody, replicate,
        n_windows, n_covered_windows, overlap_fraction, baseline_fraction,
        enrichment_ratio, log2_enrichment, mean_signal, max_signal
 FROM motif_cutandrun_score_bin_stats
-WHERE motif_id = $motif_id
+WHERE genome_id = $genome_id
+  AND motif_set_id = $motif_set_id
+  AND motif_id = $motif_id
   AND chrom = $chrom
   AND score_mode = $score_mode
   AND pseudocount = $pseudocount
@@ -145,7 +168,8 @@ ORDER BY bin_order;
 
 -- Q10. TP73 tandem partners for one anchor. An exact same-span orientation
 --      alternative is retained in motif_context_pair but is not a tandem site.
---      Params: $chrom, $start, $strand, $score_mode, $pseudocount
+--      Params: $genome_id, $motif_set_id, $chrom, $start, $strand,
+--      $score_mode, $pseudocount
 SELECT
     anchor_hit_id,
     neighbor_hit_id,
@@ -158,7 +182,9 @@ SELECT
     relative_orientation,
     anchor_oriented_side
 FROM motif_context_pair
-WHERE chrom = $chrom
+WHERE genome_id = $genome_id
+  AND motif_set_id = $motif_set_id
+  AND chrom = $chrom
   AND anchor_start = $start
   AND anchor_strand = $strand
   AND score_mode = $score_mode
@@ -168,7 +194,7 @@ ORDER BY absolute_center_distance_bp, neighbor_start, neighbor_strand;
 
 -- Q11. Compact TP73 context for anchors nearest a named gene. This is the
 --      sequence/transcript feature surface; CUT&RUN remains a separate layer.
---      Params: $gene_name, $score_mode, $pseudocount
+--      Params: $genome_id, $motif_set_id, $gene_name, $score_mode, $pseudocount
 SELECT
     chrom,
     start,
@@ -181,12 +207,123 @@ SELECT
     in_any_intron,
     has_tandem_tp73,
     n_tandem_tp73_partners,
+    pair_class,
+    n_tandem_tp73_partner_loci,
+    n_same_orientation_partner_loci,
+    n_opposite_orientation_partner_loci,
+    n_ambiguous_orientation_partner_loci,
     nearest_tandem_oriented_distance_bp,
     nearest_tandem_relative_orientation,
     n_context_neighbor_loci,
     n_context_motifs
 FROM tp73_context_anchor
-WHERE nearest_gene_name = $gene_name
+WHERE genome_id = $genome_id
+  AND motif_set_id = $motif_set_id
+  AND nearest_gene_name = $gene_name
   AND score_mode = $score_mode
   AND pseudocount = $pseudocount
 ORDER BY ABS(nearest_tss_distance_bp), start, strand;
+
+-- Q12. Pair-stratified TP73 promoter features for the expression model. This
+--      includes singleton anchors; pair classes describe sequence-compatible
+--      architecture, not an observed protein complex.
+--      Params: $genome_id, $motif_set_id, $gene_name, $score_mode, $pseudocount
+SELECT
+    f.anchor_motif_id,
+    f.pair_class,
+    f.n_anchor_orientation_hits,
+    f.n_anchor_loci,
+    f.n_strong_anchor_hits,
+    f.max_anchor_score,
+    f.max_anchor_pwm_relative_score,
+    f.n_tandem_partner_loci,
+    f.max_partners_per_anchor,
+    f.nearest_tandem_inter_motif_gap_bp,
+    f.best_partner_score,
+    f.best_partner_pwm_relative_score,
+    f.best_pair_min_score,
+    f.best_pair_sum_score,
+    f.best_pair_min_pwm_relative_score
+FROM promoter_pair_feature f
+JOIN gene g USING (genome_id, gene_id)
+WHERE f.genome_id = $genome_id
+  AND f.motif_set_id = $motif_set_id
+  AND g.gene_name = $gene_name
+  AND f.score_mode = $score_mode
+  AND f.pseudocount = $pseudocount
+ORDER BY f.pair_class;
+
+-- Q13. Neighbor-motif predictors stratified by the TP73 anchor's pair class,
+--      relative orientation, side, and 5-bp oriented-distance bin. This is the
+--      long feature frame for interactions such as PATZ1 x TP73-pair-class.
+--      Params: $genome_id, $motif_set_id, $gene_name, $neighbor_motif_id,
+--      $score_mode, $pseudocount
+SELECT
+    f.anchor_motif_id,
+    f.neighbor_motif_id,
+    f.neighbor_motif_name,
+    f.anchor_pair_class,
+    f.pair_relation,
+    f.relative_orientation,
+    f.anchor_oriented_side,
+    f.oriented_distance_bin_start_bp,
+    f.oriented_distance_bin_end_bp,
+    f.n_directed_orientation_pairs,
+    f.n_anchor_neighbor_loci,
+    f.n_anchor_hits,
+    f.max_anchor_pwm_relative_score,
+    f.max_neighbor_pwm_relative_score,
+    f.max_pair_min_pwm_relative_score,
+    f.min_absolute_center_distance_bp
+FROM promoter_motif_pair_feature f
+JOIN gene g USING (genome_id, gene_id)
+WHERE f.genome_id = $genome_id
+  AND f.motif_set_id = $motif_set_id
+  AND g.gene_name = $gene_name
+  AND f.neighbor_motif_id = $neighbor_motif_id
+  AND f.score_mode = $score_mode
+  AND f.pseudocount = $pseudocount
+ORDER BY f.anchor_pair_class, f.oriented_distance_bin_start_bp,
+         f.relative_orientation;
+
+-- Q14. Chromosome-wide, per-anchor neighboring motif records decorated with
+--      TP73 pair class. Use this surface to stratify a CUT&RUN predictor before
+--      any promoter restriction. Params: $genome_id, $motif_set_id, $chrom,
+--      $start, $strand,
+--      $neighbor_motif_id, $score_mode, $pseudocount
+SELECT
+    anchor_hit_id,
+    anchor_motif_id,
+    anchor_start,
+    anchor_end,
+    anchor_strand,
+    anchor_score,
+    anchor_pwm_relative_score,
+    anchor_pair_class,
+    n_tandem_tp73_partner_loci,
+    neighbor_hit_id,
+    neighbor_motif_id,
+    neighbor_motif_name,
+    neighbor_start,
+    neighbor_end,
+    neighbor_strand,
+    neighbor_score,
+    neighbor_pwm_relative_score,
+    pair_relation,
+    relative_orientation,
+    anchor_oriented_side,
+    anchor_oriented_center_distance_bp,
+    oriented_distance_bin_start_bp
+FROM tp73_context_pair_feature
+WHERE genome_id = $genome_id
+  AND motif_set_id = $motif_set_id
+  AND chrom = $chrom
+  AND anchor_start = $start
+  AND anchor_strand = $strand
+  AND neighbor_motif_id = $neighbor_motif_id
+  AND score_mode = $score_mode
+  AND pseudocount = $pseudocount
+  AND within_context_flank
+  AND NOT same_anchor_motif_span
+ORDER BY neighbor_score DESC, absolute_center_distance_bp,
+         neighbor_start, neighbor_strand;

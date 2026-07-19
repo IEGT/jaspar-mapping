@@ -33,17 +33,20 @@ reconcile two coordinate systems.
 ## Physical layout
 
 ```
-tables/jaspar2026/
-  manifest.json            # source commit, JASPAR 2026 sha256, Ensembl release, row counts
-  checksums.sha256
-  motif_metadata/…          # tiny motif dimension: motif_id, name, length, source
-  motif_hit/
-    motif_id=*/score_mode=*/pseudocount=*/minimum_score=*/
+manifest.json              # finalization marker and immutable run identity
+task_data/task_id=*/       # one atomically promoted, validated scan batch
+  tables/jaspar2026/motif_hit/
+    motif_set_id=*/genome_id=*/motif_id=*/score_mode=*/pseudocount=*/
+    background_model_id=*/pseudocount_scheme=*/minimum_score=*/
     minimum_pwm_relative_score=*/maximum_pwm_relative_score=*/
     chrom=*/strand=*/n_policy=*/matched_sequence=*/…
-                            # thresholded layer 1 (large, regenerable)
+tables/jaspar2026/
+  motif_set/… genome/… sequence_region/…
+  scan_run/… scan_threshold_policy/… scan_task/… scan_file_inventory/…
+  motif_metadata/…          # tiny motif dimension: motif_id, name, length, source
   motif_score_dense/
-    motif_id=*/score_mode=*/pseudocount=*/chrom=*/strand=*/…
+    motif_set_id=*/genome_id=*/motif_id=*/score_mode=*/pseudocount=*/
+    background_model_id=*/pseudocount_scheme=*/chrom=*/strand=*/…
                             # range and N policy are encoded in each part filename
                             # dense calibration blocks, score for every PSSM alignment start
   motif_cutandrun_score_bin_stats/
@@ -54,8 +57,9 @@ tables/jaspar2026/
                             # merged-coverage immersion ROC/PR calibration
   motif_architecture/…       # layer 2a (tiny, motif-keyed dimension)
   hit_architecture/chrom=*/… # layer 2b (optional, per-hit, keyed to motif_hit)
-  motif_context_pair/chrom=*/… # layer 2c TP73 anchor × neighboring motif hit
-  tp73_context_anchor/chrom=*/… # layer 2c tandem/local-context summary
+  motif_context_pair/genome_id=*/chrom=*/… # TP73 anchor × neighboring hit
+  tp73_pair_feature/genome_id=*/chrom=*/… # orientation-collapsed partners
+  tp73_context_anchor/genome_id=*/chrom=*/… # tandem/local-context summary
   cutandrun_coverage/chrom=*/… # layer 3 positive coverage intervals/signal
   cutandrun/chrom=*/…        # layer 3 aggregated locus signal
   gene/… promoter/… transcript/… intron/… gene_set/… # layer 4 dimensions
@@ -75,8 +79,15 @@ identity moved into partition paths.
 
 Full column lists live in `sql/schema.sql`; the essentials:
 
-- **`motif_hit`** — logical columns `chrom, start, end, motif_id, motif_name, strand, score, score_mode, pseudocount, pwm_relative_score, matched_seq`. `pssm_scan_parquet --sparse-parquet` physically stores only `start`, `end`, float32 `score`, float32 `pwm_relative_score`, and nullable `matched_seq`; motif/run identity lives in Hive partitions and `motif_name` comes from `motif_metadata`. `score_mode` plus `pseudocount` define the motif scoring transform; `pwm_relative_score` (0–1) is the cross-motif-comparable score to threshold on.
-- **`motif_score_dense`** — logical view over dense score blocks: `chrom, start, end, motif_id, motif_name, strand, score_mode, pseudocount, score`. Physical files store only `block_start` plus a `FLOAT[] scores` vector; `motif_id`, `score_mode`, `pseudocount`, `chrom`, and `strand` live in hive partitions, while requested range and N policy are encoded in collision-resistant part filenames.
+The executable whole-genome batching, validation, inventory, and cross-species
+identity contract is specified in
+[`jaspar2026_genome_scan_plan.md`](jaspar2026_genome_scan_plan.md). The raw-only
+DuckDB surface is `sql/genome_scan_schema.sql`; optional synteny bridges are in
+`sql/cross_species_schema.sql`.
+
+- **`motif_hit`** — keyed by `genome_id, motif_set_id, chrom, start, end, motif_id, strand, score_mode, pseudocount`. Its logical configuration also exposes `background_model_id`, `pseudocount_scheme`, `minimum_score`, both PWM-relative bounds, `n_policy`, matched-sequence policy, and coordinate mode. The physical file still stores only `start`, `end`, float32 `score`, float32 `pwm_relative_score`, and nullable `matched_seq`; row-constant identity lives in Hive partitions and `motif_name` comes from `motif_metadata`.
+- **`genome / sequence_region / scan_run / scan_threshold_policy / scan_task / scan_file_inventory`** — immutable production provenance and completeness tables. The file inventory includes expected and skipped-N windows, sentinel/threshold/PWM rejections, emitted rows, bytes, SHA-256, task state, Slurm IDs, scanner checksum, and source commit. A zero-hit Parquet file still has an inventory row.
+- **`motif_score_dense`** — logical view over dense score blocks, also keyed by explicit `genome_id` and `motif_set_id`. Physical files store only `block_start` plus a `FLOAT[] scores` vector; run identity lives in Hive partitions, while requested range and N policy are encoded in collision-resistant part filenames.
 - **`motif_cutandrun_score_bin_stats`** — dense-score calibration output by score bin and CUT&RUN sample: window counts, covered-window counts, baseline fraction, enrichment ratio, log2 enrichment, and signal summaries.
 - **`motif_cutandrun_containment_curve`** — score-threshold calibration from
   strict immersion in merged positive coverage: coverage-component recall,
@@ -90,6 +101,17 @@ Full column lists live in `sql/schema.sql`; the essentials:
   distance, relative orientation, provisional-context membership, and a strict
   same-motif/distinct-span tandem flag. See
   [`tp73_motif_context.md`](tp73_motif_context.md).
+- **`tp73_pair_feature`** — one row per TP73 anchor with mutually exclusive
+  singleton/same/opposite/mixed/ambiguous pair class, partner-locus counts,
+  orientation-specific gaps and scores, and conservative two-site score
+  summaries. Strand alternatives at one neighboring alignment span remain in
+  the raw pair table but collapse to one orientation-ambiguous partner locus.
+  These are sequence-architecture predictions, not observations of protein
+  quaternary structure.
+- **`tp73_context_pair_feature`** — the chromosome-wide raw context pairs
+  decorated with their anchor's pair class and a 5-bp oriented-distance bin.
+  This is the pair-stratified feature surface for per-site CUT&RUN models and
+  is not restricted to promoters.
 - **`tp73_context_anchor`** — one feature-ready row per TP73 occurrence with
   tandem summary, local motif counts, nearest signed TSS distance, and
   transcript/intron indicators. It never replaces the pair table.
@@ -104,13 +126,19 @@ Full column lists live in `sql/schema.sql`; the essentials:
   differently.
 - **`expression_differential`** — `gene_id, cell_line, log2fc_ta_vs_dn, padj, …`. **This is the ML label.**
 
-Three materialized tables carry all the cost: `promoter_motif_hit` (the single
+Five materialized tables carry the reusable join/aggregation cost:
+`promoter_motif_hit` (the single
 interval join of hits into promoter windows, deduplicated to one row per gene
 and unique hit while retaining the closest transcript's strand-aware
 `tss_distance` and the number of overlapping transcripts),
-`promoter_arch_feature` (per-gene, per-motif architecture summary), and
+`promoter_arch_feature` (per-gene, per-motif architecture summary),
+`promoter_pair_feature` (TP73 anchors grouped by pair class),
+`promoter_motif_pair_feature` (neighbor motifs grouped by TP73 pair class,
+orientation, side, and 5-bp distance bin), and
 `promoter_card` (one compact row per gene and scoring configuration for agent
-lookup). The `ml_ta_vs_dn` view joins the long feature table to the label.
+lookup). `ml_ta_vs_dn`, `ml_ta_vs_dn_pair`, and
+`ml_ta_vs_dn_motif_pair` join the corresponding sequence-only feature tables
+to the label without mixing their grains.
 
 ## Dense Chr1 Calibration
 
@@ -177,6 +205,16 @@ client/exporter pivots that bound result to wide form, so DuckDB does not have
 to discover dynamic columns while parameters are still unresolved and the
 stored tables remain long without a schema migration.
 
+Pair-aware models use two additional, opt-in feature blocks. The first counts
+TP73 anchors by `pair_class`, including singletons. The second stratifies each
+neighboring motif by the anchor pair class, relative orientation, anchor-facing
+side, and a stable 5-bp oriented-distance bin. This supports interactions such
+as `PATZ1 score x TP73 pair class` while preserving the original continuous
+scores. Descriptive performance and calibration should also be reported
+separately for singleton, same-orientation, opposite-orientation, and
+ambiguous/mixed anchors; sparse strata should not automatically become
+independent models.
+
 **Keep the model sequence-only by default.** Features come from layers 1–2
 (architecture), which are deterministic from sequence. The CUT&RUN differential
 (layer 3) is the *cause-adjacent* signal for TA-vs-DN expression, so feeding it
@@ -201,9 +239,10 @@ The contract for OpenClaw / Claude / Codex is deliberately small:
 3. **Hot promoter cards.** Ordinary agent questions start with `promoter_card`,
    a summary keyed by gene, score mode, and pseudocount. It contains the
    promoter span, motif-hit totals, strongest PWM-relative score, nearest hit
-   to the TSS, TP53-family dimer-of-dimers flag, and count of represented TF
-   families. Keeping configurations in separate rows prevents incompatible
-   runs being combined while keeping "tell me about TP73" fast.
+   to the TSS, TP53-family dimer-of-dimers motif-model flag, count of represented
+   TF families, and singleton/tandem TP73 anchor counts. Keeping configurations
+   in separate rows prevents incompatible runs being combined while keeping
+   "tell me about TP73" fast.
 4. **Stable, versioned identity.** `manifest.json` records the source commit, the JASPAR 2026 SHA-256, the Ensembl release, and row counts, so an answer is reproducible and an agent can state exactly which package it queried.
 5. **Read-only by default.** The `.duckdb` is a rebuildable index over Parquet; agents read it. Rebuilds come from the exporter, not from queries.
 
@@ -228,6 +267,12 @@ free-form access to raw genome-wide files:
 - `get_cutandrun_containment_curve(motif_id, chrom, score_mode, pseudocount, sample_id)` -> merged-coverage immersion threshold metrics.
 - `get_tp73_tandem_partners(chrom, start, strand, score_mode, pseudocount)` -> query Q10.
 - `get_tp73_gene_context(gene_name, score_mode, pseudocount)` -> query Q11.
+- `get_tp73_promoter_pair_features(gene_name, score_mode, pseudocount)` ->
+  query Q12.
+- `get_tp73_neighbor_features(gene_name, neighbor_motif_id, score_mode, pseudocount)`
+  -> query Q13.
+- `get_tp73_site_neighbor_features(chrom, start, strand, neighbor_motif_id, score_mode, pseudocount)`
+  -> query Q14, without a promoter restriction.
 - `get_cutandrun_promoter_signal(gene_name, cell_line)` -> query Q4.
 - `export_ml_matrix(cell_line, score_mode, pseudocount, feature_set)` -> query
   Q3, pivot its bound long result in the client, or read a pinned Parquet export

@@ -139,6 +139,8 @@ def run_capture(package: Path, database: Path, sql: str,
 def inventory_sql() -> str:
     return """
 SELECT
+    i.genome_id AS GenomeID,
+    i.motif_set_id AS MotifSetID,
     i.motif_id AS MotifID,
     m.motif_name AS Name,
     i.score_mode AS ScoreMode,
@@ -150,8 +152,9 @@ SELECT
     i.n_valid_windows AS ValidScores,
     i.n_skipped_windows AS SkippedScores
 FROM dense_run_inventory i
-JOIN motif_metadata m USING (motif_id)
-ORDER BY i.motif_id, i.score_mode, i.pseudocount,
+JOIN motif_metadata m USING (motif_set_id, motif_id)
+ORDER BY i.genome_id, i.motif_set_id, i.motif_id,
+         i.score_mode, i.pseudocount,
          CASE
              WHEN try_cast(i.chrom AS BIGINT) IS NOT NULL THEN 0
              WHEN upper(i.chrom) = 'X' THEN 1
@@ -171,9 +174,13 @@ def configuration_filter(args: argparse.Namespace,
                          chromosomes: list[str]) -> list[str]:
     strands = requested_strands(args.strand)
     filters = [
+        f"b.genome_id = {sql_string(args.genome_id)}",
+        f"b.motif_set_id = {sql_string(args.motif_set_id)}",
         f"b.motif_id = {sql_string(args.motif)}",
         f"b.score_mode = {sql_string(args.score_mode)}",
         f"b.pseudocount = {sql_number(args.pseudocount)}",
+        f"b.background_model_id = {sql_string(args.background_model_id)}",
+        f"b.pseudocount_scheme = {sql_string(args.pseudocount_scheme)}",
         "b.strand IN (" + ", ".join(sql_string(value) for value in strands) + ")",
     ]
     if chromosomes:
@@ -206,8 +213,9 @@ def validate_configuration(inventory: str, chromosomes: list[str],
 
     if not available:
         raise ExportError(
-            "no stored configuration matches the requested motif, mode, "
-            "pseudocount, chromosome, and strand; use --list-configs"
+            "no stored configuration matches the requested genome, motif set, "
+            "motif, scoring configuration, chromosome, and strand; use "
+            "--list-configs"
         )
 
     selected_chromosomes = chromosomes or sorted(
@@ -249,11 +257,13 @@ def export_cte(args: argparse.Namespace, chromosomes: list[str]) -> str:
 WITH selected_blocks AS (
     SELECT b.*, m.motif_name, m.motif_length
     FROM motif_score_dense_block b
-    JOIN motif_metadata m USING (motif_id)
+    JOIN motif_metadata m USING (motif_set_id, motif_id)
     WHERE {' AND '.join(filters)}
 ),
 expanded AS (
     SELECT
+        b.genome_id,
+        b.motif_set_id,
         b.chrom,
         b.block_start + CAST(u.offset_one - 1 AS BIGINT) AS start,
         b.block_start + CAST(u.offset_one - 1 AS BIGINT)
@@ -263,6 +273,8 @@ expanded AS (
         b.strand,
         b.score_mode,
         b.pseudocount,
+        b.background_model_id,
+        b.pseudocount_scheme,
         u.score
     FROM selected_blocks b
     CROSS JOIN UNNEST(b.scores) WITH ORDINALITY AS u(score, offset_one)
@@ -305,9 +317,13 @@ def bed_sql(args: argparse.Namespace, chromosomes: list[str]) -> str:
     if args.columns == "provenance":
         columns.extend(
             [
+                'f.genome_id AS "GenomeID"',
+                'f.motif_set_id AS "MotifSetID"',
                 'f.motif_id AS "MotifID"',
                 'f.score_mode AS "ScoreMode"',
                 'f.pseudocount AS "Pseudocount"',
+                'f.background_model_id AS "BackgroundModelID"',
+                'f.pseudocount_scheme AS "PseudocountScheme"',
                 "'bed' AS \"CoordinateMode\"",
             ]
         )
@@ -417,6 +433,10 @@ def argument_parser() -> argparse.ArgumentParser:
                         help="database path or package-relative name (auto-detected by default)")
     parser.add_argument("--list-configs", action="store_true",
                         help="list stored motifs/configurations and exit")
+    parser.add_argument("--genome-id",
+                        help="explicit stored reference-genome identity")
+    parser.add_argument("--motif-set-id",
+                        help="explicit stored motif-collection identity")
     parser.add_argument("--motif", help="motif ID to export, for example MA0861.2")
     parser.add_argument(
         "--score-mode", choices=("log2_relative_risk", "log_odds"),
@@ -424,6 +444,14 @@ def argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--pseudocount", type=nonnegative_float, default=1.0,
                         help="stored pseudocount configuration (default: 1)")
+    parser.add_argument(
+        "--background-model-id", default="uniform_acgt_v1",
+        help="stored background model identity (default: uniform_acgt_v1)",
+    )
+    parser.add_argument(
+        "--pseudocount-scheme", default="additive_per_base",
+        help="stored pseudocount scheme (default: additive_per_base)",
+    )
     parser.add_argument(
         "--chrom", action="append", default=[], metavar="CHROM[,CHROM...]",
         help="chromosome selection; repeat or use commas (default: all stored)",
@@ -485,6 +513,10 @@ def main() -> int:
 
         if not args.motif:
             parser.error("--motif is required unless --list-configs is used")
+        if not args.genome_id:
+            parser.error("--genome-id is required unless --list-configs is used")
+        if not args.motif_set_id:
+            parser.error("--motif-set-id is required unless --list-configs is used")
         if not args.score_mode:
             parser.error("--score-mode is required unless --list-configs is used")
         if args.start is not None and args.end is not None and args.end <= args.start:

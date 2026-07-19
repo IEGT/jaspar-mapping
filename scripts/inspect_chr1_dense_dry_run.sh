@@ -5,10 +5,18 @@ set -euo pipefail
 repository_root=$(cd "$(dirname "$0")/.." && pwd)
 package_dir="$repository_root/dry_runs/chr1_patz1_tp73_from-3600000-to-3700000"
 database_name=jaspar2026_chr1_patz1_tp73.duckdb
+genome_id=homo_sapiens_grch38_ensembl113_primary
+motif_set_id=jaspar2026_core_nonredundant
 
 usage() {
     cat <<'EOF'
-Usage: inspect_chr1_dense_dry_run.sh [--package DIR] COMMAND [ARGS]
+Usage: inspect_chr1_dense_dry_run.sh [OPTIONS] COMMAND [ARGS]
+
+Options:
+  --package DIR       Package directory.
+  --genome-id ID      Reference-genome identity.
+  --motif-set-id ID   Motif-collection identity.
+  -h, --help          Show this help.
 
 Commands:
   overview
@@ -25,11 +33,30 @@ All coordinates are BED-style, 0-based, half-open alignment-start ranges.
 EOF
 }
 
-if [[ ${1:-} == "--package" ]]; then
-    [[ $# -ge 2 ]] || { usage >&2; exit 2; }
-    package_dir=$2
-    shift 2
-fi
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --package|--genome-id|--motif-set-id)
+            [[ $# -ge 2 ]] || { usage >&2; exit 2; }
+            case "$1" in
+                --package) package_dir=$2 ;;
+                --genome-id) genome_id=$2 ;;
+                --motif-set-id) motif_set_id=$2 ;;
+            esac
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
 
 command=${1:-overview}
 [[ $# -eq 0 ]] || shift
@@ -119,14 +146,17 @@ read_region_arguments() {
 case "$command" in
     overview)
         run_query "SELECT * FROM run_manifest;
-                   SELECT * FROM motif_metadata ORDER BY motif_id;
-                   SELECT * FROM dense_run_inventory ORDER BY motif_id, score_mode, strand;"
+                   SELECT * FROM motif_metadata ORDER BY motif_set_id, motif_id;
+                   SELECT * FROM dense_run_inventory
+                   ORDER BY genome_id, motif_set_id, motif_id, score_mode, strand;"
         ;;
     files)
-        run_query "SELECT motif_id, score_mode, pseudocount, chrom, strand,
+        run_query "SELECT genome_id, motif_set_id, motif_id, score_mode,
+                          pseudocount, chrom, strand,
                           block_start, len(scores) AS n_windows, source_file
                    FROM motif_score_dense_block
-                   ORDER BY motif_id, score_mode, strand, block_start;"
+                   ORDER BY genome_id, motif_set_id, motif_id,
+                            score_mode, strand, block_start;"
         ;;
     shell)
         cd "$package_dir"
@@ -143,7 +173,8 @@ case "$command" in
         [[ $command == summary ]] && macro=dense_score_summary
         [[ $command == bins ]] && macro=dense_score_calibration_bins
         run_query "SELECT * FROM $macro(
-                       '$motif', '$mode', $pseudocount, '1', '$strand', $start, $end
+                       '$genome_id', '$motif_set_id', '$motif', '$mode',
+                       $pseudocount, '1', '$strand', $start, $end
                    ) ORDER BY ALL;"
         ;;
     histogram)
@@ -164,8 +195,8 @@ case "$command" in
         validate_number "$pseudocount"
         (( end > start )) || { echo "E: END must be greater than START." >&2; exit 2; }
         run_query "SELECT * FROM dense_score_histogram(
-                       '$motif', '$mode', $pseudocount, '1', '$strand',
-                       $start, $end, $bin_width
+                       '$genome_id', '$motif_set_id', '$motif', '$mode',
+                       $pseudocount, '1', '$strand', $start, $end, $bin_width
                    );"
         ;;
     -h|--help|help)

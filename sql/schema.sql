@@ -22,6 +22,7 @@
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE VIEW motif_metadata AS
 SELECT
+    motif_set_id,
     motif_id,
     motif_name,
     motif_length,
@@ -31,6 +32,9 @@ FROM read_parquet('tables/jaspar2026/motif_metadata/*.parquet');
 
 CREATE OR REPLACE VIEW motif_hit AS
 SELECT
+    h.task_id,
+    h.genome_id,
+    h.motif_set_id,
     CAST(h.chrom AS VARCHAR) AS chrom, -- e.g. '1', 'X'  (partition key)
     h.start,                -- 0-based half-open
     h."end",
@@ -42,14 +46,51 @@ SELECT
     CAST(h.score AS DOUBLE) AS score,
     h.score_mode,           -- log2_relative_risk | log_odds | raw_counts
     CAST(h.pseudocount AS DOUBLE) AS pseudocount,
+    h.background_model_id,
+    h.pseudocount_scheme,
+    TRY_CAST(h.minimum_score AS DOUBLE) AS minimum_score,
+    TRY_CAST(h.minimum_pwm_relative_score AS DOUBLE)
+        AS minimum_pwm_relative_score,
+    TRY_CAST(h.maximum_pwm_relative_score AS DOUBLE)
+        AS maximum_pwm_relative_score,
+    h.n_policy,
+    h.matched_sequence AS matched_sequence_policy,
+    'bed'::VARCHAR AS coordinate_mode,
     CAST(h.pwm_relative_score AS DOUBLE) AS pwm_relative_score,
     h.matched_seq           -- nullable; NULL unless scanned with --show-sequence
 FROM read_parquet(
-    'tables/jaspar2026/motif_hit/**/*.parquet',
+    'task_data/task_id=*/tables/jaspar2026/motif_hit/**/*.parquet',
     hive_partitioning = 1,
     union_by_name = 1
 ) h
-JOIN motif_metadata m USING (motif_id);
+JOIN motif_metadata m USING (motif_set_id, motif_id);
+
+-- Immutable run and file inventory. scan_file_inventory is the completeness
+-- authority: one row per promoted Parquet file, including zero-hit files.
+CREATE OR REPLACE VIEW motif_set AS
+SELECT * FROM read_parquet('tables/jaspar2026/motif_set/*.parquet');
+
+CREATE OR REPLACE VIEW genome AS
+SELECT * FROM read_parquet('tables/jaspar2026/genome/*.parquet');
+
+CREATE OR REPLACE VIEW sequence_region AS
+SELECT * FROM read_parquet('tables/jaspar2026/sequence_region/*.parquet');
+
+CREATE OR REPLACE VIEW scan_run AS
+SELECT * FROM read_parquet('tables/jaspar2026/scan_run/*.parquet');
+
+CREATE OR REPLACE VIEW scan_threshold_policy AS
+SELECT * FROM read_parquet('tables/jaspar2026/scan_threshold_policy/*.parquet');
+
+CREATE OR REPLACE VIEW scan_task AS
+SELECT * FROM read_parquet('tables/jaspar2026/scan_task/*.parquet');
+
+CREATE OR REPLACE VIEW scan_file_inventory AS
+SELECT * FROM read_parquet(
+    'tables/jaspar2026/scan_file_inventory/**/*.parquet',
+    hive_partitioning = 1,
+    union_by_name = 1
+);
 
 -- Dense score blocks for calibration runs. Each score belongs to one PSSM
 -- alignment start, not to an asserted TF footprint. Physical Parquet stores
@@ -58,22 +99,32 @@ JOIN motif_metadata m USING (motif_id);
 -- pseudocount, chrom, strand.
 CREATE OR REPLACE VIEW motif_score_dense_block AS
 SELECT
+    genome_id,
+    motif_set_id,
     motif_id,
     score_mode,
     CAST(pseudocount AS DOUBLE) AS pseudocount,
+    background_model_id,
+    pseudocount_scheme,
     CAST(chrom AS VARCHAR) AS chrom,
     CASE WHEN strand IN ('plus', '+') THEN '+'
          WHEN strand IN ('minus', '-') THEN '-'
          ELSE strand END AS strand,
     block_start,
     scores
-FROM read_parquet('tables/jaspar2026/motif_score_dense/*/*/*/*/*/*.parquet', hive_partitioning = 1);
+FROM read_parquet(
+    'tables/jaspar2026/motif_score_dense/**/*.parquet',
+    hive_partitioning = 1,
+    union_by_name = 1
+);
 
 -- Logical row view over dense score blocks. The start/end interval is the DNA
 -- span scored by the PSSM alignment. Use this for region inspection; aggregate
 -- directly from blocks for whole-chromosome calibration jobs.
 CREATE OR REPLACE VIEW motif_score_dense AS
 SELECT
+    b.genome_id,
+    b.motif_set_id,
     b.chrom,
     b.block_start + CAST(u.offset_one - 1 AS BIGINT) AS start,
     b.block_start + CAST(u.offset_one - 1 AS BIGINT) + m.motif_length AS "end",
@@ -82,9 +133,11 @@ SELECT
     b.strand,
     b.score_mode,
     b.pseudocount,
+    b.background_model_id,
+    b.pseudocount_scheme,
     u.score
 FROM motif_score_dense_block b
-JOIN motif_metadata m USING (motif_id)
+JOIN motif_metadata m USING (motif_set_id, motif_id)
 CROSS JOIN UNNEST(b.scores) WITH ORDINALITY AS u(score, offset_one);
 
 -- Shared score bins for the dense chr1 CUT&RUN calibration. Intervals are
@@ -115,6 +168,8 @@ FROM (
 -- products used to choose genome-wide storage thresholds.
 CREATE OR REPLACE VIEW motif_cutandrun_score_bin_stats AS
 SELECT
+    genome_id,
+    motif_set_id,
     motif_id,
     motif_name,
     CAST(chrom AS VARCHAR) AS chrom,
@@ -137,7 +192,11 @@ SELECT
     log2_enrichment,
     mean_signal,
     max_signal
-FROM read_parquet('tables/jaspar2026/motif_cutandrun_score_bin_stats/*/*/*/*/*.parquet', hive_partitioning = 1);
+FROM read_parquet(
+    'tables/jaspar2026/motif_cutandrun_score_bin_stats/**/*.parquet',
+    hive_partitioning = 1,
+    union_by_name = 1
+);
 
 -- ---------------------------------------------------------------------------
 -- Layer 2a: motif-level architecture dimension (small, one row per motif_id)
@@ -145,6 +204,7 @@ FROM read_parquet('tables/jaspar2026/motif_cutandrun_score_bin_stats/*/*/*/*/*.p
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE VIEW motif_architecture AS
 SELECT
+    motif_set_id,
     motif_id,
     motif_name,
     tf_family,                 -- e.g. 'TP53_family'
@@ -165,6 +225,7 @@ FROM read_parquet('tables/jaspar2026/motif_architecture/*.parquet');
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE VIEW hit_architecture AS
 SELECT
+    genome_id, motif_set_id,
     CAST(chrom AS VARCHAR) AS chrom, start, motif_id, strand,
     spacer_bp,
     half_site_1_score,
@@ -183,9 +244,15 @@ FROM read_parquet('tables/jaspar2026/hit_architecture/*/*.parquet', hive_partiti
 CREATE OR REPLACE VIEW motif_context_run_config AS
 SELECT
     schema_version,
+    genome_id,
+    motif_set_id,
     anchor_motif_id,
     score_mode,
     pseudocount,
+    background_model_id,
+    pseudocount_scheme,
+    anchor_minimum_score,
+    partner_minimum_score,
     capture_flank_bp,
     context_flank_bp,
     tandem_flank_bp,
@@ -193,6 +260,8 @@ SELECT
     tandem_distance_metric,
     oriented_distance_rule,
     tandem_identity_rule,
+    partner_locus_identity_rule,
+    pair_class_rule,
     motif_hit_source,
     gtf_source
 FROM read_parquet('tables/jaspar2026/context_run_config.parquet');
@@ -200,6 +269,8 @@ FROM read_parquet('tables/jaspar2026/context_run_config.parquet');
 CREATE OR REPLACE VIEW motif_context_pair AS
 SELECT
     anchor_hit_id,
+    genome_id,
+    motif_set_id,
     CAST(chrom AS VARCHAR) AS chrom,
     anchor_start,
     anchor_end,
@@ -229,17 +300,27 @@ SELECT
     is_tandem_tp73,
     score_mode,
     pseudocount,
+    background_model_id,
+    pseudocount_scheme,
+    anchor_minimum_score,
+    partner_minimum_score,
     capture_flank_bp,
     context_flank_bp,
     tandem_flank_bp
 FROM read_parquet(
-    'tables/jaspar2026/motif_context_pair/*/*.parquet',
+    'tables/jaspar2026/motif_context_pair/**/*.parquet',
     hive_partitioning = 1
 );
 
-CREATE OR REPLACE VIEW tp73_context_anchor AS
+-- One row per TP73 anchor. Distinct strand records at the same neighboring
+-- alignment span are collapsed into one partner locus; dual-strand support is
+-- represented as orientation-ambiguous. These fields describe sequence
+-- architecture compatible with a complex, not an observed quaternary state.
+CREATE OR REPLACE VIEW tp73_pair_feature AS
 SELECT
     anchor_hit_id,
+    genome_id,
+    motif_set_id,
     CAST(chrom AS VARCHAR) AS chrom,
     start,
     "end",
@@ -250,12 +331,91 @@ SELECT
     score,
     score_mode,
     pseudocount,
+    background_model_id,
+    pseudocount_scheme,
+    anchor_minimum_score,
+    partner_minimum_score,
+    pwm_relative_score,
+    pair_class,
+    n_tandem_tp73_partner_loci,
+    n_same_orientation_partner_loci,
+    n_opposite_orientation_partner_loci,
+    n_ambiguous_orientation_partner_loci,
+    has_multiple_tandem_partner_loci,
+    nearest_tandem_inter_motif_gap_bp,
+    nearest_tandem_absolute_center_distance_bp,
+    nearest_same_orientation_gap_bp,
+    nearest_opposite_orientation_gap_bp,
+    nearest_ambiguous_orientation_gap_bp,
+    best_partner_score,
+    best_partner_pwm_relative_score,
+    best_same_orientation_partner_score,
+    best_opposite_orientation_partner_score,
+    best_ambiguous_orientation_partner_score,
+    best_pair_min_score,
+    best_pair_sum_score,
+    best_pair_min_pwm_relative_score,
+    tandem_flank_bp
+FROM read_parquet(
+    'tables/jaspar2026/tp73_pair_feature/**/*.parquet',
+    hive_partitioning = 1
+);
+
+-- Raw neighboring occurrences decorated with the anchor's pair class. This is
+-- the per-TP73-site feature surface used by CUT&RUN models; unlike the promoter
+-- summaries below, it covers every retained anchor on the requested genome.
+CREATE OR REPLACE VIEW tp73_context_pair_feature AS
+SELECT
+    p.*,
+    f.motif_id AS anchor_motif_id,
+    f.pair_class AS anchor_pair_class,
+    f.n_tandem_tp73_partner_loci,
+    f.n_same_orientation_partner_loci,
+    f.n_opposite_orientation_partner_loci,
+    f.n_ambiguous_orientation_partner_loci,
+    CASE
+        WHEN p.is_tandem_tp73 THEN 'same_motif_tandem'
+        WHEN p.neighbor_motif_id = f.motif_id AND p.interval_overlap_bp > 0
+            THEN 'same_motif_overlapping_alignment'
+        WHEN p.neighbor_motif_id = f.motif_id THEN 'same_motif_context'
+        ELSE 'heterotypic_context'
+    END AS pair_relation,
+    FLOOR(p.anchor_oriented_center_distance_bp / 5.0) * 5.0
+        AS oriented_distance_bin_start_bp
+FROM motif_context_pair p
+JOIN tp73_pair_feature f USING (anchor_hit_id);
+
+CREATE OR REPLACE VIEW tp73_context_anchor AS
+SELECT
+    anchor_hit_id,
+    genome_id,
+    motif_set_id,
+    CAST(chrom AS VARCHAR) AS chrom,
+    start,
+    "end",
+    center_bp,
+    motif_id,
+    motif_name,
+    strand,
+    score,
+    score_mode,
+    pseudocount,
+    background_model_id,
+    pseudocount_scheme,
+    anchor_minimum_score,
+    partner_minimum_score,
     pwm_relative_score,
     n_context_neighbor_hits,
     n_context_neighbor_loci,
     n_context_motifs,
     has_tandem_tp73,
     n_tandem_tp73_partners,
+    pair_class,
+    n_tandem_tp73_partner_loci,
+    n_same_orientation_partner_loci,
+    n_opposite_orientation_partner_loci,
+    n_ambiguous_orientation_partner_loci,
+    has_multiple_tandem_partner_loci,
     nearest_tandem_hit_id,
     nearest_tandem_oriented_distance_bp,
     nearest_tandem_genomic_distance_bp,
@@ -275,7 +435,7 @@ SELECT
     context_flank_bp,
     tandem_flank_bp
 FROM read_parquet(
-    'tables/jaspar2026/tp73_context_anchor/*/*.parquet',
+    'tables/jaspar2026/tp73_context_anchor/**/*.parquet',
     hive_partitioning = 1
 );
 
@@ -286,6 +446,7 @@ FROM read_parquet(
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE VIEW cutandrun AS
 SELECT
+    genome_id,
     CAST(chrom AS VARCHAR) AS chrom,
     start, "end",             -- the reference locus the signal was mapped onto
     cell_line,                 -- 'saos2' | 'skmel29'
@@ -299,11 +460,11 @@ FROM read_parquet('tables/jaspar2026/cutandrun/*/*.parquet', hive_partitioning =
 -- Layer 4: regulatory / gene context
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE VIEW gene AS
-SELECT gene_id, gene_name, chrom, strand, gene_start, gene_end, tss, biotype
+SELECT genome_id, gene_id, gene_name, chrom, strand, gene_start, gene_end, tss, biotype
 FROM read_parquet('tables/jaspar2026/gene/*.parquet');
 
 CREATE OR REPLACE VIEW promoter AS
-SELECT gene_id, transcript_id, chrom, strand, promoter_start, promoter_end, tss
+SELECT genome_id, gene_id, transcript_id, chrom, strand, promoter_start, promoter_end, tss
 FROM read_parquet('tables/jaspar2026/promoter/*.parquet');
 
 -- Transcript and intron intervals are regenerated directly from the pinned
@@ -311,17 +472,19 @@ FROM read_parquet('tables/jaspar2026/promoter/*.parquet');
 -- keep that ambiguity in the long per-transcript bridge rather than flattening
 -- it into one premature gene-level label.
 CREATE OR REPLACE VIEW transcript AS
-SELECT gene_id, transcript_id, chrom, strand, transcript_start, transcript_end,
+SELECT genome_id, gene_id, transcript_id, chrom, strand, transcript_start, transcript_end,
        tss, gene_name, biotype
 FROM read_parquet('tables/jaspar2026/transcript.parquet');
 
 CREATE OR REPLACE VIEW intron AS
-SELECT gene_id, transcript_id, chrom, strand, start, "end", intron_number
+SELECT genome_id, gene_id, transcript_id, chrom, strand, start, "end", intron_number
 FROM read_parquet('tables/jaspar2026/intron.parquet');
 
 CREATE OR REPLACE VIEW motif_transcript_context AS
 SELECT
     anchor_hit_id,
+    genome_id,
+    motif_set_id,
     chrom,
     anchor_start,
     anchor_end,
@@ -337,18 +500,18 @@ SELECT
 FROM read_parquet('tables/jaspar2026/motif_transcript_context.parquet');
 
 CREATE OR REPLACE VIEW gene_set AS
-SELECT gene_id, set_name           -- many-to-many (HALLMARK_*, KEGG_*, ...)
+SELECT genome_id, gene_id, set_name -- many-to-many (HALLMARK_*, KEGG_*, ...)
 FROM read_parquet('tables/jaspar2026/gene_set/*.parquet');
 
 -- Expression label source. `expression` is tidy per (gene, cell_line, isoform);
 -- `expression_differential` is the precomputed TA-vs-DN contrast = the ML label.
 CREATE OR REPLACE VIEW expression AS
-SELECT gene_id, cell_line, isoform, value, replicate
+SELECT genome_id, gene_id, cell_line, isoform, value, replicate
 FROM read_parquet('tables/jaspar2026/expression/*.parquet');
 
 CREATE OR REPLACE VIEW expression_differential AS
 SELECT
-    gene_id, cell_line,
+    genome_id, gene_id, cell_line,
     log2fc_ta_vs_dn,           -- + means higher under TAp73 than DNp73
     lfc_se, pvalue, padj, base_mean
 FROM read_parquet('tables/jaspar2026/expression_differential/*.parquet');
@@ -366,6 +529,8 @@ FROM read_parquet('tables/jaspar2026/expression_differential/*.parquet');
 CREATE OR REPLACE TABLE promoter_motif_hit AS
 WITH transcript_overlap AS (
     SELECT
+        p.genome_id,
+        h.motif_set_id,
         p.gene_id,
         p.transcript_id,
         h.chrom,
@@ -382,7 +547,8 @@ WITH transcript_overlap AS (
              ELSE p.tss - h."end" END AS tss_distance
     FROM promoter p
     JOIN motif_hit h
-      ON  h.chrom = p.chrom
+      ON  h.genome_id = p.genome_id
+      AND h.chrom = p.chrom
       AND h.start >= p.promoter_start
       AND h."end" <= p.promoter_end
 ),
@@ -397,11 +563,14 @@ ranked_overlap AS (
         ) AS transcript_distance_rank
     FROM transcript_overlap
     WINDOW hit_identity AS (
-        PARTITION BY gene_id, chrom, hit_start, hit_end, motif_id, strand,
+        PARTITION BY genome_id, motif_set_id, gene_id, chrom, hit_start,
+                     hit_end, motif_id, strand,
                      score_mode, pseudocount, score, pwm_relative_score
     )
 )
 SELECT
+    genome_id,
+    motif_set_id,
     gene_id,
     transcript_id AS closest_transcript_id,
     n_overlapping_transcripts,
@@ -422,6 +591,8 @@ WHERE transcript_distance_rank = 1;
 -- Pivot to wide only at the ML boundary (see queries.sql / the Python builder).
 CREATE OR REPLACE TABLE promoter_arch_feature AS
 SELECT
+    b.genome_id,
+    b.motif_set_id,
     b.gene_id,
     b.motif_id,
     b.score_mode,
@@ -434,12 +605,150 @@ SELECT
     MIN(ABS(b.tss_distance))                    AS min_abs_tss_distance,
     BOOL_OR(a.binding_unit_model = 'dimer_of_dimers') AS has_dimer_of_dimers
 FROM promoter_motif_hit b
-LEFT JOIN motif_architecture a USING (motif_id)
-GROUP BY b.gene_id, b.motif_id, b.score_mode, b.pseudocount, a.tf_family, a.binding_unit_model;
+LEFT JOIN motif_architecture a USING (motif_set_id, motif_id)
+GROUP BY b.genome_id, b.motif_set_id, b.gene_id, b.motif_id,
+         b.score_mode, b.pseudocount, a.tf_family, a.binding_unit_model;
+
+-- Pair state of promoter-associated TP73 anchors. Every TP73 occurrence is
+-- represented, including singletons. Keeping pair_class in the table grain
+-- lets an ML exporter compare singleton, same-, opposite-, mixed-, and
+-- orientation-ambiguous sequence architectures without duplicating labels.
+CREATE OR REPLACE TABLE promoter_pair_feature AS
+SELECT
+    b.genome_id,
+    b.motif_set_id,
+    b.gene_id,
+    f.motif_id AS anchor_motif_id,
+    f.score_mode,
+    f.pseudocount,
+    f.pair_class,
+    COUNT(*)::BIGINT AS n_anchor_orientation_hits,
+    COUNT(DISTINCT concat_ws('|', f.chrom, f.start::VARCHAR, f."end"::VARCHAR))::BIGINT
+        AS n_anchor_loci,
+    SUM(CASE WHEN f.pwm_relative_score >= 0.8 THEN 1 ELSE 0 END)::BIGINT
+        AS n_strong_anchor_hits,
+    MAX(f.score) AS max_anchor_score,
+    MAX(f.pwm_relative_score) AS max_anchor_pwm_relative_score,
+    SUM(f.n_tandem_tp73_partner_loci)::BIGINT AS n_tandem_partner_loci,
+    MAX(f.n_tandem_tp73_partner_loci)::BIGINT AS max_partners_per_anchor,
+    MIN(f.nearest_tandem_inter_motif_gap_bp)::BIGINT
+        AS nearest_tandem_inter_motif_gap_bp,
+    MAX(f.best_partner_score) AS best_partner_score,
+    MAX(f.best_partner_pwm_relative_score) AS best_partner_pwm_relative_score,
+    MAX(f.best_pair_min_score) AS best_pair_min_score,
+    MAX(f.best_pair_sum_score) AS best_pair_sum_score,
+    MAX(f.best_pair_min_pwm_relative_score) AS best_pair_min_pwm_relative_score
+FROM promoter_motif_hit b
+JOIN tp73_pair_feature f
+  ON  f.genome_id = b.genome_id
+  AND f.motif_set_id = b.motif_set_id
+  AND f.chrom = b.chrom
+  AND f.start = b.start
+  AND f."end" = b."end"
+  AND f.motif_id = b.motif_id
+  AND f.strand = b.strand
+  AND f.score IS NOT DISTINCT FROM b.score
+  AND f.score_mode = b.score_mode
+  AND f.pseudocount IS NOT DISTINCT FROM b.pseudocount
+GROUP BY b.genome_id, b.motif_set_id, b.gene_id, f.motif_id,
+         f.score_mode, f.pseudocount, f.pair_class;
+
+-- Directed TP73-anchor/neighbor features for promoter models. The raw pair
+-- geometry remains in motif_context_pair; this table only aggregates the
+-- provisional context radius into stable 5-bp oriented-distance bins. Pair
+-- scores from different motif models remain separate; only PWM-relative
+-- scores are combined through a cross-motif minimum.
+CREATE OR REPLACE TABLE promoter_motif_pair_feature AS
+WITH promoter_context_pair AS (
+    SELECT
+        b.genome_id,
+        b.motif_set_id,
+        b.gene_id,
+        f.motif_id AS anchor_motif_id,
+        p.neighbor_motif_id,
+        p.neighbor_motif_name,
+        f.pair_class AS anchor_pair_class,
+        p.relative_orientation,
+        p.anchor_oriented_side,
+        CASE
+            WHEN p.is_tandem_tp73 THEN 'same_motif_tandem'
+            WHEN p.neighbor_motif_id = f.motif_id AND p.interval_overlap_bp > 0
+                THEN 'same_motif_overlapping_alignment'
+            WHEN p.neighbor_motif_id = f.motif_id THEN 'same_motif_context'
+            ELSE 'heterotypic_context'
+        END AS pair_relation,
+        FLOOR(p.anchor_oriented_center_distance_bp / 5.0) * 5.0
+            AS oriented_distance_bin_start_bp,
+        f.anchor_hit_id,
+        p.neighbor_hit_id,
+        p.neighbor_start,
+        p.neighbor_end,
+        p.anchor_score,
+        p.anchor_pwm_relative_score,
+        p.neighbor_score,
+        p.neighbor_pwm_relative_score,
+        p.absolute_center_distance_bp,
+        p.score_mode,
+        p.pseudocount
+    FROM promoter_motif_hit b
+    JOIN tp73_pair_feature f
+      ON  f.genome_id = b.genome_id
+      AND f.motif_set_id = b.motif_set_id
+      AND f.chrom = b.chrom
+      AND f.start = b.start
+      AND f."end" = b."end"
+      AND f.motif_id = b.motif_id
+      AND f.strand = b.strand
+      AND f.score IS NOT DISTINCT FROM b.score
+      AND f.score_mode = b.score_mode
+      AND f.pseudocount IS NOT DISTINCT FROM b.pseudocount
+    JOIN motif_context_pair p
+      ON p.anchor_hit_id = f.anchor_hit_id
+     AND p.genome_id = f.genome_id
+     AND p.motif_set_id = f.motif_set_id
+    WHERE p.within_context_flank
+      AND NOT p.same_anchor_motif_span
+)
+SELECT
+    genome_id,
+    motif_set_id,
+    gene_id,
+    anchor_motif_id,
+    neighbor_motif_id,
+    MAX(neighbor_motif_name) AS neighbor_motif_name,
+    score_mode,
+    pseudocount,
+    anchor_pair_class,
+    pair_relation,
+    relative_orientation,
+    anchor_oriented_side,
+    oriented_distance_bin_start_bp,
+    oriented_distance_bin_start_bp + 5.0 AS oriented_distance_bin_end_bp,
+    5::INTEGER AS distance_bin_width_bp,
+    COUNT(*)::BIGINT AS n_directed_orientation_pairs,
+    COUNT(DISTINCT concat_ws(
+        '|', anchor_hit_id, neighbor_motif_id,
+        neighbor_start::VARCHAR, neighbor_end::VARCHAR
+    ))::BIGINT AS n_anchor_neighbor_loci,
+    COUNT(DISTINCT anchor_hit_id)::BIGINT AS n_anchor_hits,
+    MAX(anchor_score) AS max_anchor_score,
+    MAX(anchor_pwm_relative_score) AS max_anchor_pwm_relative_score,
+    MAX(neighbor_score) AS max_neighbor_score,
+    MAX(neighbor_pwm_relative_score) AS max_neighbor_pwm_relative_score,
+    MAX(LEAST(anchor_pwm_relative_score, neighbor_pwm_relative_score))
+        AS max_pair_min_pwm_relative_score,
+    MIN(absolute_center_distance_bp) AS min_absolute_center_distance_bp
+FROM promoter_context_pair
+GROUP BY genome_id, motif_set_id, gene_id, anchor_motif_id,
+         neighbor_motif_id, score_mode, pseudocount,
+         anchor_pair_class, pair_relation, relative_orientation,
+         anchor_oriented_side, oriented_distance_bin_start_bp;
 
 -- The ML surface: features (long) + the TA-vs-DN label. Keep long; pivot at read.
 CREATE OR REPLACE VIEW ml_ta_vs_dn AS
 SELECT
+    f.genome_id,
+    f.motif_set_id,
     f.gene_id,
     d.cell_line,
     f.motif_id,
@@ -455,7 +764,29 @@ SELECT
     d.padj,
     CASE WHEN d.log2fc_ta_vs_dn > 0 THEN 1 ELSE 0 END AS label_ta_up   -- classification
 FROM promoter_arch_feature f
-JOIN expression_differential d USING (gene_id);
+JOIN expression_differential d USING (genome_id, gene_id);
+
+-- Pair-aware sequence-only ML surfaces. They remain separate from the ordinary
+-- per-motif frame so callers opt into pair stratification deliberately.
+CREATE OR REPLACE VIEW ml_ta_vs_dn_pair AS
+SELECT
+    f.*,
+    d.cell_line,
+    d.log2fc_ta_vs_dn,
+    d.padj,
+    d.log2fc_ta_vs_dn > 0 AS label_ta_up
+FROM promoter_pair_feature f
+JOIN expression_differential d USING (genome_id, gene_id);
+
+CREATE OR REPLACE VIEW ml_ta_vs_dn_motif_pair AS
+SELECT
+    f.*,
+    d.cell_line,
+    d.log2fc_ta_vs_dn,
+    d.padj,
+    d.log2fc_ta_vs_dn > 0 AS label_ta_up
+FROM promoter_motif_pair_feature f
+JOIN expression_differential d USING (genome_id, gene_id);
 
 -- Hot agent lookup: one compact, low-latency promoter summary per gene and
 -- scoring configuration. Keeping score_mode and pseudocount in the table grain
@@ -464,19 +795,22 @@ JOIN expression_differential d USING (gene_id);
 CREATE OR REPLACE TABLE promoter_card AS
 WITH promoter_span AS (
     SELECT
+        genome_id,
         gene_id,
         MIN(promoter_start) AS promoter_start,
         MAX(promoter_end) AS promoter_end,
         COUNT(DISTINCT transcript_id) AS n_promoter_transcripts
     FROM promoter
-    GROUP BY gene_id
+    GROUP BY genome_id, gene_id
 ),
 score_configuration AS (
-    SELECT DISTINCT score_mode, pseudocount
+    SELECT DISTINCT genome_id, motif_set_id, score_mode, pseudocount
     FROM motif_hit
 ),
 feature_summary AS (
     SELECT
+        genome_id,
+        motif_set_id,
         gene_id,
         score_mode,
         pseudocount,
@@ -487,9 +821,27 @@ feature_summary AS (
         BOOL_OR(COALESCE(has_dimer_of_dimers, false)) AS has_dimer_of_dimers,
         COUNT(DISTINCT tf_family) FILTER (WHERE tf_family IS NOT NULL) AS n_tf_families
     FROM promoter_arch_feature
-    GROUP BY gene_id, score_mode, pseudocount
+    GROUP BY genome_id, motif_set_id, gene_id, score_mode, pseudocount
+),
+pair_summary AS (
+    SELECT
+        genome_id,
+        motif_set_id,
+        gene_id,
+        score_mode,
+        pseudocount,
+        SUM(n_anchor_orientation_hits)::BIGINT AS n_tp73_anchor_hits,
+        SUM(n_anchor_orientation_hits) FILTER (WHERE pair_class = 'singleton')::BIGINT
+            AS n_singleton_tp73_anchor_hits,
+        SUM(n_anchor_orientation_hits) FILTER (WHERE pair_class <> 'singleton')::BIGINT
+            AS n_tandem_tp73_anchor_hits,
+        COUNT(DISTINCT pair_class)::BIGINT AS n_tp73_pair_classes
+    FROM promoter_pair_feature
+    GROUP BY genome_id, motif_set_id, gene_id, score_mode, pseudocount
 )
 SELECT
+    g.genome_id,
+    sc.motif_set_id,
     g.gene_id,
     g.gene_name,
     g.chrom,
@@ -505,11 +857,23 @@ SELECT
     fs.max_pwm_relative_score,
     fs.min_abs_tss_distance,
     COALESCE(fs.has_dimer_of_dimers, false) AS has_dimer_of_dimers,
-    COALESCE(fs.n_tf_families, 0) AS n_tf_families
+    COALESCE(fs.n_tf_families, 0) AS n_tf_families,
+    COALESCE(pa.n_tp73_anchor_hits, 0) AS n_tp73_anchor_hits,
+    COALESCE(pa.n_singleton_tp73_anchor_hits, 0) AS n_singleton_tp73_anchor_hits,
+    COALESCE(pa.n_tandem_tp73_anchor_hits, 0) AS n_tandem_tp73_anchor_hits,
+    COALESCE(pa.n_tp73_pair_classes, 0) AS n_tp73_pair_classes
 FROM gene g
-CROSS JOIN score_configuration sc
-LEFT JOIN promoter_span ps USING (gene_id)
+JOIN score_configuration sc USING (genome_id)
+LEFT JOIN promoter_span ps USING (genome_id, gene_id)
 LEFT JOIN feature_summary fs
-  ON  fs.gene_id = g.gene_id
+  ON  fs.genome_id = g.genome_id
+  AND fs.motif_set_id = sc.motif_set_id
+  AND fs.gene_id = g.gene_id
   AND fs.score_mode = sc.score_mode
-  AND fs.pseudocount IS NOT DISTINCT FROM sc.pseudocount;
+  AND fs.pseudocount IS NOT DISTINCT FROM sc.pseudocount
+LEFT JOIN pair_summary pa
+  ON  pa.genome_id = g.genome_id
+  AND pa.motif_set_id = sc.motif_set_id
+  AND pa.gene_id = g.gene_id
+  AND pa.score_mode = sc.score_mode
+  AND pa.pseudocount IS NOT DISTINCT FROM sc.pseudocount;

@@ -12,6 +12,8 @@ range_start=3600000
 range_end=3700000
 full_chromosome=0
 range_was_set=0
+readonly motif_set_id=jaspar2026_core_nonredundant
+readonly genome_id=homo_sapiens_grch38_ensembl113_primary
 
 usage() {
     cat <<'EOF'
@@ -140,7 +142,7 @@ done
 part_file="part-${part_range}-n_policy=skip-000000.parquet"
 for motif in MA1961.2 MA0861.2; do
     for mode in log2_relative_risk log_odds; do
-        partition="$output/tables/jaspar2026/motif_score_dense/motif_id=$motif/score_mode=$mode/pseudocount=1/chrom=1"
+        partition="$output/tables/jaspar2026/motif_score_dense/motif_set_id=$motif_set_id/genome_id=$genome_id/motif_id=$motif/score_mode=$mode/pseudocount=1/background_model_id=uniform_acgt_v1/pseudocount_scheme=additive_per_base/chrom=1"
         plus_file="$partition/strand=plus/$part_file"
         minus_file="$partition/strand=minus/$part_file"
         if [[ -s $plus_file && -s $minus_file ]]; then
@@ -155,6 +157,8 @@ for motif in MA1961.2 MA0861.2; do
             --fasta-index "$fasta_index" \
             --pssm "$pssm" \
             --motif "$motif" \
+            --motif-set-id "$motif_set_id" \
+            --genome-id "$genome_id" \
             --chr 1 \
             --strand both \
             --coordinate-mode bed \
@@ -185,9 +189,10 @@ if [[ ! -f $metadata_file ]]; then
         cd "$output"
         duckdb :memory: -bail -c "COPY (
             SELECT * FROM (VALUES
-                ('MA1961.2', 'PATZ1', 11, 2026, '$jaspar_sha256'),
-                ('MA0861.2', 'TP73', 16, 2026, '$jaspar_sha256')
-            ) AS t(motif_id, motif_name, motif_length, jaspar_version, source_sha256)
+                ('$motif_set_id', 'MA1961.2', 'PATZ1', 11, 2026, '$jaspar_sha256'),
+                ('$motif_set_id', 'MA0861.2', 'TP73', 16, 2026, '$jaspar_sha256')
+            ) AS t(motif_set_id, motif_id, motif_name, motif_length,
+                   jaspar_version, source_sha256)
         ) TO 'tables/jaspar2026/motif_metadata/part-000000.parquet'
           (FORMAT PARQUET, COMPRESSION ZSTD);" >/dev/null
     )
@@ -245,7 +250,7 @@ SELECT CASE
     WHEN EXISTS (
         SELECT 1
         FROM dense_run_inventory i
-        JOIN motif_metadata m USING (motif_id)
+        JOIN motif_metadata m USING (motif_set_id, motif_id)
         CROSS JOIN run_manifest r
         WHERE i.chrom <> '1'
            OR i.pseudocount <> 1.0

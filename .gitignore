@@ -29,6 +29,8 @@ tests/test_compressed_file_reader
 tests/test_context
 *.gz
 *.RData
+combined.expression.data.xlsx
+combined.expression.data.tsv
 *.pdf
 *.png
 *.svg

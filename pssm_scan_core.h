@@ -34,6 +34,10 @@ struct HitOutputOptions {
     CoordinateMode coordinateMode;
     bool showSequence;
     bool skipN;
+    std::string motifSetID;
+    std::string genomeID;
+    std::string backgroundModelID;
+    std::string pseudocountScheme;
 };
 
 struct ScoreRange {
@@ -54,6 +58,11 @@ struct ScoreBlock {
     std::vector<bool> sequenceValid;
     std::uint64_t validWindows = 0;
     std::uint64_t skippedWindows = 0;
+};
+
+struct ScoredWindow {
+    double score = SENTINEL_SCORE;
+    bool sequenceValid = false;
 };
 
 struct ScoreBin {
@@ -87,10 +96,8 @@ bool parseDoubleStrict(const char* text, double& value);
 std::string formatDoubleForFileLabel(double value);
 std::filesystem::path hitOutputDirectory(const std::filesystem::path& outdir,
                                          const HitOutputOptions& options);
-std::string motifDatasetLabelFromPSSMFile(const std::filesystem::path& pssmFile);
 std::filesystem::path sparseHitParquetOutputPath(
     const std::filesystem::path& outdir,
-    const std::filesystem::path& pssmFile,
     const std::string& motifID,
     const HitOutputOptions& options,
     const std::string& chromosome,
@@ -103,6 +110,11 @@ std::uint8_t codeForBase(char base);
 std::uint8_t complementCode(std::uint8_t code);
 bool isSkippedScore(double score);
 double calculateScoreAt(const std::vector<std::uint8_t>& codes, size_t start, const FlatPSSM& pssm);
+ScoredWindow scoreWindowAtGenomicStart(const std::vector<std::uint8_t>& codes,
+                                       size_t sequenceLength,
+                                       bool reverseComplementWindow,
+                                       size_t genomicStart,
+                                       const FlatPSSM& pssm);
 double calculateScoreAtGenomicStart(const std::vector<std::uint8_t>& codes, size_t sequenceLength,
                                     bool reverseComplementWindow, size_t genomicStart,
                                     const FlatPSSM& pssm);

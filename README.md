@@ -132,8 +132,14 @@ console, press Ctrl+Break; the Windows build handles `CTRL_BREAK_EVENT` without
 terminating the scan. Automated Windows callers can use `GenerateConsoleCtrlEvent`
 to send `CTRL_BREAK_EVENT`, but the caller and target must share a console and the
 target should be started as a console process group. Each mechanism prints one
-status line to stderr with the current motif, chromosome, strand, position,
-window count, and percent complete.
+status line to stderr. Scan-loop reports include the current motif, chromosome,
+strand, position, local window count and percentage, global motif and chromosome
+indices, the cumulative number of successfully emitted hits, and process elapsed
+time. A request received while an indexed FASTA chromosome is loading or while a
+Parquet writer is closing is reported at the safe phase boundary as
+`fasta_load_start`, `fasta_load_complete`, `parquet_close_start`,
+`parquet_close_complete`, or `parquet_close_failed`. Signal handlers only set a
+request flag; formatting and I/O remain in ordinary scanner control flow.
 
 Additional scanner controls now include `--strand +|-|both`,
 `--coordinate-mode legacy|bed`, and `--min-pwm-relative-score` /
@@ -166,18 +172,29 @@ make pssm_scan_parquet
   --genome Homo_sapiens.GRCh38.dna.primary_assembly.fasta \
   --pssm JASPAR2026_CORE_non-redundant_pfms_jaspar.txt \
   --motif MA0861.2 --chr 1 --strand both \
+  --motif-set-id jaspar2026_core_nonredundant \
+  --genome-id homo_sapiens_grch38_ensembl113_primary \
   --score-mode log2_relative_risk --pseudocount 1 \
-  --threshold -1 --coordinate-mode bed --skip-N
+  --threshold -5 --coordinate-mode bed --skip-N \
+  --scan-file-stats sparse_tp73_chr1/scan_file_stats.jsonl
 ```
 
 Each motif/chromosome/strand file contains only the per-hit columns `start`,
 `end`, float32 `score`, float32 `pwm_relative_score`, and nullable
 `matched_seq`. Row-constant identity and run configuration live in Hive-style
-partitions below `tables/INPUT_DATASET/motif_hit/`. Record batches are bounded,
+partitions below `tables/jaspar2026/motif_hit/`, including explicit motif-set
+and genome IDs, background and pseudocount semantics, score/PWM bounds, N
+policy, and sequence policy. Dataset identity is never inferred from an input
+filename. `--motif-list` accepts one accession per line for disjoint batch jobs,
+and `--scan-file-stats` writes one JSON record per completed Parquet file with
+complete window accounting. Record batches are bounded,
 so memory use does not grow with the number of retained hits. A completed file
 is published from a staging path only after Parquet closes successfully, and an
 existing result is never replaced silently. `--sparse-parquet` does not yet
 accept `--regions`; use a chromosome with optional `--from`/`--to` bounds.
+The requeue-safe whole-genome planner, per-task validator, immutable inventories,
+SIGUSR1 workflow, and human/mouse/rat identity contract are documented in
+[`docs/jaspar2026_genome_scan_plan.md`](docs/jaspar2026_genome_scan_plan.md).
 
 To inspect subthreshold scores without writing one row per genomic window, use
 `./pssm_scan --score-distribution` or `make score_distributions_chr1`. The Make
@@ -200,11 +217,10 @@ one motif and one chromosome. Dense mode writes one score for every possible
 alignment start of the motif model to the selected chromosome and strand.
 With Arrow support, those alignment scores are written as block Parquet under
 a hive-style path such as
-`tables/jaspar2026/motif_score_dense/motif_id=MA0861.2/score_mode=.../pseudocount=1/chrom=1/strand=plus/part-from=0-to=end-n_policy=skip-000000.parquet`.
-The dataset directory is derived from the supplied PSSM filename rather than
-hardcoded: a JASPAR 2026 filename maps to `jaspar2026`, while custom files use
-a sanitized filename stem. Dense part names include the requested range and N
-policy so partial calibrations cannot replace full-chromosome output.
+`tables/jaspar2026/motif_score_dense/motif_set_id=.../genome_id=.../motif_id=MA0861.2/score_mode=.../pseudocount=1/background_model_id=uniform_acgt_v1/pseudocount_scheme=additive_per_base/chrom=1/strand=plus/part-from=0-to=end-n_policy=skip-000000.parquet`.
+Parquet modes require explicit `--motif-set-id` and `--genome-id`; dense part
+names also include the requested range and N policy so partial calibrations
+cannot replace full-chromosome output.
 Under `--skip-N`, alignments crossing assembly gaps are stored as `NULL`
 elements. An unsmoothed `log2_relative_risk` alignment that selects an
 unobserved motif nucleotide is valid DNA with score `-Inf`, and is retained as
@@ -222,6 +238,8 @@ make pssm_scan_parquet
   --genome Homo_sapiens.GRCh38.dna.primary_assembly.fasta \
   --pssm JASPAR2026_CORE_non-redundant_pfms_jaspar.txt \
   --motif MA0861.2 --chr 1 --strand both \
+  --motif-set-id jaspar2026_core_nonredundant \
+  --genome-id homo_sapiens_grch38_ensembl113_primary \
   --score-mode log2_relative_risk --pseudocount 1
 ```
 
@@ -239,15 +257,17 @@ contract are documented in
 [`docs/gentle_chr1_duckdb_interpretation_prompt.md`](docs/gentle_chr1_duckdb_interpretation_prompt.md).
 Thresholded BED files can be regenerated without rescanning the genome using
 `scripts/export_dense_bed.py`; it filters the dense package by motif,
-configuration, chromosome, orientation, alignment-start range, and score while
-streaming directly to plain or gzip-compressed output. See the dry-run document
-for examples and the precise compatibility boundary.
+explicit genome and motif-set identities, configuration, chromosome,
+orientation, alignment-start range, and score while streaming directly to
+plain or gzip-compressed output. See the dry-run document for examples and the
+precise compatibility boundary.
 The reproducible Slurm runner for the full chromosome 1 TP73, E2F1, SP1,
 PATZ1, and POU2F2 panel is documented in
 [`docs/chr1_2026_motif_panel.md`](docs/chr1_2026_motif_panel.md).
 The de novo TP73 motif-pair layer, provisional 150 bp context radius, 20 bp
-non-overlapping tandem-gap definition, orientation semantics, and
-transcript/intron features are documented in
+non-overlapping tandem-gap definition, orientation-collapsed singleton/tandem
+feature classes, pair-stratified promoter predictors, and transcript/intron
+features are documented in
 [`docs/tp73_motif_context.md`](docs/tp73_motif_context.md).
 The strict CUT&RUN coverage-immersion rule, synthetic local test, threshold
 metrics, and true-data landing convention are documented in

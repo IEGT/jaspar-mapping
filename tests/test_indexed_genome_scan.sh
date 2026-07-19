@@ -24,6 +24,8 @@ printf '>TEST.1 Any\nA [ 1 ]\nC [ 1 ]\nG [ 1 ]\nT [ 1 ]\n' > "$pssm"
     --genome "$fasta" \
     --pssm "$pssm" \
     --motif TEST.1 \
+    --motif-set-id synthetic_test_motifs \
+    --genome-id synthetic_multichrom_v1 \
     --outdir "$output_dir" \
     --threshold 0 \
     --strand both \
@@ -93,6 +95,8 @@ dense_dir="$tmp_dir/dense"
     --chr chr2 \
     --outdir "$dense_dir" \
     --dense-scores \
+    --motif-set-id synthetic_test_motifs \
+    --genome-id synthetic_multichrom_v1 \
     --strand both \
     > "$tmp_dir/dense.stdout" 2> "$tmp_dir/dense.stderr"
 

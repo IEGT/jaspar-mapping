@@ -49,6 +49,8 @@ for mode in log2_relative_risk log_odds; do
         --fasta-index "$fasta_index" \
         --pssm "$pssm" \
         --motif MA9999.1 \
+        --motif-set-id synthetic_jaspar2026 \
+        --genome-id synthetic_acgtn_v1 \
         --chr 1 \
         --strand both \
         --coordinate-mode bed \
@@ -65,6 +67,7 @@ if [[ ! -f $metadata_file ]]; then
         cd "$output"
         duckdb :memory: -bail -c "COPY (
             SELECT 'MA9999.1'::VARCHAR AS motif_id,
+                   'synthetic_jaspar2026'::VARCHAR AS motif_set_id,
                    'A_RICH'::VARCHAR AS motif_name,
                    1::INTEGER AS motif_length,
                    2026::INTEGER AS jaspar_version,

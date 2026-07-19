@@ -2,14 +2,18 @@
 -- Run this from the package directory containing tables/jaspar2026/.
 
 CREATE OR REPLACE VIEW motif_metadata AS
-SELECT motif_id, motif_name, motif_length, jaspar_version, source_sha256
+SELECT motif_set_id, motif_id, motif_name, motif_length, jaspar_version, source_sha256
 FROM read_parquet('tables/jaspar2026/motif_metadata/*.parquet');
 
 CREATE OR REPLACE VIEW motif_score_dense_block AS
 SELECT
+    genome_id,
+    motif_set_id,
     motif_id,
     score_mode,
     CAST(pseudocount AS DOUBLE) AS pseudocount,
+    background_model_id,
+    pseudocount_scheme,
     CAST(chrom AS VARCHAR) AS chrom,
     CASE
         WHEN strand IN ('plus', '+') THEN '+'
@@ -20,7 +24,7 @@ SELECT
     scores,
     filename AS source_file
 FROM read_parquet(
-    'tables/jaspar2026/motif_score_dense/*/*/*/*/*/*.parquet',
+    'tables/jaspar2026/motif_score_dense/**/*.parquet',
     hive_partitioning = true,
     filename = true,
     union_by_name = true
@@ -29,9 +33,13 @@ FROM read_parquet(
 -- This inventory never expands score lists, so it remains fast for full chr1.
 CREATE OR REPLACE VIEW dense_run_inventory AS
 SELECT
+    genome_id,
+    motif_set_id,
     motif_id,
     score_mode,
     pseudocount,
+    background_model_id,
+    pseudocount_scheme,
     chrom,
     strand,
     COUNT(DISTINCT source_file) AS part_files,
@@ -42,12 +50,15 @@ SELECT
     SUM(list_count(scores)) AS n_valid_windows,
     SUM(len(scores) - list_count(scores)) AS n_skipped_windows
 FROM motif_score_dense_block
-GROUP BY motif_id, score_mode, pseudocount, chrom, strand;
+GROUP BY genome_id, motif_set_id, motif_id, score_mode, pseudocount,
+         background_model_id, pseudocount_scheme, chrom, strand;
 
 -- Convenient logical row view. Filter by all partition columns and a small
 -- region; do not SELECT the complete view for a full chromosome.
 CREATE OR REPLACE VIEW motif_score_dense AS
 SELECT
+    b.genome_id,
+    b.motif_set_id,
     b.chrom,
     b.block_start + CAST(u.offset_one - 1 AS BIGINT) AS start,
     b.block_start + CAST(u.offset_one - 1 AS BIGINT) + m.motif_length AS "end",
@@ -56,9 +67,11 @@ SELECT
     b.strand,
     b.score_mode,
     b.pseudocount,
+    b.background_model_id,
+    b.pseudocount_scheme,
     u.score
 FROM motif_score_dense_block b
-JOIN motif_metadata m USING (motif_id)
+JOIN motif_metadata m USING (motif_set_id, motif_id)
 CROSS JOIN UNNEST(b.scores) WITH ORDINALITY AS u(score, offset_one);
 
 CREATE OR REPLACE TABLE score_calibration_bin AS
@@ -83,6 +96,8 @@ FROM (
 ) AS t(bin_order, bin_label, lower_bound, upper_bound);
 
 CREATE OR REPLACE MACRO dense_scores_region(
+    p_genome_id,
+    p_motif_set_id,
     p_motif_id,
     p_score_mode,
     p_pseudocount,
@@ -94,8 +109,10 @@ CREATE OR REPLACE MACRO dense_scores_region(
 WITH selected_blocks AS (
     SELECT b.*, m.motif_name, m.motif_length
     FROM motif_score_dense_block b
-    JOIN motif_metadata m USING (motif_id)
-    WHERE b.motif_id = p_motif_id
+    JOIN motif_metadata m USING (motif_set_id, motif_id)
+    WHERE b.genome_id = p_genome_id
+      AND b.motif_set_id = p_motif_set_id
+      AND b.motif_id = p_motif_id
       AND b.score_mode = p_score_mode
       AND b.pseudocount = p_pseudocount
       AND b.chrom = p_chrom
@@ -104,6 +121,8 @@ WITH selected_blocks AS (
       AND b.block_start + len(b.scores) > p_start
 )
 SELECT
+    b.genome_id,
+    b.motif_set_id,
     b.chrom,
     b.block_start + CAST(u.offset_one - 1 AS BIGINT) AS start,
     b.block_start + CAST(u.offset_one - 1 AS BIGINT) + b.motif_length AS "end",
@@ -112,6 +131,8 @@ SELECT
     b.strand,
     b.score_mode,
     b.pseudocount,
+    b.background_model_id,
+    b.pseudocount_scheme,
     u.score
 FROM selected_blocks b
 CROSS JOIN UNNEST(b.scores) WITH ORDINALITY AS u(score, offset_one)
@@ -119,6 +140,8 @@ WHERE b.block_start + CAST(u.offset_one - 1 AS BIGINT) >= p_start
   AND b.block_start + CAST(u.offset_one - 1 AS BIGINT) < p_end;
 
 CREATE OR REPLACE MACRO dense_score_summary(
+    p_genome_id,
+    p_motif_set_id,
     p_motif_id,
     p_score_mode,
     p_pseudocount,
@@ -138,11 +161,14 @@ SELECT
     MAX(score) AS max_score,
     approx_quantile(score, [0.01, 0.05, 0.25, 0.5, 0.75, 0.95, 0.99]) AS quantiles
 FROM dense_scores_region(
-    p_motif_id, p_score_mode, p_pseudocount,
+    p_genome_id, p_motif_set_id, p_motif_id,
+    p_score_mode, p_pseudocount,
     p_chrom, p_strand, p_start, p_end
 );
 
 CREATE OR REPLACE MACRO dense_score_histogram(
+    p_genome_id,
+    p_motif_set_id,
     p_motif_id,
     p_score_mode,
     p_pseudocount,
@@ -161,7 +187,8 @@ WITH checked_width AS (
 valid_scores AS (
     SELECT score
     FROM dense_scores_region(
-        p_motif_id, p_score_mode, p_pseudocount,
+        p_genome_id, p_motif_set_id, p_motif_id,
+        p_score_mode, p_pseudocount,
         p_chrom, p_strand, p_start, p_end
     )
     WHERE score IS NOT NULL
@@ -183,6 +210,8 @@ GROUP BY bin_start, bin_end
 ORDER BY bin_start;
 
 CREATE OR REPLACE MACRO dense_score_calibration_bins(
+    p_genome_id,
+    p_motif_set_id,
     p_motif_id,
     p_score_mode,
     p_pseudocount,
@@ -194,7 +223,8 @@ CREATE OR REPLACE MACRO dense_score_calibration_bins(
 WITH valid_scores AS (
     SELECT score
     FROM dense_scores_region(
-        p_motif_id, p_score_mode, p_pseudocount,
+        p_genome_id, p_motif_set_id, p_motif_id,
+        p_score_mode, p_pseudocount,
         p_chrom, p_strand, p_start, p_end
     )
     WHERE score IS NOT NULL

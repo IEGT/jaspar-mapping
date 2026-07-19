@@ -48,7 +48,8 @@ SCORE SEMANTICS
 QUERY SURFACE
 - dense_run_inventory: inspect files, blocks, valid windows, and skipped
   windows without expanding full score arrays.
-- dense_scores_region(motif_id, mode, pseudocount, chrom, strand, start, end):
+- dense_scores_region(genome_id, motif_set_id, motif_id, mode, pseudocount,
+  chrom, strand, start, end):
   inspect a bounded alignment-start interval.
 - dense_score_summary(...): obtain counts, extrema, mean, and approximate
   quantiles for a bounded interval.
@@ -61,8 +62,8 @@ QUERY SURFACE
 QUERY DISCIPLINE
 1. Use dense_run_inventory first. Never expand motif_score_dense for all chr1
    unless the user explicitly requests and understands that cost.
-2. Filter by motif_id, score_mode, pseudocount, chrom, strand, and a bounded
-   range before UNNESTing scores.
+2. Filter by genome_id, motif_set_id, motif_id, score_mode, pseudocount, chrom,
+   strand, and a bounded range before UNNESTing scores.
 3. Preserve strand rather than pooling it silently. If pooling is requested,
    report both strand-specific counts first.
 4. When comparing PATZ1 and TP73 near one locus, compare overlapping scored

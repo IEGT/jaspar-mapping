@@ -13,6 +13,10 @@ For motif-score calibration against raw CUT&RUN fragments, also read
 For TP73-local motif spacing, tandem TP73 sites, or transcript/intron context,
 also read [`docs/tp73_motif_context.md`](docs/tp73_motif_context.md).
 
+For whole-genome JASPAR 2026 scans, Slurm batching/requeue behavior, production
+inventories, or cross-species identity, also read
+[`docs/jaspar2026_genome_scan_plan.md`](docs/jaspar2026_genome_scan_plan.md).
+
 Treat [`sql/schema.sql`](sql/schema.sql) and [`sql/queries.sql`](sql/queries.sql)
 as the draft query contract:
 
