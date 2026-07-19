@@ -14,6 +14,7 @@ Options:
   --run-root DIR   Scan run created by manage_genome_scan.py prepare (required)
   --scanner FILE   Arrow-enabled pssm_scan_parquet executable (required)
   --duckdb FILE    DuckDB CLI executable or command name (default: duckdb)
+  --task-offset N  Add N to SLURM_ARRAY_TASK_ID (default: 0)
   --duckdb-memory-limit SIZE
                     In-memory validation ceiling (default: 12GB)
   -h, --help       Show this help and exit
@@ -23,12 +24,14 @@ EOF
 run_root=""
 scanner=""
 duckdb=duckdb
+task_offset=0
 duckdb_memory_limit=12GB
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --run-root) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; run_root=$2; shift 2 ;;
         --scanner) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; scanner=$2; shift 2 ;;
         --duckdb) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; duckdb=$2; shift 2 ;;
+        --task-offset) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; task_offset=$2; shift 2 ;;
         --duckdb-memory-limit) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; duckdb_memory_limit=$2; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "E: Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -40,12 +43,17 @@ done
     echo "E: SLURM_ARRAY_TASK_ID is not set; submit this script as a Slurm array." >&2
     exit 1
 }
+[[ $task_offset =~ ^[0-9]+$ ]] || {
+    echo "E: --task-offset must be a non-negative integer." >&2
+    exit 2
+}
+task_index=$((10#$task_offset + 10#$SLURM_ARRAY_TASK_ID))
 
 repository_root=$(cd "$(dirname "$0")/.." && pwd)
 manager_arguments=(
     run-task
     --run-root "$run_root"
-    --task-index "$SLURM_ARRAY_TASK_ID"
+    --task-index "$task_index"
     --scanner "$scanner"
     --duckdb "$duckdb"
     --duckdb-memory-limit "$duckdb_memory_limit"

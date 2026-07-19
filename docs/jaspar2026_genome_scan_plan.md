@@ -115,9 +115,13 @@ print(len(json.load(open(sys.argv[1], encoding='utf-8'))['tasks']))
 PY
 )
 
-JOB_ID=$(sbatch --parsable \
+FIRST_TASKS=$(((TASK_COUNT + 1) / 2))
+SECOND_OFFSET=$FIRST_TASKS
+SECOND_TASKS=$((TASK_COUNT - SECOND_OFFSET))
+
+JOB_ID_A=$(sbatch --parsable \
   --account=cluster --partition=requeue --requeue \
-  --array="0-$((TASK_COUNT - 1))%20" \
+  --array="0-$((FIRST_TASKS - 1))%10" \
   --nodes=1 --ntasks=1 --cpus-per-task=1 --mem=16G --time=1-00:00:00 \
   --chdir="$SOURCE" \
   --output="$RUN/logs/slurm-%A_%a.out" \
@@ -125,8 +129,23 @@ JOB_ID=$(sbatch --parsable \
   scripts/run_genome_scan_slurm_task.sh \
   --run-root "$RUN" --scanner "$SOURCE/pssm_scan_parquet" \
   --duckdb-memory-limit 12GB)
-printf 'Submitted %s\n' "$JOB_ID"
+
+JOB_ID_B=$(sbatch --parsable \
+  --account=cluster --partition=requeue --requeue \
+  --array="0-$((SECOND_TASKS - 1))%10" \
+  --nodes=1 --ntasks=1 --cpus-per-task=1 --mem=16G --time=1-00:00:00 \
+  --chdir="$SOURCE" \
+  --output="$RUN/logs/slurm-%A_%a.out" \
+  --error="$RUN/logs/slurm-%A_%a.err" \
+  scripts/run_genome_scan_slurm_task.sh \
+  --run-root "$RUN" --scanner "$SOURCE/pssm_scan_parquet" \
+  --task-offset "$SECOND_OFFSET" --duckdb-memory-limit 12GB)
+printf 'Submitted %s and %s\n' "$JOB_ID_A" "$JOB_ID_B"
 ```
+
+The two halves accommodate Haumea's `MaxArraySize=1001`. Each is throttled to
+10 live elements, so together they run at most 20 tasks; `--task-offset` maps
+the second array's local indices back to the immutable global task plan.
 
 No task removes or replaces a prior attempt. Failed attempts remain below
 `$RUN/staging/TASK_ID/`; successful task packages are atomically renamed below

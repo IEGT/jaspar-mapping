@@ -155,6 +155,7 @@ check: pssm_scan $(TEST_BINARIES)
 	bash tests/test_localMaxSkmelTADN.sh
 	bash tests/test_indexed_genome_scan.sh
 	bash tests/test_progress_signal.sh
+	bash tests/test_slurm_task_offset.sh
 	bash tests/test_build_fasta_index.sh
 	bash tests/test_cutandrun_containment.sh
 	bash tests/test_script_help.sh
