@@ -36,7 +36,7 @@ G [ 4 ]
 T [ 1 ]
 EOF
 
-source_commit=$(git -C "$repository_root" rev-parse HEAD)
+source_commit=0123456789abcdef0123456789abcdef01234567
 run_root="$temporary/run"
 manager="$repository_root/scripts/manage_genome_scan.py"
 
