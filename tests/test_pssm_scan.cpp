@@ -1,5 +1,6 @@
 #include "../pssm_scan_core.h"
 
+#include <cmath>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
