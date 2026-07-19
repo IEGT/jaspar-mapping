@@ -13,6 +13,8 @@ are forwarded to the scanner and produce one progress line.
 Options:
   --run-root DIR   Scan run created by manage_genome_scan.py prepare (required)
   --scanner FILE   Arrow-enabled pssm_scan_parquet executable (required)
+  --manager FILE   Python scan coordinator (default: scripts/manage_genome_scan.py
+                   beside the scanner's source tree)
   --duckdb FILE    DuckDB CLI executable or command name (default: duckdb)
   --task-offset N  Add N to SLURM_ARRAY_TASK_ID (default: 0)
   --duckdb-memory-limit SIZE
@@ -23,6 +25,7 @@ EOF
 
 run_root=""
 scanner=""
+manager=""
 duckdb=duckdb
 task_offset=0
 duckdb_memory_limit=12GB
@@ -30,6 +33,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --run-root) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; run_root=$2; shift 2 ;;
         --scanner) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; scanner=$2; shift 2 ;;
+        --manager) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; manager=$2; shift 2 ;;
         --duckdb) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; duckdb=$2; shift 2 ;;
         --task-offset) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; task_offset=$2; shift 2 ;;
         --duckdb-memory-limit) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; duckdb_memory_limit=$2; shift 2 ;;
@@ -49,7 +53,14 @@ done
 }
 task_index=$((10#$task_offset + 10#$SLURM_ARRAY_TASK_ID))
 
-repository_root=$(cd "$(dirname "$0")/.." && pwd)
+if [[ -z $manager ]]; then
+    scanner_directory=$(cd "$(dirname "$scanner")" && pwd)
+    manager="$scanner_directory/scripts/manage_genome_scan.py"
+fi
+[[ -f $manager ]] || {
+    echo "E: Scan coordinator does not exist: $manager" >&2
+    exit 1
+}
 manager_arguments=(
     run-task
     --run-root "$run_root"
@@ -67,5 +78,5 @@ if [[ -d /scratch && -w /scratch ]]; then
     echo "I: Using disposable job-local temporary storage: $scratch_directory" >&2
 fi
 
-exec python3 "$repository_root/scripts/manage_genome_scan.py" \
+exec python3 "$manager" \
     "${manager_arguments[@]}"
