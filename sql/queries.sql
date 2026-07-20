@@ -177,6 +177,9 @@ SELECT
     neighbor_end,
     neighbor_strand,
     neighbor_score,
+    anchor_neighbor_interval_distance_bp,
+    interval_relation,
+    interval_distance_band,
     genomic_center_distance_bp,
     anchor_oriented_center_distance_bp,
     relative_orientation,
@@ -202,6 +205,11 @@ SELECT
     strand,
     score,
     pwm_relative_score,
+    anchor_selection_class,
+    anchor_locus_best_score,
+    best_other_anchor_locus_score,
+    anchor_locus_score_prominence,
+    anchor_locus_is_local_peak,
     nearest_tss_distance_bp,
     primary_transcript_region,
     in_any_intron,
@@ -310,6 +318,9 @@ SELECT
     neighbor_score,
     neighbor_pwm_relative_score,
     pair_relation,
+    anchor_neighbor_interval_distance_bp,
+    interval_relation,
+    interval_distance_band,
     relative_orientation,
     anchor_oriented_side,
     anchor_oriented_center_distance_bp,
@@ -327,3 +338,37 @@ WHERE genome_id = $genome_id
   AND NOT same_anchor_motif_span
 ORDER BY neighbor_score DESC, absolute_center_distance_bp,
          neighbor_start, neighbor_strand;
+
+-- Q15. Canonical same-motif cofactor pairs attributed to one TP73 anchor.
+--      Each pair appears once even when both members are inside context.
+--      Params: $genome_id, $motif_set_id, $chrom, $start, $strand,
+--      $neighbor_motif_id, $score_mode, $pseudocount
+SELECT
+    p.cofactor_pair_id,
+    p.cofactor_motif_id,
+    p.left_locus_id,
+    p.right_locus_id,
+    p.pair_member_interval_distance_bp,
+    p.pair_member_distance_band,
+    p.pair_arrangement,
+    p.n_pair_members_in_context,
+    p.pair_fully_within_context,
+    p.nearest_member_locus_id,
+    p.nearest_member_anchor_neighbor_interval_distance_bp,
+    p.nearest_member_anchor_distance_band,
+    p.nearest_member_anchor_oriented_side,
+    p.nearest_member_relative_orientation,
+    p.pair_min_score,
+    p.pair_sum_score
+FROM tp73_cofactor_pair_context p
+JOIN tp73_pair_feature a USING (anchor_hit_id)
+WHERE p.genome_id = $genome_id
+  AND p.motif_set_id = $motif_set_id
+  AND p.chrom = $chrom
+  AND a.start = $start
+  AND a.strand = $strand
+  AND p.cofactor_motif_id = $neighbor_motif_id
+  AND p.score_mode = $score_mode
+  AND p.pseudocount = $pseudocount
+ORDER BY p.nearest_member_anchor_neighbor_interval_distance_bp,
+         p.pair_member_interval_distance_bp, p.cofactor_pair_id;

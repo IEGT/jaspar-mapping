@@ -58,6 +58,13 @@ tables/jaspar2026/
   motif_architecture/…       # layer 2a (tiny, motif-keyed dimension)
   hit_architecture/chrom=*/… # layer 2b (optional, per-hit, keyed to motif_hit)
   motif_context_pair/genome_id=*/chrom=*/… # TP73 anchor × neighboring hit
+  tp73_anchor_locus/genome_id=*/chrom=*/… # physical TP73 span/orientation state
+  tp73_motif_context_summary/genome_id=*/chrom=*/neighbor_motif_id=*/…
+                            # compact all-motif interval-band features
+  cofactor_motif_locus.parquet cofactor_motif_pair.parquet
+                            # selected-tier same-motif pair architecture
+  tp73_cofactor_pair_context.parquet tp73_cofactor_pair_summary.parquet
+                            # canonical pair attribution and compact features
   tp73_pair_feature/genome_id=*/chrom=*/… # orientation-collapsed partners
   tp73_context_anchor/genome_id=*/chrom=*/… # tandem/local-context summary
   cutandrun_coverage/chrom=*/… # layer 3 positive coverage intervals/signal
@@ -103,14 +110,25 @@ implemented by `scripts/query_genome_scan.py`. Optional synteny bridges are in
 - **`motif_architecture`** — one row per `motif_id`: family, `binding_unit_model`, half-site pattern, spacer range, `architecture_confidence`. Curated for the TP53 family, `unknown` elsewhere.
 - **`hit_architecture`** *(optional)* — per-hit decomposition (`spacer_bp`, half-site scores, `oligomer_compatible`), derived from `matched_seq`, kept separate so layer 1 stays stable.
 - **`motif_context_pair`** — every retained TP73-anchor/neighbor occurrence
-  within the broad capture radius, with genomic and anchor-oriented motif-center
-  distance, relative orientation, provisional-context membership, and a strict
+  within the signed interval-distance capture radius, with exact
+  overlap/abutting/gap geometry, genomic and anchor-oriented center direction,
+  5/20/50/100/150 bp bands, relative orientation, and a strict
   same-motif/distinct-span tandem flag. See
   [`tp73_motif_context.md`](tp73_motif_context.md).
+- **`tp73_anchor_locus / tp73_motif_context_summary`** — a physical TP73
+  alignment-span grain for labels and the nonempty per-anchor/motif/band/side/
+  orientation groups used for scalable all-JASPAR screening. Conservative
+  production retains only physical-locus regional maxima with TP73 score at
+  least `-1`, recording the strongest competing score and 150 bp prominence.
+- **`cofactor_motif_pair / tp73_cofactor_pair_context`** — canonical
+  same-motif cofactor-locus pairs and one-row-per-anchor/pair attribution.
+  Arrangement is codirectional plus/minus, convergent, divergent, or ambiguous;
+  one-member and two-member context membership remain distinct.
 - **`tp73_pair_feature`** — one row per TP73 anchor with mutually exclusive
   singleton/same/opposite/mixed/ambiguous pair class, partner-locus counts,
   orientation-specific gaps and scores, and conservative two-site score
-  summaries. Strand alternatives at one neighboring alignment span remain in
+  summaries. Tandem membership requires both orientation-specific TP73 scores
+  to be at least 0. Strand alternatives at one neighboring alignment span remain in
   the raw pair table but collapse to one orientation-ambiguous partner locus.
   These are sequence-architecture predictions, not observations of protein
   quaternary structure.
@@ -121,6 +139,10 @@ implemented by `scripts/query_genome_scan.py`. Optional synteny bridges are in
 - **`tp73_context_anchor`** — one feature-ready row per TP73 occurrence with
   tandem summary, local motif counts, nearest signed TSS distance, and
   transcript/intron indicators. It never replaces the pair table.
+- **`motif_transcript_context_pair`** — a transcript-specific view of each
+  TP73/cofactor relationship with transcription-oriented direction and signed
+  TSS distances. It is kept out of the anchor-grain ML table to avoid
+  transcript pseudoreplication.
 - **`cutandrun_coverage`** — BED/bedGraph/bigWig-derived positive coverage
   components and signal with `sample_id` and sample facets. Overlapping and
   adjacent intervals are merged for motif-immersion labels; depth remains a

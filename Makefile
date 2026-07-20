@@ -172,6 +172,7 @@ check: pssm_scan $(TEST_BINARIES)
 	bash tests/test_slurm_task_offset.sh
 	bash tests/test_build_fasta_index.sh
 	bash tests/test_stage_fasta_region.sh
+	bash tests/test_submit_motif_context_slurm.sh
 	bash tests/test_cutandrun_containment.sh
 	bash tests/test_script_help.sh
 
@@ -185,6 +186,7 @@ check-duckdb: cutandrun_score_calibration pssm_scan_parquet
 	bash tests/test_dense_cutandrun_calibration.sh
 	bash tests/test_streaming_cutandrun_calibration.sh
 	bash tests/test_motif_context.sh
+	bash tests/test_stage_motif_context_inputs.sh
 	bash tests/test_sparse_parquet.sh
 	bash tests/test_sparse_parquet_parity.sh
 	bash tests/test_genome_scan_manager.sh

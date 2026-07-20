@@ -23,9 +23,20 @@ COPY (
         ('1', 400::BIGINT, 416::BIGINT, 'MA0861.2', 'TP73', '+', 5.0,  'log2_relative_risk', 1.0, 0.81),
         ('1', 600::BIGINT, 616::BIGINT, 'MA0861.2', 'TP73', '+', -2.0, 'log2_relative_risk', 1.0, 0.30),
         ('1', 620::BIGINT, 636::BIGINT, 'MA0861.2', 'TP73', '+', -0.5, 'log2_relative_risk', 1.0, 0.45),
+        ('1', 1000::BIGINT, 1016::BIGINT, 'MA0861.2', 'TP73', '+', 4.0, 'log2_relative_risk', 1.0, 0.79),
         ('1', 130::BIGINT, 139::BIGINT, 'MA0079.5', 'SP1',  '+', 6.0,  'log2_relative_risk', 1.0, 0.85),
         ('1', 410::BIGINT, 419::BIGINT, 'MA0079.5', 'SP1',  '+', 4.0,  'log2_relative_risk', 1.0, 0.80),
-        ('1', 499::BIGINT, 508::BIGINT, 'MA0079.5', 'SP1',  '+', 3.0,  'log2_relative_risk', 1.0, 0.70)
+        ('1', 499::BIGINT, 508::BIGINT, 'MA0079.5', 'SP1',  '+', 3.0,  'log2_relative_risk', 1.0, 0.70),
+        ('1', 156::BIGINT, 165::BIGINT, 'MABUT.1', 'ABUT', '+', 2.0, 'log2_relative_risk', 1.0, 0.70),
+        ('1', 144::BIGINT, 150::BIGINT, 'MNEST.1', 'NEST', '+', 2.0, 'log2_relative_risk', 1.0, 0.70),
+        ('1', 130::BIGINT, 170::BIGINT, 'MCONTAIN.1', 'CONTAIN', '-', 2.0, 'log2_relative_risk', 1.0, 0.70),
+        ('1', 1166::BIGINT, 1206::BIGINT, 'MWIDE.1', 'WIDE', '+', 2.0, 'log2_relative_risk', 1.0, 0.70),
+        ('1', 300::BIGINT, 306::BIGINT, 'MPAIR.1', 'PAIR', '+', 3.0, 'log2_relative_risk', 1.0, 0.75),
+        ('1', 300::BIGINT, 306::BIGINT, 'MPAIR.1', 'PAIR', '-', 2.5, 'log2_relative_risk', 1.0, 0.72),
+        ('1', 306::BIGINT, 312::BIGINT, 'MPAIR.1', 'PAIR', '+', 4.0, 'log2_relative_risk', 1.0, 0.80),
+        ('1', 318::BIGINT, 324::BIGINT, 'MPAIR.1', 'PAIR', '-', 5.0, 'log2_relative_risk', 1.0, 0.85),
+        ('1', 1166::BIGINT, 1176::BIGINT, 'MBOUND.1', 'BOUND', '+', 3.0, 'log2_relative_risk', 1.0, 0.75),
+        ('1', 1177::BIGINT, 1187::BIGINT, 'MBOUND.1', 'BOUND', '-', 4.0, 'log2_relative_risk', 1.0, 0.80)
     ) AS t(chrom, start, "end", motif_id, motif_name, strand, score,
            score_mode, pseudocount, pwm_relative_score)
 ) TO 'motif_hit.parquet' (FORMAT PARQUET, COMPRESSION ZSTD);
@@ -62,8 +73,14 @@ EOF
     --motif-set-id synthetic_jaspar2026 --genome-id synthetic_grch38_v1 \
     --anchor-minimum-score 0 --partner-minimum-score 0 \
     --score-mode log2_relative_risk --pseudocount 1 \
-    --chrom 1 --capture-flank 100 --context-flank 50 --tandem-flank 20 \
-    --memory-limit 1GB --max-temp-size 1GB >/dev/null
+    --chrom 1 --capture-flank 150 --context-flank 150 --tandem-flank 20 \
+    --memory-limit 1GB --max-temp-size 1GB \
+    --temp-directory "$temporary/external_duckdb_spill" >/dev/null
+
+[[ -d "$temporary/external_duckdb_spill" ]] || {
+    echo "E: external DuckDB spill directory was not created" >&2
+    exit 1
+}
 
 "$repository_root/scripts/build_motif_context.py" \
     --motif-hits "$temporary/direct_sparse.parquet" \
@@ -85,6 +102,34 @@ EOF
                AND pair_class = 'tandem_opposite_orientation'
                AND nearest_tandem_inter_motif_gap_bp = 4
          ) THEN error('direct sparse strand/name normalization failed') END;" \
+        >/dev/null
+)
+
+"$repository_root/scripts/build_motif_context.py" \
+    --motif-hits "$temporary/motif_hit.parquet" \
+    --output "$temporary/context_summary" --output-tier summary \
+    --anchor-motif MA0861.2 \
+    --motif-set-id synthetic_jaspar2026 --genome-id synthetic_grch38_v1 \
+    --anchor-minimum-score 0 --partner-minimum-score 0 \
+    --score-mode log2_relative_risk --pseudocount 1 \
+    --chrom 1 --capture-flank 150 --context-flank 150 --tandem-flank 20 \
+    --memory-limit 1GB --max-temp-size 1GB >/dev/null
+
+(
+    cd "$temporary/context_summary"
+    duckdb context.duckdb -bail -c "
+        SELECT CASE WHEN (SELECT output_tier FROM context_run_config) <> 'summary'
+            THEN error('summary output tier was not recorded') END;
+        SELECT CASE WHEN (SELECT COUNT(*) FROM motif_context_pair) <> 0
+            THEN error('summary tier retained raw motif-context pairs') END;
+        SELECT CASE WHEN (SELECT COUNT(*) FROM cofactor_motif_pair) <> 0
+            THEN error('summary tier retained raw cofactor pairs') END;
+        SELECT CASE WHEN (SELECT COUNT(*) FROM tp73_cofactor_pair_context) <> 0
+            THEN error('summary tier retained raw pair attribution') END;
+        SELECT CASE WHEN (SELECT COUNT(*) FROM tp73_motif_context_summary) = 0
+            THEN error('summary tier dropped compact motif features') END;
+        SELECT CASE WHEN (SELECT COUNT(*) FROM tp73_cofactor_pair_summary) = 0
+            THEN error('summary tier dropped compact cofactor-pair features') END;" \
         >/dev/null
 )
 
@@ -121,13 +166,157 @@ SELECT CASE WHEN NOT EXISTS (
       AND NOT is_tandem_tp73
 ) THEN error('overlapping shifted TP73 match was mistaken for a tandem site') END;
 
--- Anchor center 408 is in capture bin 4; neighbor center 503.5 is in bin 5.
--- This guards the +/-1-bin expansion used to make the bounded join lossless.
+-- This pair crosses a center-prefilter bin boundary. The +/-1-bin expansion
+-- must retain it before exact interval filtering.
 SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM motif_context_pair
     WHERE anchor_start = 400 AND anchor_strand = '+' AND neighbor_start = 499
-      AND absolute_center_distance_bp = 95.5 AND capture_flank_bp = 100
+      AND absolute_center_distance_bp = 95.5 AND capture_flank_bp = 150
 ) THEN error('valid pair across a capture-bin boundary was dropped') END;
+
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM motif_context_pair
+    WHERE anchor_start = 140 AND anchor_strand = '+'
+      AND neighbor_motif_id = 'MABUT.1'
+      AND anchor_neighbor_interval_distance_bp = 0
+      AND interval_relation = 'abutting'
+      AND interval_distance_band = 'adjacent_0_5'
+      AND interval_overlap_bp = 0 AND inter_motif_gap_bp = 0
+      AND within_5 AND within_20 AND within_50 AND within_100 AND within_150
+) THEN error('abutting interval geometry is incorrect') END;
+
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM motif_context_pair
+    WHERE anchor_start = 140 AND anchor_strand = '+'
+      AND neighbor_motif_id = 'MA0079.5' AND neighbor_start = 130
+      AND anchor_neighbor_interval_distance_bp = 1
+      AND interval_relation = 'disjoint'
+      AND interval_distance_band = 'adjacent_0_5'
+) THEN error('one-base interval gap is incorrect') END;
+
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM motif_context_pair
+    WHERE anchor_start = 140 AND anchor_strand = '+'
+      AND neighbor_start = 145 AND neighbor_motif_id = 'MA0861.2'
+      AND anchor_neighbor_interval_distance_bp = -11
+      AND interval_relation = 'partial_overlap'
+      AND interval_distance_band = 'overlap'
+) THEN error('partial-overlap interval geometry is incorrect') END;
+
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM motif_context_pair
+    WHERE anchor_start = 140 AND anchor_strand = '+'
+      AND neighbor_motif_id = 'MNEST.1'
+      AND anchor_neighbor_interval_distance_bp = -6
+      AND interval_relation = 'anchor_contains_neighbor'
+) THEN error('anchor containment was not distinguished from partial overlap') END;
+
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM motif_context_pair
+    WHERE anchor_start = 140 AND anchor_strand = '+'
+      AND neighbor_motif_id = 'MCONTAIN.1'
+      AND anchor_neighbor_interval_distance_bp = -16
+      AND interval_relation = 'neighbor_contains_anchor'
+) THEN error('neighbor containment was not distinguished from partial overlap') END;
+
+-- Interval distance, not center distance, defines the 150 bp boundary. The
+-- 40 bp neighbor is exactly 150 bp away despite a center distance of 178 bp.
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM motif_context_pair
+    WHERE anchor_start = 1000 AND anchor_strand = '+'
+      AND neighbor_motif_id = 'MWIDE.1'
+      AND anchor_neighbor_interval_distance_bp = 150
+      AND absolute_center_distance_bp = 178
+      AND interval_distance_band = 'gap_101_150'
+      AND within_150 AND NOT within_100
+) THEN error('wide interval-near motif was lost by the center prefilter') END;
+
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM tp73_anchor_locus
+    WHERE start = 140 AND "end" = 156
+      AND orientation_state = 'ambiguous'
+      AND n_orientation_records = 2
+      AND plus_score = 10.0 AND minus_score = 9.5
+) THEN error('TP73 orientation records were not collapsed at locus grain') END;
+
+SELECT CASE WHEN (SELECT COUNT(*) FROM cofactor_motif_locus
+                  WHERE motif_id = 'MPAIR.1') <> 3
+    THEN error('same-span cofactor strand alternatives formed duplicate loci') END;
+
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM cofactor_motif_locus
+    WHERE motif_id = 'MPAIR.1' AND start = 300 AND "end" = 306
+      AND orientation_state = 'ambiguous' AND n_orientation_records = 2
+) THEN error('cofactor locus orientation ambiguity was lost') END;
+
+SELECT CASE WHEN (SELECT COUNT(*) FROM cofactor_motif_pair
+                  WHERE motif_id = 'MPAIR.1') <> 3
+    THEN error('three cofactor loci did not produce three canonical pairs') END;
+
+SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM cofactor_motif_pair WHERE left_locus_id = right_locus_id
+) THEN error('a cofactor locus was paired with itself') END;
+
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM cofactor_motif_pair
+    WHERE motif_id = 'MPAIR.1' AND left_start = 300 AND right_start = 306
+      AND pair_member_interval_distance_bp = 0
+      AND pair_member_interval_relation = 'abutting'
+      AND pair_arrangement = 'ambiguous'
+) THEN error('ambiguous cofactor pair was classified incorrectly') END;
+
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM cofactor_motif_pair
+    WHERE motif_id = 'MPAIR.1' AND left_start = 306 AND right_start = 318
+      AND pair_member_interval_distance_bp = 6
+      AND pair_member_distance_band = 'gap_6_20'
+      AND pair_arrangement = 'convergent'
+) THEN error('convergent cofactor pair was classified incorrectly') END;
+
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM cofactor_locus_pair_feature
+    WHERE motif_id = 'MPAIR.1' AND start = 306
+      AND n_same_motif_partner_loci = 2
+      AND n_ambiguous_pairs = 1 AND n_convergent_pairs = 1
+) THEN error('cofactor locus pair features are incorrect') END;
+
+SELECT CASE WHEN (SELECT COUNT(*) FROM tp73_cofactor_pair_context
+                  WHERE anchor_hit_id = (
+                      SELECT anchor_hit_id FROM tp73_pair_feature
+                      WHERE start = 400 AND strand = '+'
+                  ) AND cofactor_motif_id = 'MPAIR.1'
+                  AND n_pair_members_in_context = 2) <> 3
+    THEN error('canonical cofactor pairs were multiplied during TP73 attribution') END;
+
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM tp73_cofactor_pair_context
+    WHERE anchor_hit_id = (
+              SELECT anchor_hit_id FROM tp73_pair_feature
+              WHERE start = 1000 AND strand = '+'
+          )
+      AND cofactor_motif_id = 'MBOUND.1'
+      AND n_pair_members_in_context = 1
+      AND left_member_in_context AND NOT right_member_in_context
+      AND nearest_member_anchor_neighbor_interval_distance_bp = 150
+      AND nearest_member_anchor_distance_band = 'gap_101_150'
+) THEN error('one-member cofactor-pair boundary attribution is incorrect') END;
+
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM tp73_motif_context_summary
+    WHERE anchor_hit_id = (
+              SELECT anchor_hit_id FROM tp73_pair_feature
+              WHERE start = 400 AND strand = '+'
+          )
+      AND neighbor_motif_id = 'MPAIR.1'
+      AND relative_orientation_state = 'ambiguous'
+      AND n_neighbor_loci = 1 AND n_orientation_records = 2
+) THEN error('compact motif-context summary did not collapse strand alternatives') END;
+
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM legacy_tp73_context_100
+    WHERE anchor_start = 400 AND neighbor_start = 499
+      AND legacy_genomic_start_distance_bp = 99
+) THEN error('historical start-distance compatibility view is incorrect') END;
 
 SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM tp73_context_anchor
@@ -185,16 +374,59 @@ SELECT CASE WHEN NOT EXISTS (
 ) THEN error('per-transcript intron classification is missing') END;
 
 SELECT CASE WHEN NOT EXISTS (
-    SELECT 1 FROM context_run_config
-    WHERE schema_version = 3
+    SELECT 1 FROM motif_transcript_context_pair
+    WHERE anchor_start = 140 AND anchor_strand = '+'
+      AND neighbor_motif_id = 'MA0079.5' AND neighbor_start = 130
+      AND transcript_id = 'T1'
+      AND anchor_signed_tss_distance_bp = 98
+      AND neighbor_signed_tss_distance_bp = 84.5
+      AND transcript_oriented_center_distance_bp = -13.5
+      AND transcript_oriented_side = 'upstream'
+) THEN error('transcript-oriented cofactor direction is incorrect') END;
+
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM motif_context_run_config
+    WHERE schema_version = 4
       AND genome_id = 'synthetic_grch38_v1'
       AND motif_set_id = 'synthetic_jaspar2026'
       AND anchor_minimum_score = 0 AND partner_minimum_score = 0
-      AND capture_flank_bp = 100 AND context_flank_bp = 50
-      AND tandem_flank_bp = 20 AND distance_metric = 'motif_center'
+      AND anchor_selection_mode = 'threshold'
+      AND anchor_local_peak_flank_bp = 150
+      AND anchor_local_peak_rule =
+          'physical_locus_best_score_no_stronger_start_within_flank'
+      AND tandem_score_rule =
+          'both_orientation_specific_scores_at_or_above_tandem_minimum'
+      AND capture_flank_bp = 150 AND context_flank_bp = 150
+      AND tandem_flank_bp = 20 AND cofactor_pair_flank_bp = 150
+      AND output_tier = 'selected'
+      AND capture_geometry = 'interval'
+      AND distance_metric = 'signed_interval_edge_distance'
+      AND center_distance_metric = 'motif_center'
+      AND capture_prefilter_center_bp = 206
+      AND cofactor_pair_prefilter_center_bp = 230
+      AND observed_max_anchor_span_bp = 16
+      AND observed_max_neighbor_span_bp = 40
       AND tandem_distance_metric = 'nonoverlapping_edge_gap'
       AND partner_locus_identity_rule = 'same_alignment_span_collapses_orientation_records'
 ) THEN error('context run provenance is incomplete') END;
+
+SELECT CASE WHEN
+       (SELECT schema_version FROM context_run_config)
+           <> (SELECT schema_version FROM motif_context_run_config)
+    OR (SELECT COUNT(*) FROM context_run_config)
+           <> (SELECT COUNT(*) FROM motif_context_run_config)
+    THEN error('context run-config compatibility alias is inconsistent') END;
+
+-- Hive infers an all-numeric chromosome partition as BIGINT unless told
+-- otherwise. Lock the package contract to VARCHAR so chr1-only output can be
+-- combined with X/Y and with packages from other species.
+SELECT CASE WHEN
+       (SELECT TYPEOF(chrom) FROM motif_context_pair LIMIT 1) <> 'VARCHAR'
+    OR (SELECT TYPEOF(chrom) FROM tp73_anchor_locus LIMIT 1) <> 'VARCHAR'
+    OR (SELECT TYPEOF(chrom) FROM tp73_motif_context_summary LIMIT 1) <> 'VARCHAR'
+    OR (SELECT TYPEOF(chrom) FROM tp73_pair_feature LIMIT 1) <> 'VARCHAR'
+    OR (SELECT TYPEOF(chrom) FROM tp73_context_anchor LIMIT 1) <> 'VARCHAR'
+    THEN error('partitioned context views did not preserve chromosome text') END;
 
 SELECT CASE WHEN EXISTS (
     SELECT 1 FROM tp73_pair_feature
@@ -308,6 +540,7 @@ PREPARE q14 AS
 SQL
     awk '
         /^-- Q14\./ { capture = 1; next }
+        /^-- Q15\./ { capture = 0 }
         capture { print }
     ' "$repository_root/sql/queries.sql"
     cat <<'SQL'
@@ -315,6 +548,19 @@ EXECUTE q14(
     genome_id := 'synthetic_grch38_v1', motif_set_id := 'synthetic_jaspar2026',
     chrom := '1', start := 140, strand := '+',
     neighbor_motif_id := 'MA0079.5',
+    score_mode := 'log2_relative_risk', pseudocount := 1.0
+);
+PREPARE q15 AS
+SQL
+    awk '
+        /^-- Q15\./ { capture = 1; next }
+        capture { print }
+    ' "$repository_root/sql/queries.sql"
+    cat <<'SQL'
+EXECUTE q15(
+    genome_id := 'synthetic_grch38_v1', motif_set_id := 'synthetic_jaspar2026',
+    chrom := '1', start := 400, strand := '+',
+    neighbor_motif_id := 'MPAIR.1',
     score_mode := 'log2_relative_risk', pseudocount := 1.0
 );
 SQL
@@ -331,7 +577,8 @@ for partner_floor in 0 -1; do
         --motif-hits "$temporary/motif_hit.parquet" \
         --output "$package" --anchor-motif MA0861.2 \
         --motif-set-id synthetic_jaspar2026 --genome-id synthetic_grch38_v1 \
-        --anchor-minimum-score -5 --partner-minimum-score "$partner_floor" \
+        --anchor-minimum-score -5 --tandem-minimum-score "$partner_floor" \
+        --anchor-selection-mode threshold \
         --score-mode log2_relative_risk --pseudocount 1 --chrom 1 \
         --capture-flank 100 --context-flank 50 --tandem-flank 20 \
         --memory-limit 1GB --max-temp-size 1GB >/dev/null
@@ -340,17 +587,66 @@ done
 (
     cd "$temporary/context_partner_floor_0"
     duckdb context.duckdb -bail -c "
-        SELECT CASE WHEN (SELECT pair_class FROM tp73_pair_feature
-                          WHERE start = 600 AND strand = '+') <> 'singleton'
-            THEN error('partner floor 0 retained a -0.5 tandem partner') END;" \
+        SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM tp73_pair_feature
+            WHERE start = 600 AND strand = '+' AND pair_class = 'singleton'
+        ) THEN error('tandem floor 0 did not retain the negative anchor as a singleton') END;" \
         >/dev/null
 )
 (
     cd "$temporary/context_partner_floor__minus_1"
     duckdb context.duckdb -bail -c "
-        SELECT CASE WHEN (SELECT pair_class FROM tp73_pair_feature
-                          WHERE start = 600 AND strand = '+') <> 'tandem_same_orientation'
-            THEN error('partner floor -1 dropped a -0.5 tandem partner') END;" \
+        SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM tp73_pair_feature
+            WHERE start = 600 AND strand = '+' AND pair_class = 'singleton'
+        ) THEN error('tandem floor -1 ignored the anchor score below its floor') END;
+        SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM tp73_pair_feature
+            WHERE start = 620 AND strand = '+' AND pair_class = 'singleton'
+        ) THEN error('tandem floor -1 ignored the partner score below its floor') END;" \
+        >/dev/null
+)
+
+"$repository_root/scripts/build_motif_context.py" \
+    --motif-hits "$temporary/motif_hit.parquet" \
+    --output "$temporary/context_local_peak" \
+    --anchor-motif MA0861.2 \
+    --motif-set-id synthetic_jaspar2026 --genome-id synthetic_grch38_v1 \
+    --anchor-minimum-score -5 --tandem-minimum-score 0 \
+    --anchor-selection-mode local_peak --anchor-local-peak-flank 150 \
+    --score-mode log2_relative_risk --pseudocount 1 --chrom 1 \
+    --capture-flank 150 --context-flank 150 --tandem-flank 20 \
+    --memory-limit 1GB --max-temp-size 1GB >/dev/null
+
+(
+    cd "$temporary/context_local_peak"
+    duckdb context.duckdb -bail -c "
+        SELECT CASE WHEN EXISTS (
+            SELECT 1 FROM tp73_pair_feature WHERE start = 600
+        ) THEN error('negative non-peak survived anchor selection') END;
+        SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM tp73_pair_feature
+            WHERE start = 620 AND strand = '+'
+              AND anchor_selection_class = 'local_peak'
+              AND anchor_locus_best_score = -0.5
+              AND best_other_anchor_locus_score = -2.0
+              AND anchor_locus_score_prominence = 1.5
+              AND anchor_locus_is_local_peak
+              AND pair_class = 'singleton'
+        ) THEN error('negative regional peak provenance is incorrect') END;
+        SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM motif_context_pair
+            WHERE anchor_start = 620 AND neighbor_start = 600
+              AND neighbor_score = -2.0
+        ) THEN error('rejected anchor was lost from retained-neighbor context') END;
+        SELECT CASE WHEN EXISTS (
+            SELECT 1 FROM tp73_pair_feature WHERE start = 145
+        ) THEN error('subordinate nonnegative locus survived local-peak selection') END;
+        SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM tp73_pair_feature
+            WHERE start = 140 AND strand = '+' AND score = 10.0
+              AND anchor_selection_class = 'local_peak'
+        ) THEN error('strongest nonnegative regional peak was not retained') END;" \
         >/dev/null
 )
 

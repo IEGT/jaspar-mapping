@@ -36,10 +36,13 @@ scripts/run_chr1_patz1_tp73_dry_run.sh
 scripts/run_genome_scan_slurm_chromosome.sh
 scripts/run_genome_scan_slurm_finalize.sh
 scripts/run_genome_scan_slurm_task.sh
+scripts/run_motif_context_slurm_task.sh
 scripts/run_what_is_missing.sh
 scripts/shift_bed.awk
 scripts/stage_fasta_region.py
+scripts/stage_motif_context_inputs.py
 scripts/submit_genome_scan_slurm.sh
+scripts/submit_motif_context_slurm.sh
 scripts/summarize_tp73_cutandrun_threshold.R
 scripts/summarize_tp73_patz1_cutandrun_threshold.R
 EOF

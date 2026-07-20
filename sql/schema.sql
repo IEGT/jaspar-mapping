@@ -237,9 +237,8 @@ FROM read_parquet('tables/jaspar2026/hit_architecture/*/*.parquet', hive_partiti
 
 -- ---------------------------------------------------------------------------
 -- Layer 2c: local motif syntax around TP73 anchors
---   Pair rows retain the broad capture radius. The narrower context and tandem
---   radii are flags/provenance, so changing a feature radius does not require a
---   genome rescan or destroy observations outside the provisional boundary.
+--   Schema v4 uses signed interval distance for capture and bands. Center
+--   offsets remain directional fields and are not used to decide proximity.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE VIEW motif_context_run_config AS
 SELECT
@@ -253,10 +252,24 @@ SELECT
     pseudocount_scheme,
     anchor_minimum_score,
     partner_minimum_score,
+    anchor_selection_mode,
+    anchor_local_peak_flank_bp,
+    anchor_local_peak_rule,
+    tandem_score_rule,
     capture_flank_bp,
     context_flank_bp,
     tandem_flank_bp,
+    cofactor_pair_flank_bp,
+    output_tier,
+    capture_geometry,
     distance_metric,
+    center_distance_metric,
+    capture_prefilter_rule,
+    capture_prefilter_center_bp,
+    cofactor_pair_prefilter_center_bp,
+    observed_max_anchor_span_bp,
+    observed_max_neighbor_span_bp,
+    distance_band_rule,
     tandem_distance_metric,
     oriented_distance_rule,
     tandem_identity_rule,
@@ -265,6 +278,10 @@ SELECT
     motif_hit_source,
     gtf_source
 FROM read_parquet('tables/jaspar2026/context_run_config.parquet');
+
+-- Backward-compatible short name used by the standalone context packages.
+CREATE OR REPLACE VIEW context_run_config AS
+SELECT * FROM motif_context_run_config;
 
 CREATE OR REPLACE VIEW motif_context_pair AS
 SELECT
@@ -290,12 +307,21 @@ SELECT
     genomic_center_distance_bp,
     anchor_oriented_center_distance_bp,
     absolute_center_distance_bp,
+    genomic_side,               -- left | right | coincident_center
     relative_orientation,       -- same | opposite
     anchor_oriented_side,       -- upstream | downstream | coincident_center
     same_alignment_span,
     same_anchor_motif_span,     -- orientation alternative, not another locus
+    anchor_neighbor_interval_distance_bp,
     interval_overlap_bp,
     inter_motif_gap_bp,
+    interval_relation,          -- containment | overlap | abutting | disjoint
+    interval_distance_band,
+    within_5,
+    within_20,
+    within_50,
+    within_100,
+    within_150,
     within_context_flank,
     is_tandem_tp73,
     score_mode,
@@ -306,11 +332,57 @@ SELECT
     partner_minimum_score,
     capture_flank_bp,
     context_flank_bp,
-    tandem_flank_bp
+    tandem_flank_bp,
+    cofactor_pair_flank_bp
 FROM read_parquet(
     'tables/jaspar2026/motif_context_pair/**/*.parquet',
     hive_partitioning = 1
 );
+
+-- One row per TP73 alignment span. Orientation-specific records remain in
+-- motif_context_pair; this locus grain avoids duplicating physical labels.
+CREATE OR REPLACE VIEW tp73_anchor_locus AS
+SELECT * REPLACE (
+    CAST(genome_id AS VARCHAR) AS genome_id,
+    CAST(chrom AS VARCHAR) AS chrom
+)
+FROM read_parquet(
+    'tables/jaspar2026/tp73_anchor_locus/**/*.parquet',
+    hive_partitioning = 1
+);
+
+-- Nonempty long-form groups for all-motif screening. These partitions are the
+-- scalable surface; raw relationship rows are the selected-motif tier.
+CREATE OR REPLACE VIEW tp73_motif_context_summary AS
+SELECT * REPLACE (
+    CAST(genome_id AS VARCHAR) AS genome_id,
+    CAST(chrom AS VARCHAR) AS chrom,
+    CAST(neighbor_motif_id AS VARCHAR) AS neighbor_motif_id
+)
+FROM read_parquet(
+    'tables/jaspar2026/tp73_motif_context_summary/**/*.parquet',
+    hive_partitioning = 1
+);
+
+-- Generic same-motif cofactor locus and pair architecture. Identical-span
+-- strand alternatives are collapsed before canonical pairs are formed.
+CREATE OR REPLACE VIEW cofactor_motif_locus AS
+SELECT * FROM read_parquet('tables/jaspar2026/cofactor_motif_locus.parquet');
+
+CREATE OR REPLACE VIEW cofactor_motif_pair AS
+SELECT * FROM read_parquet('tables/jaspar2026/cofactor_motif_pair.parquet');
+
+CREATE OR REPLACE VIEW cofactor_locus_pair_feature AS
+SELECT *
+FROM read_parquet('tables/jaspar2026/cofactor_locus_pair_feature.parquet');
+
+CREATE OR REPLACE VIEW tp73_cofactor_pair_context AS
+SELECT *
+FROM read_parquet('tables/jaspar2026/tp73_cofactor_pair_context.parquet');
+
+CREATE OR REPLACE VIEW tp73_cofactor_pair_summary AS
+SELECT *
+FROM read_parquet('tables/jaspar2026/tp73_cofactor_pair_summary.parquet');
 
 -- One row per TP73 anchor. Distinct strand records at the same neighboring
 -- alignment span are collapsed into one partner locus; dual-strand support is
@@ -329,12 +401,19 @@ SELECT
     motif_name,
     strand,
     score,
+    anchor_locus_id,
+    anchor_selection_class,
+    anchor_locus_best_score,
+    best_other_anchor_locus_score,
+    anchor_locus_score_prominence,
+    anchor_locus_is_local_peak,
     score_mode,
     pseudocount,
     background_model_id,
     pseudocount_scheme,
     anchor_minimum_score,
     partner_minimum_score,
+    anchor_local_peak_flank_bp,
     pwm_relative_score,
     pair_class,
     n_tandem_tp73_partner_loci,
@@ -385,6 +464,19 @@ SELECT
 FROM motif_context_pair p
 JOIN tp73_pair_feature f USING (anchor_hit_id);
 
+-- Published-work compatibility only. The historical context used motif start
+-- coordinates and a 100 bp cutoff; new analyses use interval geometry.
+CREATE OR REPLACE VIEW legacy_tp73_context_100 AS
+SELECT
+    p.*,
+    p.neighbor_start - p.anchor_start AS legacy_genomic_start_distance_bp,
+    CASE WHEN p.anchor_strand = '-'
+         THEN p.anchor_start - p.neighbor_start
+         ELSE p.neighbor_start - p.anchor_start END
+        AS legacy_anchor_oriented_start_distance_bp
+FROM motif_context_pair p
+WHERE ABS(p.neighbor_start - p.anchor_start) <= 100;
+
 CREATE OR REPLACE VIEW tp73_context_anchor AS
 SELECT
     anchor_hit_id,
@@ -398,12 +490,19 @@ SELECT
     motif_name,
     strand,
     score,
+    anchor_locus_id,
+    anchor_selection_class,
+    anchor_locus_best_score,
+    best_other_anchor_locus_score,
+    anchor_locus_score_prominence,
+    anchor_locus_is_local_peak,
     score_mode,
     pseudocount,
     background_model_id,
     pseudocount_scheme,
     anchor_minimum_score,
     partner_minimum_score,
+    anchor_local_peak_flank_bp,
     pwm_relative_score,
     n_context_neighbor_hits,
     n_context_neighbor_loci,
@@ -498,6 +597,37 @@ SELECT
     overlaps_intron,
     transcript_region
 FROM read_parquet('tables/jaspar2026/motif_transcript_context.parquet');
+
+-- Transcript-oriented TP73/cofactor direction is derived here rather than
+-- multiplying the chromosome-wide feature table once per transcript.
+CREATE OR REPLACE VIEW motif_transcript_context_pair AS
+SELECT
+    p.*,
+    t.gene_id,
+    t.gene_name,
+    t.transcript_id,
+    t.transcript_strand,
+    t.tss,
+    t.signed_tss_distance_bp AS anchor_signed_tss_distance_bp,
+    CASE WHEN t.transcript_strand = '+' THEN p.neighbor_center_bp - t.tss
+         ELSE t.tss - p.neighbor_center_bp END
+        AS neighbor_signed_tss_distance_bp,
+    CASE WHEN t.transcript_strand = '+' THEN p.genomic_center_distance_bp
+         ELSE -p.genomic_center_distance_bp END
+        AS transcript_oriented_center_distance_bp,
+    CASE
+        WHEN (CASE WHEN t.transcript_strand = '+'
+                        THEN p.genomic_center_distance_bp
+                   ELSE -p.genomic_center_distance_bp END) < 0 THEN 'upstream'
+        WHEN (CASE WHEN t.transcript_strand = '+'
+                        THEN p.genomic_center_distance_bp
+                   ELSE -p.genomic_center_distance_bp END) > 0 THEN 'downstream'
+        ELSE 'coincident_center'
+    END AS transcript_oriented_side,
+    p.anchor_start <= t.tss AND p.anchor_end > t.tss AS anchor_spans_tss,
+    p.neighbor_start <= t.tss AND p.neighbor_end > t.tss AS neighbor_spans_tss
+FROM motif_context_pair p
+JOIN motif_transcript_context t USING (anchor_hit_id);
 
 CREATE OR REPLACE VIEW gene_set AS
 SELECT genome_id, gene_id, set_name -- many-to-many (HALLMARK_*, KEGG_*, ...)
