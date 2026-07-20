@@ -86,7 +86,10 @@ IFS=$'\t' read -r task_index chromosome cofactor_motif output_tier <<< "$task_ro
 [[ $chromosome =~ ^[A-Za-z0-9._-]+$ && $cofactor_motif =~ ^[A-Za-z0-9._-]+$ ]]
 [[ $output_tier == selected || $output_tier == summary ]]
 
-input="$run_root/inputs/motif_id=$cofactor_motif/chrom=$chromosome"
+# This wrapper must not look like a Hive partition. DuckDB scans partition
+# labels from every path component; an outer motif_id=... would silently
+# replace the genuine TP73/cofactor labels carried by the linked source paths.
+input="$run_root/inputs/task-$task_index-cofactor-$cofactor_motif-chrom-$chromosome"
 output="$run_root/packages/motif_id=$cofactor_motif/chrom=$chromosome"
 mkdir -p "$(dirname "$input")" "$(dirname "$output")"
 

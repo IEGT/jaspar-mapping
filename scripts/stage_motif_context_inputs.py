@@ -137,6 +137,25 @@ def staged_relative_path(row: dict[str, object]) -> Path:
     return relative
 
 
+def validate_hive_safe_output(output: Path, relative_paths: list[Path]) -> None:
+    """Reject wrapper labels that would override payload Hive partitions."""
+    payload_keys = {"task_id", "motif_id", "chrom", "strand"} | {
+        part.split("=", 1)[0]
+        for relative in relative_paths
+        for part in relative.parts
+        if "=" in part and part.split("=", 1)[0]
+    }
+    conflicting_parts = [
+        part for part in output.parts
+        if "=" in part and part.split("=", 1)[0] in payload_keys
+    ]
+    if conflicting_parts:
+        raise StagingError(
+            "staged output path contains Hive partition labels that would "
+            "override payload metadata: " + ", ".join(conflicting_parts)
+        )
+
+
 def verify_existing(output: Path, contract: dict[str, object]) -> bool:
     manifest_path = output / "input_manifest.json"
     if not manifest_path.is_file():
@@ -203,6 +222,10 @@ def stage(arguments: argparse.Namespace) -> None:
             "source_path": str(source),
             "staged_relative_path": str(relative),
         })
+    validate_hive_safe_output(
+        output,
+        [Path(str(row["staged_relative_path"])) for row in file_manifest],
+    )
     contract["files"] = file_manifest
     if output.exists():
         if verify_existing(output, contract):

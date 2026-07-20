@@ -218,6 +218,10 @@ selection, inventory paths, recorded file sizes, and checksums. The preserved
 task/Hive paths can be passed to the builder as
 `CONTEXT_RUN/input/MA1961.2/1/**/*.parquet`. Keep the input tree on the same
 filesystem as the scan package so hard-link creation remains metadata-only.
+Use neutral names for its parent directories rather than Hive labels such as
+`motif_id=...` or `chrom=...`: DuckDB reads labels from every path component,
+so an outer label would override the genuine identity in the linked scan paths.
+The stager rejects such conflicting wrappers.
 
 On Slurm, submit one cofactor/chromosome package per array task. The worker
 uses exact inventory hard links on `/data`, a unique DuckDB spill directory on
