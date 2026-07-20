@@ -729,6 +729,8 @@ WHERE h.motif_id = {sql_string(arguments.anchor_motif)}
 SELECT CASE WHEN (SELECT COUNT(*) FROM anchor_hit) = 0
     THEN error('no anchor motif hits matched the requested configuration') END;
 
+DROP TABLE anchor_locus_score;
+
 -- The center prefilter is only an acceleration device. Use the deliberately
 -- conservative full-span bound agreed for schema v4, then apply exact interval
 -- geometry below. One-bin expansion remains lossless because the bin width
@@ -795,6 +797,11 @@ SELECT
     'same_alignment_span_collapses_orientation_records'::VARCHAR
         AS partner_locus_identity_rule,
     'singleton_same_opposite_mixed_or_ambiguous'::VARCHAR AS pair_class_rule,
+    'at_least_one_member_is_a_tp73_context_locus'::VARCHAR
+        AS cofactor_pair_scope,
+    'tp73_context_loci_plus_their_pair_partners'::VARCHAR
+        AS cofactor_motif_locus_scope,
+    'tp73_context_loci_only'::VARCHAR AS cofactor_locus_pair_feature_scope,
     {sql_string(motif_glob)}::VARCHAR AS motif_hit_source,
     {gtf_source}::VARCHAR AS gtf_source
 FROM capture_parameter p;
@@ -950,6 +957,9 @@ SELECT CASE WHEN (SELECT COUNT(*) FROM motif_context_pair) = 0
 
 {motif_context_copy_sql}
 
+DROP VIEW candidate_neighbor_hit;
+DROP VIEW anchor_hit_binned;
+
 -- CUT&RUN and other physical-location labels live at locus grain. Keep every
 -- scored TP73 orientation above, but also provide one row per alignment span
 -- with explicit orientation ambiguity instead of duplicating an ML label.
@@ -1003,6 +1013,8 @@ FROM collapsed;
 
 COPY tp73_anchor_locus TO 'tables/jaspar2026/tp73_anchor_locus'
     (FORMAT PARQUET, PARTITION_BY (genome_id, chrom), COMPRESSION ZSTD);
+
+DROP TABLE tp73_anchor_locus;
 
 -- Collapse neighbor strand alternatives at the same span before counting
 -- context loci. The orientation state remains relative to this TP73 record.
@@ -1088,10 +1100,12 @@ TO 'tables/jaspar2026/tp73_motif_context_summary'
     (FORMAT PARQUET,
      PARTITION_BY (genome_id, chrom, neighbor_motif_id), COMPRESSION ZSTD);
 
+DROP TABLE tp73_motif_context_summary;
+
 -- Generic cofactor pairing starts at physical motif-locus grain. Identical
 -- spans reported on both strands become one ambiguous locus and can never
 -- create a phantom distance-zero self-pair.
-CREATE TEMP TABLE cofactor_motif_locus AS
+CREATE TEMP TABLE cofactor_motif_locus_all AS
 WITH collapsed AS (
     SELECT
         md5(concat_ws('|', genome_id, motif_set_id, chrom, start::VARCHAR,
@@ -1128,42 +1142,52 @@ SELECT
     {sql_string(arguments.pseudocount_scheme)}::VARCHAR AS pseudocount_scheme
 FROM collapsed;
 
-{cofactor_locus_copy_sql}
+DROP TABLE configured_hit;
 
-CREATE TEMP VIEW cofactor_locus_binned AS
+-- Only cofactor loci captured around a TP73 anchor can seed a cofactor pair in
+-- this package. A same-motif partner may lie outside the TP73 context flank;
+-- retaining it preserves the one-member-in-context boundary semantics.
+CREATE TEMP TABLE context_cofactor_locus_id AS
+SELECT DISTINCT neighbor_locus_id AS cofactor_locus_id
+FROM context_neighbor_locus
+WHERE neighbor_motif_id <> {sql_string(arguments.anchor_motif)};
+
+CREATE TEMP VIEW all_cofactor_locus_binned AS
 SELECT
     l.*,
     FLOOR(l.center_bp / GREATEST(p.cofactor_pair_prefilter_center_bp, 1))
         ::BIGINT AS pair_bin
-FROM cofactor_motif_locus l
+FROM cofactor_motif_locus_all l
 CROSS JOIN capture_parameter p;
 
-CREATE TEMP VIEW candidate_right_cofactor_locus AS
+CREATE TEMP VIEW context_cofactor_locus_binned AS
+SELECT l.*
+FROM all_cofactor_locus_binned l
+JOIN context_cofactor_locus_id c USING (cofactor_locus_id);
+
+CREATE TEMP VIEW candidate_right_all_cofactor_locus AS
 SELECT
     r.*,
     FLOOR(r.center_bp / GREATEST(p.cofactor_pair_prefilter_center_bp, 1))
         ::BIGINT + offsets.bin_offset AS left_pair_bin
-FROM cofactor_motif_locus r
+FROM cofactor_motif_locus_all r
 CROSS JOIN capture_parameter p
 CROSS JOIN (VALUES (-1), (0), (1)) AS offsets(bin_offset);
 
+CREATE TEMP VIEW candidate_right_context_cofactor_locus AS
+SELECT r.*
+FROM candidate_right_all_cofactor_locus r
+JOIN context_cofactor_locus_id c
+  ON r.cofactor_locus_id = c.cofactor_locus_id;
+
 CREATE TEMP TABLE cofactor_motif_pair AS
-WITH candidate_geometry AS (
+WITH candidate_pair AS (
+    -- The genomic-left member is itself in TP73 context.
     SELECT
-        l.*,
-        r.cofactor_locus_id AS right_locus_id,
-        r.start AS right_start,
-        r."end" AS right_end,
-        r.span_bp AS right_span_bp,
-        r.center_bp AS right_center_bp,
-        r.orientation_state AS right_orientation_state,
-        r.best_score AS right_score,
-        r.best_pwm_relative_score AS right_pwm_relative_score,
-        (
-            GREATEST(l.start, r.start) - LEAST(l."end", r."end")
-        )::BIGINT AS pair_member_interval_distance_bp
-    FROM cofactor_locus_binned l
-    JOIN candidate_right_cofactor_locus r
+        l.cofactor_locus_id AS left_locus_id,
+        r.cofactor_locus_id AS right_locus_id
+    FROM context_cofactor_locus_binned l
+    JOIN candidate_right_all_cofactor_locus r
       ON l.genome_id = r.genome_id
      AND l.motif_set_id = r.motif_set_id
      AND l.chrom = r.chrom
@@ -1178,6 +1202,53 @@ WITH candidate_geometry AS (
     )
       AND r.center_bp BETWEEN l.center_bp - p.cofactor_pair_prefilter_center_bp
                           AND l.center_bp + p.cofactor_pair_prefilter_center_bp
+
+    UNION ALL
+
+    -- The genomic-right member is in context and the left member is not. This
+    -- second branch retains boundary-crossing pairs without duplicating pairs
+    -- for which both members are context loci.
+    SELECT
+        l.cofactor_locus_id AS left_locus_id,
+        r.cofactor_locus_id AS right_locus_id
+    FROM all_cofactor_locus_binned l
+    JOIN candidate_right_context_cofactor_locus r
+      ON l.genome_id = r.genome_id
+     AND l.motif_set_id = r.motif_set_id
+     AND l.chrom = r.chrom
+     AND l.motif_id = r.motif_id
+     AND l.pair_bin = r.left_pair_bin
+    LEFT JOIN context_cofactor_locus_id left_context
+      ON l.cofactor_locus_id = left_context.cofactor_locus_id
+    CROSS JOIN capture_parameter p
+    WHERE left_context.cofactor_locus_id IS NULL
+      AND (
+          l.start < r.start
+       OR (l.start = r.start AND l."end" < r."end")
+       OR (l.start = r.start AND l."end" = r."end"
+           AND l.cofactor_locus_id < r.cofactor_locus_id)
+      )
+      AND r.center_bp BETWEEN l.center_bp - p.cofactor_pair_prefilter_center_bp
+                          AND l.center_bp + p.cofactor_pair_prefilter_center_bp
+), candidate_geometry AS (
+    SELECT
+        l.*,
+        r.cofactor_locus_id AS right_locus_id,
+        r.start AS right_start,
+        r."end" AS right_end,
+        r.span_bp AS right_span_bp,
+        r.center_bp AS right_center_bp,
+        r.orientation_state AS right_orientation_state,
+        r.best_score AS right_score,
+        r.best_pwm_relative_score AS right_pwm_relative_score,
+        (
+            GREATEST(l.start, r.start) - LEAST(l."end", r."end")
+        )::BIGINT AS pair_member_interval_distance_bp
+    FROM candidate_pair pair
+    JOIN cofactor_motif_locus_all l
+      ON pair.left_locus_id = l.cofactor_locus_id
+    JOIN cofactor_motif_locus_all r
+      ON pair.right_locus_id = r.cofactor_locus_id
 )
 SELECT
     md5(concat_ws('|', genome_id, motif_set_id, chrom, motif_id,
@@ -1253,27 +1324,54 @@ SELECT
 FROM candidate_geometry
 WHERE pair_member_interval_distance_bp <= {arguments.cofactor_pair_flank};
 
+CREATE TEMP TABLE relevant_cofactor_locus_id AS
+SELECT cofactor_locus_id FROM context_cofactor_locus_id
+UNION
+SELECT left_locus_id FROM cofactor_motif_pair
+UNION
+SELECT right_locus_id FROM cofactor_motif_pair;
+
+CREATE TEMP TABLE cofactor_motif_locus AS
+SELECT
+    l.*,
+    c.cofactor_locus_id IS NOT NULL AS in_any_tp73_context
+FROM cofactor_motif_locus_all l
+JOIN relevant_cofactor_locus_id relevant USING (cofactor_locus_id)
+LEFT JOIN context_cofactor_locus_id c USING (cofactor_locus_id);
+
+{cofactor_locus_copy_sql}
 {cofactor_pair_copy_sql}
+
+DROP VIEW candidate_right_context_cofactor_locus;
+DROP VIEW candidate_right_all_cofactor_locus;
+DROP VIEW context_cofactor_locus_binned;
+DROP VIEW all_cofactor_locus_binned;
+DROP TABLE relevant_cofactor_locus_id;
+DROP TABLE cofactor_motif_locus_all;
 
 CREATE TEMP TABLE cofactor_locus_pair_feature AS
 WITH directed AS (
     SELECT
-        left_locus_id AS cofactor_locus_id,
-        right_locus_id AS partner_locus_id,
-        right_score AS partner_score,
-        right_pwm_relative_score AS partner_pwm_relative_score,
-        * EXCLUDE (left_locus_id, right_locus_id, right_score,
-                   right_pwm_relative_score)
-    FROM cofactor_motif_pair
+        p.left_locus_id AS cofactor_locus_id,
+        p.right_locus_id AS partner_locus_id,
+        p.right_score AS partner_score,
+        p.right_pwm_relative_score AS partner_pwm_relative_score,
+        p.* EXCLUDE (left_locus_id, right_locus_id, right_score,
+                     right_pwm_relative_score)
+    FROM cofactor_motif_pair p
+    JOIN context_cofactor_locus_id c
+      ON p.left_locus_id = c.cofactor_locus_id
     UNION ALL
     SELECT
-        right_locus_id AS cofactor_locus_id,
-        left_locus_id AS partner_locus_id,
-        left_score AS partner_score,
-        left_pwm_relative_score AS partner_pwm_relative_score,
-        * EXCLUDE (left_locus_id, right_locus_id, left_score,
-                   left_pwm_relative_score)
-    FROM cofactor_motif_pair
+        p.right_locus_id AS cofactor_locus_id,
+        p.left_locus_id AS partner_locus_id,
+        p.left_score AS partner_score,
+        p.left_pwm_relative_score AS partner_pwm_relative_score,
+        p.* EXCLUDE (left_locus_id, right_locus_id, left_score,
+                     left_pwm_relative_score)
+    FROM cofactor_motif_pair p
+    JOIN context_cofactor_locus_id c
+      ON p.right_locus_id = c.cofactor_locus_id
 ), ranked AS (
     SELECT
         *,
@@ -1322,11 +1420,16 @@ SELECT
     s.best_pair_sum_score,
     COALESCE(s.n_same_motif_partner_loci, 0) > 0 AS has_same_motif_partner
 FROM cofactor_motif_locus l
+JOIN context_cofactor_locus_id context_locus USING (cofactor_locus_id)
 LEFT JOIN summary s USING (cofactor_locus_id)
 LEFT JOIN ranked n
   ON l.cofactor_locus_id = n.cofactor_locus_id AND n.nearest_rank = 1;
 
 {cofactor_locus_feature_copy_sql}
+
+DROP TABLE cofactor_locus_pair_feature;
+DROP TABLE cofactor_motif_locus;
+DROP TABLE context_cofactor_locus_id;
 
 -- Attribute each canonical cofactor pair once per TP73 anchor. Joining through
 -- the collapsed context loci prevents strand alternatives and two in-context
@@ -1473,6 +1576,11 @@ GROUP BY anchor_hit_id, genome_id, motif_set_id, chrom, cofactor_motif_id,
 COPY tp73_cofactor_pair_summary
 TO 'tables/jaspar2026/tp73_cofactor_pair_summary.parquet'
     (FORMAT PARQUET, COMPRESSION ZSTD);
+
+DROP TABLE tp73_cofactor_pair_context;
+DROP TABLE tp73_cofactor_pair_summary;
+DROP VIEW cofactor_pair_member;
+DROP TABLE cofactor_motif_pair;
 
 -- A near-palindromic motif can produce two strand records for one neighboring
 -- alignment span. Preserve both records above, but collapse them here so the
@@ -1722,13 +1830,6 @@ COPY tp73_context_anchor TO 'tables/jaspar2026/tp73_context_anchor'
 
 DROP TABLE context_run_config;
 DROP TABLE motif_context_pair;
-DROP TABLE tp73_anchor_locus;
-DROP TABLE tp73_motif_context_summary;
-DROP TABLE cofactor_motif_locus;
-DROP TABLE cofactor_motif_pair;
-DROP TABLE cofactor_locus_pair_feature;
-DROP TABLE tp73_cofactor_pair_context;
-DROP TABLE tp73_cofactor_pair_summary;
 DROP TABLE tp73_pair_feature;
 DROP TABLE tp73_context_anchor;
 CREATE VIEW motif_context_run_config AS

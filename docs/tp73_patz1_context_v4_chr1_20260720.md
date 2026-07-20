@@ -27,17 +27,29 @@ TP73 alignments as inspectable context neighbors.
 
 ## Execution
 
-The build used two DuckDB threads, a 6 GB memory ceiling, and a 30 GB spill
-ceiling. It completed in 470.36 seconds (7 minutes 50 seconds). Sampled DuckDB
-resident memory remained below 1.9 GB. The staging tree reached approximately
-10 GB while joins were spilling, then collapsed to a 1.3 GB finished package.
+The current build used two DuckDB threads, a 6 GB memory ceiling, and a 30 GB
+spill ceiling. It completed in under three minutes; a live resident-memory
+sample was approximately 3.0 GB. The finished package occupies 922 MB.
 
 The package is locally available at:
 
 ```text
 dry_runs/jaspar2026_chr1_requested_panel_20260720/
-  context_v4_local_patz1_selected/
+  context_v4_local_patz1_selected_context_scoped/
 ```
+
+An earlier 470.36-second pilot formed all same-motif PATZ1 pairs across
+chromosome 1 before attributing them to TP73. That predecessor occupied 4.5 GB
+and retained 1,906,567 loci, 7,684,131 pairs, and 1,906,567 locus-feature rows.
+The current implementation seeds pairing from loci captured around TP73,
+retains a partner just outside the context when needed, and omits pairs for
+which neither member can contribute to any TP73 context. Its corresponding
+counts are 1,186,140 loci, 3,904,582 pairs, and 917,256 locus-feature rows.
+
+All TP73-facing cardinalities remained unchanged. Multiset hashes over every
+column also matched for all 4,527,996 `tp73_cofactor_pair_context` rows and all
+1,563,537 `tp73_cofactor_pair_summary` rows, demonstrating that the reduction
+removes unused inventory rather than downstream information.
 
 ## Cardinalities
 
@@ -48,9 +60,9 @@ dry_runs/jaspar2026_chr1_requested_panel_20260720/
 | `tp73_context_anchor` | 305,528 |
 | `motif_context_pair` | 1,278,832 |
 | `tp73_motif_context_summary` | 782,352 |
-| `cofactor_motif_locus` | 1,906,567 |
-| `cofactor_motif_pair` | 7,684,131 |
-| `cofactor_locus_pair_feature` | 1,906,567 |
+| `cofactor_motif_locus` | 1,186,140 |
+| `cofactor_motif_pair` | 3,904,582 |
+| `cofactor_locus_pair_feature` | 917,256 |
 | `tp73_cofactor_pair_context` | 4,527,996 |
 | `tp73_cofactor_pair_summary` | 1,563,537 |
 | `motif_transcript_context` | 1,612,458 |
@@ -97,8 +109,10 @@ context, exact-input-staging, script-help, scanner, and SIGUSR1 tests pass.
 ## Cluster consequence
 
 The PATZ1 expansion shows why selected context should run as independent
-motif/chromosome tasks. Dense motifs such as TCF7 and POU4F1 can create much
-larger same-motif pair layers. The Haumea pilot therefore uses one cofactor per
-array task, exact inventory files, durable output under `/data/sm718`, and
-DuckDB spill under job-local `/scratch`. A failure or resource underestimate is
-isolated to one motif rather than invalidating the panel.
+motif/chromosome tasks and why chromosome-wide cofactor pairs do not belong in
+a TP73 context package. Dense motifs such as TCF7 and POU4F1 can still create
+larger context-relevant pair layers. The Haumea pilot therefore uses one
+cofactor per array task, exact inventory files, durable output under
+`/data/sm718`, and DuckDB spill under job-local `/scratch`. A failure or
+resource underestimate is isolated to one motif rather than invalidating the
+panel.

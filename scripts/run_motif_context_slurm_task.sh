@@ -115,7 +115,10 @@ WHERE schema_version = 4
   AND anchor_minimum_score = -1
   AND partner_minimum_score = 0
   AND anchor_selection_mode = 'local_peak'
-  AND output_tier = '$output_tier';"
+  AND output_tier = '$output_tier'
+  AND cofactor_pair_scope = 'at_least_one_member_is_a_tp73_context_locus'
+  AND cofactor_motif_locus_scope = 'tp73_context_loci_plus_their_pair_partners'
+  AND cofactor_locus_pair_feature_scope = 'tp73_context_loci_only';"
     )
     [[ $valid == 1 ]] || {
         echo "E: Existing context output has incompatible provenance: $output" >&2

@@ -36,7 +36,9 @@ COPY (
         ('1', 306::BIGINT, 312::BIGINT, 'MPAIR.1', 'PAIR', '+', 4.0, 'log2_relative_risk', 1.0, 0.80),
         ('1', 318::BIGINT, 324::BIGINT, 'MPAIR.1', 'PAIR', '-', 5.0, 'log2_relative_risk', 1.0, 0.85),
         ('1', 1166::BIGINT, 1176::BIGINT, 'MBOUND.1', 'BOUND', '+', 3.0, 'log2_relative_risk', 1.0, 0.75),
-        ('1', 1177::BIGINT, 1187::BIGINT, 'MBOUND.1', 'BOUND', '-', 4.0, 'log2_relative_risk', 1.0, 0.80)
+        ('1', 1177::BIGINT, 1187::BIGINT, 'MBOUND.1', 'BOUND', '-', 4.0, 'log2_relative_risk', 1.0, 0.80),
+        ('1', 2000::BIGINT, 2006::BIGINT, 'MFAR.1', 'FAR', '+', 3.0, 'log2_relative_risk', 1.0, 0.75),
+        ('1', 2006::BIGINT, 2012::BIGINT, 'MFAR.1', 'FAR', '-', 4.0, 'log2_relative_risk', 1.0, 0.80)
     ) AS t(chrom, start, "end", motif_id, motif_name, strand, score,
            score_mode, pseudocount, pwm_relative_score)
 ) TO 'motif_hit.parquet' (FORMAT PARQUET, COMPRESSION ZSTD);
@@ -302,6 +304,31 @@ SELECT CASE WHEN NOT EXISTS (
 ) THEN error('one-member cofactor-pair boundary attribution is incorrect') END;
 
 SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM cofactor_motif_locus
+    WHERE motif_id = 'MBOUND.1' AND start = 1166
+      AND in_any_tp73_context
+) OR NOT EXISTS (
+    SELECT 1 FROM cofactor_motif_locus
+    WHERE motif_id = 'MBOUND.1' AND start = 1177
+      AND NOT in_any_tp73_context
+) THEN error('context seed and outside pair partner were not distinguished') END;
+
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM cofactor_locus_pair_feature
+    WHERE motif_id = 'MBOUND.1' AND start = 1166
+      AND in_any_tp73_context AND n_same_motif_partner_loci = 1
+) OR EXISTS (
+    SELECT 1 FROM cofactor_locus_pair_feature
+    WHERE motif_id = 'MBOUND.1' AND start = 1177
+) THEN error('cofactor locus features were not scoped to TP73 context loci') END;
+
+SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM cofactor_motif_locus WHERE motif_id = 'MFAR.1'
+) OR EXISTS (
+    SELECT 1 FROM cofactor_motif_pair WHERE motif_id = 'MFAR.1'
+) THEN error('cofactor pair unrelated to every TP73 context was retained') END;
+
+SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM tp73_motif_context_summary
     WHERE anchor_hit_id = (
               SELECT anchor_hit_id FROM tp73_pair_feature
@@ -408,6 +435,9 @@ SELECT CASE WHEN NOT EXISTS (
       AND observed_max_neighbor_span_bp = 40
       AND tandem_distance_metric = 'nonoverlapping_edge_gap'
       AND partner_locus_identity_rule = 'same_alignment_span_collapses_orientation_records'
+      AND cofactor_pair_scope = 'at_least_one_member_is_a_tp73_context_locus'
+      AND cofactor_motif_locus_scope = 'tp73_context_loci_plus_their_pair_partners'
+      AND cofactor_locus_pair_feature_scope = 'tp73_context_loci_only'
 ) THEN error('context run provenance is incomplete') END;
 
 SELECT CASE WHEN

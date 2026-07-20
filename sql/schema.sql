@@ -364,8 +364,10 @@ FROM read_parquet(
     hive_partitioning = 1
 );
 
--- Generic same-motif cofactor locus and pair architecture. Identical-span
--- strand alternatives are collapsed before canonical pairs are formed.
+-- TP73-context-relevant same-motif cofactor architecture. Identical-span
+-- strand alternatives are collapsed before canonical pairs are formed. Loci
+-- include context members plus outside partners; pairs require at least one
+-- context member, and locus features are emitted only for context members.
 CREATE OR REPLACE VIEW cofactor_motif_locus AS
 SELECT * FROM read_parquet('tables/jaspar2026/cofactor_motif_locus.parquet');
 

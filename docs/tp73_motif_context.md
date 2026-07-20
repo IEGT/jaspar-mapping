@@ -168,15 +168,25 @@ left-to-right order. Their arrangement is `codirectional_plus` (`>>`),
 `ambiguous`; ambiguity takes precedence when either member has both strand
 alternatives.
 
-`cofactor_motif_pair` retains exact member geometry and scores.
-`cofactor_locus_pair_feature` describes whether each cofactor locus has a
-same-motif partner and summarizes partner arrangements. A canonical pair is
-attached to a TP73 anchor when at least one member is within the configured
-context distance. `tp73_cofactor_pair_context` records whether one or both
-members qualify and attributes side/direction through the nearest qualifying
-member. `tp73_cofactor_pair_summary` is the compact nonduplicating feature
-surface. These are sequence-compatible pair architectures, not observations of
-protein oligomerisation.
+This is a TP73 context package, not a second chromosome-wide motif inventory.
+A cofactor locus captured around at least one TP73 anchor seeds pair formation;
+every same-motif partner within `--cofactor-pair-flank` is retained even when
+that second member falls just outside the anchor's context. Pairs for which
+neither member occurs in any TP73 context are omitted. This preserves the
+one-member boundary case while avoiding a global pair table that cannot
+contribute to a TP73 feature.
+
+`cofactor_motif_locus` therefore contains context loci plus their retained pair
+partners and marks the former with `in_any_tp73_context`.
+`cofactor_motif_pair` retains exact member geometry and scores, while
+`cofactor_locus_pair_feature` describes same-motif partner architecture only
+for the context loci whose features can be attached to TP73. A canonical pair
+is attached to an individual TP73 anchor when at least one member is within the
+configured context distance. `tp73_cofactor_pair_context` records whether one
+or both members qualify and attributes side/direction through the nearest
+qualifying member. `tp73_cofactor_pair_summary` is the compact nonduplicating
+feature surface. These are sequence-compatible pair architectures, not
+observations of protein oligomerisation.
 
 ## Transcript and intron context
 
@@ -273,8 +283,8 @@ The package contains:
 - `tables/jaspar2026/tp73_motif_context_summary/`: nonempty motif-, band-,
   side-, and orientation-stratified groups partitioned by neighboring motif;
 - `tables/jaspar2026/cofactor_motif_locus.parquet` and
-  `cofactor_motif_pair.parquet`: selected-tier cofactor loci and canonical
-  same-motif pairs;
+  `cofactor_motif_pair.parquet`: TP73-context loci plus necessary outside pair
+  partners, and canonical pairs having at least one context member;
 - `tables/jaspar2026/tp73_cofactor_pair_context.parquet` and
   `tp73_cofactor_pair_summary.parquet`: pair attribution and compact features;
 - `tables/jaspar2026/tp73_pair_feature/genome_id=*/chrom=*/`: one orientation-collapsed
