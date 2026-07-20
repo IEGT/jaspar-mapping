@@ -8,6 +8,15 @@ CXXOPTFLAGS?=
 CXXFLAGS += $(CXXOPTFLAGS)
 TEST_CXXFLAGS?=$(filter-out -std=c++23 -O3 -g,$(CXXFLAGS)) -std=c++17 -O0
 LTO?=0
+PSSM_SCAN_VERSION?=0.0.0
+SOURCE_COMMIT?=$(shell git rev-parse --verify HEAD 2>/dev/null || printf unknown)
+SOURCE_DIRTY?=$(shell \
+	if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then printf 1; \
+	elif test -n "$$(git status --porcelain 2>/dev/null)"; then printf 1; \
+	else printf 0; fi)
+PSSM_SCAN_BUILD_PROVENANCE=-DPSSM_SCAN_VERSION=\"$(PSSM_SCAN_VERSION)\" -DPSSM_SCAN_SOURCE_COMMIT=\"$(SOURCE_COMMIT)\" -DPSSM_SCAN_SOURCE_DIRTY=$(SOURCE_DIRTY) -DPSSM_SCAN_LTO_ENABLED=$(LTO)
+PSSM_SCAN_BUILD_DEFINES=$(PSSM_SCAN_BUILD_PROVENANCE) -DPSSM_SCAN_BUILD_FLAGS='"$(strip $(CXXFLAGS))"'
+PSSM_SCAN_PARQUET_BUILD_DEFINES=$(PSSM_SCAN_BUILD_PROVENANCE) -DPSSM_SCAN_BUILD_FLAGS='"$(strip $(CXXFLAGS) -DPSSM_SCAN_WITH_PARQUET $(PARQUET_CXXFLAGS))"'
 ifeq ($(LTO),1)
 CXXFLAGS += -flto
 endif
@@ -101,6 +110,8 @@ CONTEXT_DATATABLE=TP73_datatable_$(CHR)_flank-$(CONTEXT_FLANK)_motif-center.bed.
 BINARIES=pssm_scan gtf_file_region_retrieval context
 PARQUET_BINARIES=pssm_scan_parquet cutandrun_score_calibration
 TEST_BINARIES=tests/test_pssm_scan tests/test_gtf_file_region tests/test_compressed_file_reader tests/test_context
+PSSM_SCAN_SRCS=pssm_scan.cpp progress.cpp pssm.cpp pssm_scan_core.cpp compressed_file_reader.cpp
+PSSM_SCAN_HEADERS=build_info.h progress.h pssm.h pssm_scan_core.h compressed_file_reader.h
 
 all: $(BINARIES)
 
@@ -124,11 +135,14 @@ gtf_file_region.o: gtf_file_region.cpp gtf_file_region.h progress.h
 context: context.o context_core.o compressed_file_reader.o
 	$(CXX) $(CXXFLAGS) -o $@ $^  $(LDFLAGS)
 
-pssm_scan: pssm_scan.cpp pssm.h pssm_scan_core.h progress.o pssm.o pssm_scan_core.o compressed_file_reader.o
-	$(CXX) $(CXXFLAGS) -o $@ pssm_scan.cpp progress.o pssm.o pssm_scan_core.o compressed_file_reader.o $(LDFLAGS)
+# Recompile the complete scanner on every explicit build. This keeps embedded
+# Git provenance and LTO/optimization flags coherent across all translation
+# units even when only Make variables or repository state changed.
+pssm_scan: FORCE $(PSSM_SCAN_SRCS) $(PSSM_SCAN_HEADERS)
+	$(CXX) $(CXXFLAGS) $(PSSM_SCAN_BUILD_DEFINES) -o $@ $(PSSM_SCAN_SRCS) $(LDFLAGS)
 
-pssm_scan_parquet: pssm_scan.cpp pssm.h pssm_scan_core.h progress.o pssm.o pssm_scan_core.o compressed_file_reader.o
-	$(CXX) $(CXXFLAGS) -DPSSM_SCAN_WITH_PARQUET $(PARQUET_CXXFLAGS) -o $@ pssm_scan.cpp progress.o pssm.o pssm_scan_core.o compressed_file_reader.o $(LDFLAGS) $(PARQUET_LDFLAGS)
+pssm_scan_parquet: FORCE $(PSSM_SCAN_SRCS) $(PSSM_SCAN_HEADERS)
+	$(CXX) $(CXXFLAGS) $(PSSM_SCAN_PARQUET_BUILD_DEFINES) -DPSSM_SCAN_WITH_PARQUET $(PARQUET_CXXFLAGS) -o $@ $(PSSM_SCAN_SRCS) $(LDFLAGS) $(PARQUET_LDFLAGS)
 
 cutandrun_score_calibration: cutandrun_score_calibration.cpp
 	$(CXX) $(CXXFLAGS) $(PARQUET_CXXFLAGS) -o $@ $< $(LDFLAGS) $(PARQUET_LDFLAGS)
@@ -157,6 +171,7 @@ check: pssm_scan $(TEST_BINARIES)
 	bash tests/test_progress_signal.sh
 	bash tests/test_slurm_task_offset.sh
 	bash tests/test_build_fasta_index.sh
+	bash tests/test_stage_fasta_region.sh
 	bash tests/test_cutandrun_containment.sh
 	bash tests/test_script_help.sh
 
@@ -171,6 +186,7 @@ check-duckdb: cutandrun_score_calibration pssm_scan_parquet
 	bash tests/test_streaming_cutandrun_calibration.sh
 	bash tests/test_motif_context.sh
 	bash tests/test_sparse_parquet.sh
+	bash tests/test_sparse_parquet_parity.sh
 	bash tests/test_genome_scan_manager.sh
 
 check_synthetic_dense: pssm_scan_parquet
@@ -327,7 +343,9 @@ test_reference_tp73_promoter_chr1: pssm_scan $(JASPAR) $(GENOME) $(GENOME_INDEX)
 	fi ; \
 	echo "I: E2F1 hits in TP73 promoter reference window: $$hits"
 
-.PHONY: test check check-r check-duckdb check_synthetic_dense check_synthetic_sparse synthetic_dense_example check_cutandrun_containment synthetic_cutandrun_example all $(OUTPUTDIR)/$(CHR) jaspar genome genomegz genome_index scan_chr_all_motifs dry_run_chr1_patz1_tp73 inspect_chr1_patz1_tp73 genome_testdata count datatables files_cutandrun_clean TP73_datatable test_reference_tp73_promoter_chr1 score_distributions_chr1
+.PHONY: FORCE test check check-r check-duckdb check_synthetic_dense check_synthetic_sparse synthetic_dense_example check_cutandrun_containment synthetic_cutandrun_example all $(OUTPUTDIR)/$(CHR) jaspar genome genomegz genome_index scan_chr_all_motifs dry_run_chr1_patz1_tp73 inspect_chr1_patz1_tp73 genome_testdata count datatables files_cutandrun_clean TP73_datatable test_reference_tp73_promoter_chr1 score_distributions_chr1
+
+FORCE:
 .PRECIOUS: $(GENOME) $(GENOMEGZ) %.bed %.bed.gz
 .SECONDARY:
 

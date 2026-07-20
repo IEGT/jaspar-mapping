@@ -16,6 +16,9 @@ also read [`docs/tp73_motif_context.md`](docs/tp73_motif_context.md).
 For whole-genome JASPAR 2026 scans, Slurm batching/requeue behavior, production
 inventories, or cross-species identity, also read
 [`docs/jaspar2026_genome_scan_plan.md`](docs/jaspar2026_genome_scan_plan.md).
+For scanner execution, scratch staging, finalization, checksum verification,
+build provenance, or exact-file DuckDB queries, also read
+[`docs/scanner_maintenance.md`](docs/scanner_maintenance.md).
 
 Treat [`sql/schema.sql`](sql/schema.sql) and [`sql/queries.sql`](sql/queries.sql)
 as the draft query contract:

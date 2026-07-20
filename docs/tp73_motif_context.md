@@ -101,6 +101,11 @@ that a particular oligomer or quaternary structure was experimentally present.
 The two half-sites within one TP53-family motif alignment remain a separate
 question represented by the optional `hit_architecture` layer.
 
+The package contract requires one `tp73_pair_feature` row per `anchor_hit_id`,
+the same/opposite/ambiguous partner counts to sum to the total partner-locus
+count, and singleton partner-derived scores to remain `NULL` rather than zero.
+`tests/test_motif_context.sh` enforces these invariants on a synthetic package.
+
 `tp73_context_pair_feature` joins the resulting anchor pair class back onto
 every raw neighboring-motif record. This chromosome-wide view is the direct
 input for pair-stratified CUT&RUN predictors; promoter aggregation is an

@@ -23,8 +23,11 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, BinaryIO, Iterable
+
+from stage_fasta_region import StageError, stage_fasta_region
 
 
 class ScanError(RuntimeError):
@@ -34,6 +37,59 @@ class ScanError(RuntimeError):
 IDENTIFIER = re.compile(r"^[A-Za-z0-9._-]+$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 PLAN_SCHEMA_VERSION = 1
+
+
+class OperationProgress:
+    """One-line, signal-triggered progress for coordinator operations."""
+
+    def __init__(self, phase: str = "starting") -> None:
+        self.started = time.monotonic()
+        self.phase = phase
+        self.files_complete = 0
+        self.files_total = 0
+        self.bytes_complete = 0
+        self.bytes_total = 0
+        self.current_file_bytes = 0
+        self.current_path = "none"
+        self.current_task = "none"
+
+    def install(self) -> None:
+        if hasattr(signal, "SIGUSR1"):
+            signal.signal(signal.SIGUSR1, self._handle_signal)
+
+    def _handle_signal(self, _signal_number: int, _frame: Any) -> None:
+        self.emit()
+
+    def set_phase(self, phase: str, *, current_path: str | Path | None = None,
+                  current_task: str | None = None) -> None:
+        self.phase = phase
+        if current_path is not None:
+            self.current_path = str(current_path)
+        if current_task is not None:
+            self.current_task = current_task
+
+    def emit(self) -> None:
+        elapsed = max(0.0, time.monotonic() - self.started)
+        observed_bytes = self.bytes_complete + self.current_file_bytes
+        throughput = observed_bytes / elapsed if elapsed > 0 else 0.0
+        remaining = max(0, self.bytes_total - observed_bytes)
+        eta = remaining / throughput if throughput > 0 else math.nan
+        eta_text = f"{eta:.1f}" if math.isfinite(eta) else "unknown"
+        print(
+            "I: manager progress request"
+            f" phase={self.phase}"
+            f" files_complete={self.files_complete}"
+            f" files_total={self.files_total}"
+            f" bytes_complete={observed_bytes}"
+            f" bytes_total={self.bytes_total}"
+            f" throughput_mib_s={throughput / 1024**2:.3f}"
+            f" elapsed_seconds={elapsed:.3f}"
+            f" eta_seconds={eta_text}"
+            f" task={json.dumps(self.current_task)}"
+            f" path={json.dumps(self.current_path)}",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def utc_now() -> str:
@@ -53,6 +109,13 @@ def nonnegative_float(value: str) -> float:
     result = float(value)
     if not math.isfinite(result) or result < 0:
         raise argparse.ArgumentTypeError("expected a finite non-negative number")
+    return result
+
+
+def positive_float(value: str) -> float:
+    result = float(value)
+    if not math.isfinite(result) or result <= 0:
+        raise argparse.ArgumentTypeError("expected a finite number greater than zero")
     return result
 
 
@@ -85,11 +148,22 @@ def absolute_file(value: str | Path) -> Path:
     return path
 
 
-def sha256_file(path: Path) -> str:
+def sha256_file(path: Path, progress: OperationProgress | None = None,
+                max_read_mib_per_second: float | None = None) -> str:
     digest = hashlib.sha256()
+    started = time.monotonic()
+    bytes_read = 0
     with path.open("rb") as stream:
         while chunk := stream.read(1024 * 1024):
             digest.update(chunk)
+            bytes_read += len(chunk)
+            if progress is not None:
+                progress.current_file_bytes = bytes_read
+            if max_read_mib_per_second is not None:
+                expected_elapsed = bytes_read / (max_read_mib_per_second * 1024**2)
+                delay = expected_elapsed - (time.monotonic() - started)
+                if delay > 0:
+                    time.sleep(delay)
     return digest.hexdigest()
 
 
@@ -109,6 +183,17 @@ def json_write_new(path: Path, value: Any) -> None:
         stream.write("\n")
 
 
+def json_write_atomic(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    with temporary.open("x", encoding="utf-8") as stream:
+        json.dump(value, stream, indent=2, sort_keys=True)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+
+
 def json_read(path: Path) -> Any:
     try:
         with path.open(encoding="utf-8") as stream:
@@ -117,11 +202,12 @@ def json_read(path: Path) -> Any:
         raise ScanError(f"cannot read JSON {path}: {error}") from error
 
 
-def check_free_space(path: Path, minimum_gib: float) -> None:
+def check_free_space(path: Path, minimum_gib: float,
+                     label: str = "Output filesystem") -> None:
     free = shutil.disk_usage(path).free
     required = int(minimum_gib * 1024**3)
     print(
-        f"I: Output filesystem has {free / 1024**3:.1f} GiB free; "
+        f"I: {label} has {free / 1024**3:.1f} GiB free; "
         f"required preflight reserve is {minimum_gib:.1f} GiB.",
         file=sys.stderr,
     )
@@ -130,6 +216,47 @@ def check_free_space(path: Path, minimum_gib: float) -> None:
             f"insufficient free space: {free / 1024**3:.1f} GiB available, "
             f"{minimum_gib:.1f} GiB required"
         )
+
+
+def scanner_build_info(scanner: Path) -> dict[str, Any]:
+    process = subprocess.run(
+        [str(scanner), "--version-json"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if process.returncode != 0:
+        raise ScanError(
+            process.stderr.strip() or "scanner --version-json failed"
+        )
+    try:
+        result = json.loads(process.stdout)
+    except json.JSONDecodeError as error:
+        raise ScanError("scanner --version-json returned invalid JSON") from error
+    required = {
+        "program", "version", "source_commit", "source_dirty", "compiler",
+        "cplusplus", "build_flags",
+        "lto_enabled", "ndebug", "parquet_enabled", "arrow_version",
+        "parquet_version",
+    }
+    if not isinstance(result, dict) or not required.issubset(result):
+        raise ScanError("scanner build information is incomplete")
+    if result.get("program") != "pssm_scan":
+        raise ScanError("scanner build information identifies a different program")
+    if result.get("parquet_enabled") is not True:
+        raise ScanError(
+            "scanner lacks direct Parquet support; build pssm_scan_parquet"
+        )
+    return result
+
+
+def duckdb_build_info(executable: str) -> str:
+    process = subprocess.run(
+        [executable, "--version"], text=True, capture_output=True, check=False
+    )
+    if process.returncode != 0:
+        raise ScanError(process.stderr.strip() or "duckdb --version failed")
+    return process.stdout.strip()
 
 
 def parse_fasta_index(path: Path) -> list[dict[str, Any]]:
@@ -476,6 +603,10 @@ def sql_string(value: str | Path) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
+def sql_string_list(values: Iterable[str | Path]) -> str:
+    return "[" + ",".join(sql_string(value) for value in values) + "]"
+
+
 def run_duckdb_json(
     executable: str,
     query: str,
@@ -633,7 +764,7 @@ def validate_task_outputs(
                 or row["elapsed_seconds"] < 0:
             raise ScanError(f"invalid scanner elapsed time for {output}")
 
-    glob_path = package / "tables" / "jaspar2026" / "motif_hit" / "**" / "*.parquet"
+    output_paths = [Path(row["output_file"]).resolve() for row in records]
     query = f"""
 WITH expected AS (
     SELECT output_file::VARCHAR AS filename, emitted_hits::BIGINT AS expected_rows,
@@ -681,8 +812,8 @@ WITH expected AS (
                   OR h.n_policy <> e.n_policy
                   OR h.matched_sequence <> e.matched_sequence_policy
            )::BIGINT AS invalid_rows
-    FROM read_parquet({sql_string(glob_path)}, filename=true,
-                      hive_partitioning=true, union_by_name=true) h
+    FROM read_parquet({sql_string_list(output_paths)}, filename=true,
+                      hive_partitioning=true) h
     JOIN expected e ON e.filename = h.filename
     GROUP BY h.filename
 )
@@ -705,7 +836,9 @@ ORDER BY e.filename;
     for row in records:
         output = Path(row.pop("output_file"))
         row["output_relative_path"] = str(output.relative_to(package))
-        row["bytes"] = output.stat().st_size
+        metadata = output.stat()
+        row["bytes"] = metadata.st_size
+        row["mtime_ns"] = metadata.st_mtime_ns
         row["sha256"] = sha256_file(output)
         row["state"] = "complete"
     return records
@@ -717,6 +850,10 @@ def validate_promoted_task(
     task: dict[str, Any],
     plan: dict[str, Any],
     plan_sha256: str,
+    *,
+    verify_checksums: bool = False,
+    progress: OperationProgress | None = None,
+    max_read_mib_per_second: float | None = None,
 ) -> None:
     if result.get("state") != "complete" \
             or result.get("plan_sha256") != plan_sha256 \
@@ -738,14 +875,105 @@ def validate_promoted_task(
         output = (task_root / row.get("output_relative_path", "")).resolve()
         if resolved_root not in output.parents or not output.is_file():
             raise ScanError(f"promoted output is absent or outside its task: {output}")
-        if output.stat().st_size != row.get("bytes") \
-                or sha256_file(output) != row.get("sha256"):
-            raise ScanError(f"promoted output checksum mismatch: {output}")
+        metadata = output.stat()
+        if metadata.st_size != row.get("bytes"):
+            raise ScanError(f"promoted output size mismatch: {output}")
+        recorded_mtime = row.get("mtime_ns")
+        if recorded_mtime is not None and metadata.st_mtime_ns != recorded_mtime:
+            raise ScanError(f"promoted output modification time changed: {output}")
+        if verify_checksums:
+            if progress is not None:
+                progress.current_path = str(output)
+                progress.current_task = task["task_id"]
+                progress.current_file_bytes = 0
+            observed_sha256 = sha256_file(
+                output, progress, max_read_mib_per_second
+            )
+            if observed_sha256 != row.get("sha256"):
+                raise ScanError(f"promoted output checksum mismatch: {output}")
+            if progress is not None:
+                progress.files_complete += 1
+                progress.bytes_complete += metadata.st_size
+                progress.current_file_bytes = 0
         if row.get("run_id") != plan["run_id"] \
                 or row.get("task_id") != task["task_id"] \
                 or row.get("source_commit") != plan["source_commit"] \
                 or row.get("state") != "complete":
             raise ScanError(f"promoted output provenance mismatch: {output}")
+
+
+def validate_staged_input(plan: dict[str, Any], task: dict[str, Any],
+                          genome: Path, fasta_index: Path) -> None:
+    regions = parse_fasta_index(fasta_index)
+    if regions != [{
+        "sequence_order": 0,
+        "chrom": task["chrom"],
+        "length": task["sequence_length"],
+    }]:
+        raise ScanError(
+            f"staged FASTA index is not exactly chromosome {task['chrom']}"
+        )
+    _, sequences, _ = inspect_fasta(genome)
+    expected_region = next(
+        row for row in plan["sequence_regions"] if row["chrom"] == task["chrom"]
+    )
+    if len(sequences) != 1 \
+            or sequences[0]["chrom"] != task["chrom"] \
+            or sequences[0]["length"] != task["sequence_length"] \
+            or sequences[0]["sequence_sha256"] != expected_region["sequence_sha256"]:
+        raise ScanError(f"staged FASTA identity mismatch for {task['chrom']}")
+
+
+def validate_staged_input_metadata(plan: dict[str, Any], task: dict[str, Any],
+                                   genome: Path, fasta_index: Path,
+                                   metadata_path: Path) -> None:
+    metadata = json_read(metadata_path)
+    expected_region = next(
+        row for row in plan["sequence_regions"] if row["chrom"] == task["chrom"]
+    )
+    current = genome.stat()
+    current_index = fasta_index.stat()
+    if metadata.get("sequence") != task["chrom"] \
+            or metadata.get("length") != task["sequence_length"] \
+            or metadata.get("sequence_sha256") != expected_region["sequence_sha256"] \
+            or Path(str(metadata.get("staged_fasta", ""))).resolve() != genome \
+            or Path(str(metadata.get("staged_fasta_index", ""))).resolve() != fasta_index \
+            or metadata.get("staged_bytes") != current.st_size \
+            or metadata.get("staged_mtime_ns") != current.st_mtime_ns \
+            or metadata.get("staged_fasta_index_bytes") != current_index.st_size \
+            or metadata.get("staged_fasta_index_mtime_ns") != current_index.st_mtime_ns \
+            or metadata.get("staged_fasta_index_sha256") != sha256_file(fasta_index):
+        raise ScanError(f"staged FASTA metadata mismatch for {task['chrom']}")
+
+
+def copy_file_verified(source: Path, destination: Path,
+                       expected_sha256: str) -> None:
+    if destination.exists():
+        raise ScanError(f"refusing to replace durable task output: {destination}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256()
+    with source.open("rb") as input_stream, destination.open("xb") as output_stream:
+        while chunk := input_stream.read(8 * 1024 * 1024):
+            digest.update(chunk)
+            output_stream.write(chunk)
+        output_stream.flush()
+        os.fsync(output_stream.fileno())
+    if digest.hexdigest() != expected_sha256:
+        raise ScanError(f"scratch output changed while publishing: {source}")
+
+
+def publish_scratch_task(source_package: Path, durable_package: Path,
+                         inventory: list[dict[str, Any]]) -> None:
+    durable_package.mkdir(parents=True, exist_ok=False)
+    for row in inventory:
+        relative = Path(row["output_relative_path"])
+        source = source_package / relative
+        destination = durable_package / relative
+        copy_file_verified(source, destination, row["sha256"])
+        metadata = destination.stat()
+        if metadata.st_size != row["bytes"]:
+            raise ScanError(f"durable output size mismatch after copy: {destination}")
+        row["mtime_ns"] = metadata.st_mtime_ns
 
 
 def run_task(arguments: argparse.Namespace) -> None:
@@ -775,20 +1003,51 @@ def run_task(arguments: argparse.Namespace) -> None:
         print(f"I: Reusing validated task {task['task_id']}", file=sys.stderr)
         return
 
+    genome_override = getattr(arguments, "genome_override", None)
+    fasta_index_override = getattr(arguments, "fasta_index_override", None)
+    if (genome_override is None) != (fasta_index_override is None):
+        raise ScanError("staged genome and FASTA index must be supplied together")
+    genome_input = absolute_file(
+        genome_override if genome_override is not None
+        else plan["genome"]["fasta_file"]
+    )
+    fasta_index_input = absolute_file(
+        fasta_index_override if fasta_index_override is not None
+        else plan["genome"]["fasta_index_file"]
+    )
+    if genome_override is not None:
+        staged_metadata = getattr(arguments, "staged_input_metadata", None)
+        if staged_metadata is not None:
+            validate_staged_input_metadata(
+                plan, task, genome_input, fasta_index_input,
+                absolute_file(staged_metadata),
+            )
+        elif not getattr(arguments, "staged_sequence_verified", False):
+            validate_staged_input(plan, task, genome_input, fasta_index_input)
+
     job_id = os.environ.get("SLURM_JOB_ID", "local")
     array_id = os.environ.get("SLURM_ARRAY_TASK_ID", str(task["task_index"]))
     restart_count = os.environ.get("SLURM_RESTART_COUNT", "0")
     attempt = f"job-{job_id}-array-{array_id}-restart-{restart_count}-pid-{os.getpid()}"
     staging = run_root / "staging" / task["task_id"] / attempt
     staging.mkdir(parents=True, exist_ok=False)
-    task_package = staging / "task_package"
-    stats_path = staging / "scan_file_stats.jsonl"
+    task_work_directory = getattr(arguments, "task_work_directory", None)
+    if task_work_directory is None:
+        work_attempt = staging
+    else:
+        work_attempt = (
+            Path(task_work_directory).expanduser().resolve()
+            / task["task_id"] / attempt
+        )
+        work_attempt.mkdir(parents=True, exist_ok=False)
+    task_package = work_attempt / "task_package"
+    stats_path = work_attempt / "scan_file_stats.jsonl"
     command = [
         str(scanner),
         "--sparse-parquet",
         "--outdir", str(task_package),
-        "--genome", plan["genome"]["fasta_file"],
-        "--fasta-index", plan["genome"]["fasta_index_file"],
+        "--genome", str(genome_input),
+        "--fasta-index", str(fasta_index_input),
         "--pssm", plan["motif_set"]["source_file"],
         "--motif-list", str(motif_list),
         "--motif-set-id", plan["motif_set"]["motif_set_id"],
@@ -805,19 +1064,45 @@ def run_task(arguments: argparse.Namespace) -> None:
         "--scan-file-stats", str(stats_path),
     ]
     child: subprocess.Popen[str] | None = None
+    task_progress = OperationProgress("task_prepare")
+    task_progress.current_task = task["task_id"]
+    task_progress.current_path = str(task_package)
 
     def forward_progress(_signal_number: int, _frame: Any) -> None:
         if child is not None and child.poll() is None:
-            child.send_signal(signal.SIGUSR1)
+            try:
+                child.send_signal(signal.SIGUSR1)
+                return
+            except (ProcessLookupError, OSError):
+                # The scanner may finish between poll() and signal delivery.
+                pass
+        task_progress.emit()
 
     if hasattr(signal, "SIGUSR1"):
         signal.signal(signal.SIGUSR1, forward_progress)
     try:
         print(f"I: Starting task {task['task_id']}", file=sys.stderr)
+        scanner_sha256 = sha256_file(scanner)
+        build_info = getattr(arguments, "scanner_build_info", None)
+        if build_info is None:
+            build_info = scanner_build_info(scanner)
+        build_matches_plan = (
+            build_info.get("source_commit") == plan["source_commit"]
+            and not build_info.get("source_dirty", True)
+        )
+        if not build_matches_plan \
+                and not arguments.allow_scanner_provenance_mismatch:
+            raise ScanError(
+                "scanner build is dirty or does not match the planned source "
+                "commit; rebuild from the clean planned commit or pass the "
+                "explicit provenance-mismatch override"
+            )
+        task_progress.set_phase("scanner")
         child = subprocess.Popen(command, text=True)
         return_code = child.wait()
         if return_code != 0:
             raise ScanError(f"scanner exited with status {return_code}")
+        task_progress.set_phase("parquet_validation")
         inventory = validate_task_outputs(
             arguments.duckdb, stats_path, task_package, task, plan,
             arguments.duckdb_memory_limit, duckdb_temp,
@@ -829,12 +1114,17 @@ def run_task(arguments: argparse.Namespace) -> None:
                     "task_id": task["task_id"],
                     "policy_id": task["policy_id"],
                     "source_commit": plan["source_commit"],
-                    "scanner_sha256": sha256_file(scanner),
+                    "scanner_sha256": scanner_sha256,
                     "slurm_job_id": job_id,
                     "slurm_array_task_id": array_id,
                     "slurm_restart_count": int(restart_count),
                 }
             )
+        durable_package = task_package
+        if work_attempt != staging:
+            task_progress.set_phase("durable_publication")
+            durable_package = staging / "task_package"
+            publish_scratch_task(task_package, durable_package, inventory)
         result = {
             "state": "complete",
             "completed_at_utc": utc_now(),
@@ -842,18 +1132,23 @@ def run_task(arguments: argparse.Namespace) -> None:
             "plan_file": str(plan_path),
             "source_commit": plan["source_commit"],
             "scanner_file": str(scanner),
-            "scanner_sha256": sha256_file(scanner),
+            "scanner_sha256": scanner_sha256,
+            "scanner_build": build_info,
+            "scanner_source_commit_matches_plan": (
+                build_matches_plan
+            ),
             "slurm_job_id": job_id,
             "slurm_array_task_id": array_id,
             "slurm_restart_count": int(restart_count),
             "task": task,
             "inventory": inventory,
         }
-        json_write_new(task_package / "task_result.json", result)
+        json_write_new(durable_package / "task_result.json", result)
         final_task.parent.mkdir(parents=True, exist_ok=True)
         if final_task.exists():
             raise ScanError(f"task appeared concurrently: {final_task}")
-        os.replace(task_package, final_task)
+        task_progress.set_phase("atomic_promotion")
+        os.replace(durable_package, final_task)
         print(f"I: Validated and promoted task {task['task_id']}", file=sys.stderr)
     except Exception as error:
         failure_path = staging / "failure.json"
@@ -869,6 +1164,179 @@ def run_task(arguments: argparse.Namespace) -> None:
                 },
             )
         raise
+
+
+def selected_sequence_regions(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        region for region in plan["sequence_regions"]
+        if region.get("included_in_scan", True)
+    ]
+
+
+def run_chromosome(arguments: argparse.Namespace) -> None:
+    run_root = arguments.run_root.expanduser().resolve()
+    plan, _, _ = load_plan(run_root)
+    regions = selected_sequence_regions(plan)
+    if arguments.chrom is not None:
+        matches = [region for region in regions if region["chrom"] == arguments.chrom]
+        if len(matches) != 1:
+            raise ScanError(f"scan plan has no unique chromosome {arguments.chrom!r}")
+        region = matches[0]
+    else:
+        if arguments.chrom_index < 0 or arguments.chrom_index >= len(regions):
+            raise ScanError(
+                f"chromosome index {arguments.chrom_index} is outside "
+                f"0..{len(regions) - 1}"
+            )
+        region = regions[arguments.chrom_index]
+
+    if not arguments.allow_local and not os.environ.get("SLURM_JOB_ID"):
+        raise ScanError(
+            "run-chromosome requires Slurm; use --allow-local only for testing"
+        )
+    scratch = arguments.scratch_directory.expanduser().resolve()
+    scratch.mkdir(parents=True, exist_ok=False)
+    required_scratch_gib = (
+        arguments.minimum_scratch_free_gib
+        + (region["length"] + 1024**2) / 1024**3
+    )
+    check_free_space(scratch, required_scratch_gib, "Scratch filesystem")
+    check_free_space(run_root, plan["minimum_free_gib"])
+    validate_planned_inputs(plan)
+
+    reporter = OperationProgress("fasta_stage")
+    reporter.install()
+    reporter.bytes_total = region["length"]
+    reporter.files_total = 1
+    staged_fasta = scratch / f"{safe_label(region['chrom'])}.fa"
+    reporter.current_path = str(staged_fasta)
+    reporter.current_task = f"chromosome:{region['chrom']}"
+
+    def stage_progress(copied: int, _total: int) -> None:
+        reporter.current_file_bytes = copied
+
+    stage_result = stage_fasta_region(
+        absolute_file(plan["genome"]["fasta_file"]),
+        absolute_file(plan["genome"]["fasta_index_file"]),
+        region["chrom"],
+        staged_fasta,
+        expected_length=region["length"],
+        expected_sha256=region["sequence_sha256"],
+        progress_callback=stage_progress,
+    )
+    reporter.files_complete = 1
+    reporter.bytes_complete = region["length"]
+    reporter.current_file_bytes = 0
+    json_write_new(scratch / "staged_sequence.json", stage_result)
+    print(
+        f"I: Staged and verified chromosome {region['chrom']} at {staged_fasta}",
+        file=sys.stderr,
+    )
+
+    scanner = absolute_file(arguments.scanner)
+    build_info = scanner_build_info(scanner)
+    build_matches_plan = (
+        build_info.get("source_commit") == plan["source_commit"]
+        and not build_info.get("source_dirty", True)
+    )
+    if not build_matches_plan \
+            and not arguments.allow_scanner_provenance_mismatch:
+        raise ScanError(
+            "scanner build is dirty or does not match the planned source commit"
+        )
+    tasks = [task for task in plan["tasks"] if task["chrom"] == region["chrom"]]
+    if not tasks:
+        raise ScanError(f"scan plan has no tasks for chromosome {region['chrom']}")
+    print(
+        f"I: Chromosome worker will process {len(tasks)} motif batches for "
+        f"{region['chrom']} from node-local FASTA.",
+        file=sys.stderr,
+    )
+    active: dict[subprocess.Popen[str], tuple[int, dict[str, Any]]] = {}
+    next_task = 0
+    failed_task: str | None = None
+
+    def worker_progress(_signal_number: int, _frame: Any) -> None:
+        for process in active:
+            if process.poll() is None:
+                try:
+                    process.send_signal(signal.SIGUSR1)
+                    return
+                except (ProcessLookupError, OSError):
+                    # The batch may finish between poll() and signal delivery.
+                    continue
+        reporter.emit()
+
+    if hasattr(signal, "SIGUSR1"):
+        signal.signal(signal.SIGUSR1, worker_progress)
+
+    while active or (next_task < len(tasks) and failed_task is None):
+        while failed_task is None \
+                and next_task < len(tasks) \
+                and len(active) < arguments.batch_workers:
+            task = tasks[next_task]
+            batch_index = next_task + 1
+            check_free_space(run_root, plan["minimum_free_gib"])
+            check_free_space(
+                scratch, arguments.minimum_scratch_free_gib, "Scratch filesystem"
+            )
+            reporter.set_phase(
+                "motif_batch",
+                current_path=staged_fasta,
+                current_task=f"{task['task_id']}:{batch_index}/{len(tasks)}",
+            )
+            print(
+                f"I: Chromosome {region['chrom']} batch {batch_index}/{len(tasks)}: "
+                f"{task['task_id']}",
+                file=sys.stderr,
+            )
+            command = [
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "run-task",
+                "--run-root", str(run_root),
+                "--task-id", task["task_id"],
+                "--scanner", str(scanner),
+                "--duckdb", arguments.duckdb,
+                "--duckdb-memory-limit", arguments.duckdb_memory_limit,
+                "--duckdb-temp-directory", str(scratch / "duckdb" / task["task_id"]),
+                "--genome-override", str(staged_fasta),
+                "--fasta-index-override", str(stage_result["staged_fasta_index"]),
+                "--staged-input-metadata", str(scratch / "staged_sequence.json"),
+            ]
+            if arguments.scratch_task_output:
+                command.extend(["--task-work-directory", str(scratch / "task-work")])
+            if arguments.allow_local:
+                command.append("--allow-local")
+            if arguments.allow_scanner_provenance_mismatch:
+                command.append("--allow-scanner-provenance-mismatch")
+            process = subprocess.Popen(command, text=True)
+            active[process] = (batch_index, task)
+            next_task += 1
+
+        if not active:
+            break
+        time.sleep(0.1)
+        for process, (_batch_index, task) in list(active.items()):
+            return_code = process.poll()
+            if return_code is None:
+                continue
+            del active[process]
+            if return_code != 0 and failed_task is None:
+                failed_task = task["task_id"]
+
+    if failed_task is not None:
+        raise ScanError(
+            f"chromosome worker stopped after failed batch {failed_task}; "
+            "completed batches remain reusable"
+        )
+
+    reporter.set_phase("chromosome_complete", current_path=staged_fasta)
+    print(
+        f"I: Completed all motif batches for chromosome {region['chrom']}; "
+        "node-local files are left for the cluster scratch lifecycle.",
+        file=sys.stderr,
+    )
 
 
 def write_json_lines(path: Path, rows: Iterable[dict[str, Any]]) -> None:
@@ -903,18 +1371,18 @@ def validate_existing_metadata(
     dataset_names: Iterable[str],
 ) -> None:
     for name in dataset_names:
-        existing = existing_root / name / "**" / "*.parquet"
-        staged = staged_root / name / "**" / "*.parquet"
+        existing = existing_root / name / "part-000000.parquet"
+        staged = staged_root / name / "part-000000.parquet"
         query = f"""
 SELECT COUNT(*)::BIGINT AS differences
 FROM (
-    (SELECT * FROM read_parquet({sql_string(existing)}, union_by_name=true)
+            (SELECT * FROM read_parquet({sql_string(existing)})
      EXCEPT ALL
-     SELECT * FROM read_parquet({sql_string(staged)}, union_by_name=true))
+     SELECT * FROM read_parquet({sql_string(staged)}))
     UNION ALL
-    (SELECT * FROM read_parquet({sql_string(staged)}, union_by_name=true)
+    (SELECT * FROM read_parquet({sql_string(staged)})
      EXCEPT ALL
-     SELECT * FROM read_parquet({sql_string(existing)}, union_by_name=true))
+     SELECT * FROM read_parquet({sql_string(existing)}))
 );
 """
         rows = run_duckdb_json(duckdb, query)
@@ -922,6 +1390,24 @@ FROM (
             raise ScanError(
                 f"existing final metadata differs from staged {name}: {existing_root}"
             )
+
+
+def build_catalog_database(duckdb: str, package: Path, database: Path,
+                           progress: OperationProgress | None = None) -> None:
+    if database.exists():
+        raise ScanError(f"refusing to replace DuckDB catalog: {database}")
+    schema = Path(__file__).resolve().parent.parent / "sql" / "genome_scan_schema.sql"
+    if progress is not None:
+        progress.set_phase("duckdb_catalog", current_path=database)
+    process = subprocess.run(
+        [duckdb, str(database), "-bail", "-f", str(schema)],
+        cwd=package,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if process.returncode != 0:
+        raise ScanError(process.stderr.strip() or "could not build DuckDB query index")
 
 
 def validate_existing_database(
@@ -970,15 +1456,36 @@ def finalize(arguments: argparse.Namespace) -> None:
     plan, _, plan_sha256 = load_plan(run_root)
     package = run_root / "package"
     manifest_path = package / "manifest.json"
+    if shutil.which(arguments.duckdb) is None:
+        raise ScanError(f"DuckDB executable not found: {arguments.duckdb}")
     if manifest_path.exists():
         manifest = json_read(manifest_path)
         if manifest.get("plan_sha256") != plan_sha256:
             raise ScanError("existing manifest belongs to a different scan plan")
+        expected_files = manifest.get("file_count")
+        expected_hits = manifest.get("emitted_hit_count")
+        if not isinstance(expected_files, int) or not isinstance(expected_hits, int):
+            raise ScanError("existing manifest lacks file or emitted-hit totals")
+        database_name = manifest.get("database") or "jaspar_genome_scan.duckdb"
+        database = package / str(database_name)
+        if not database.is_file():
+            raise ScanError(f"finalized DuckDB catalog is absent: {database}")
+        validate_existing_database(
+            arguments.duckdb,
+            database,
+            package,
+            plan,
+            expected_files,
+            expected_hits,
+        )
         print(f"I: Reusing finalized package: {package}", file=sys.stderr)
         return
-    if shutil.which(arguments.duckdb) is None:
-        raise ScanError(f"DuckDB executable not found: {arguments.duckdb}")
 
+    reporter = OperationProgress("task_inventory")
+    reporter.install()
+    reporter.files_total = 2 * sum(
+        task["motif_count"] for task in plan["tasks"]
+    )
     task_results: list[dict[str, Any]] = []
     missing: list[str] = []
     for task in plan["tasks"]:
@@ -990,6 +1497,8 @@ def finalize(arguments: argparse.Namespace) -> None:
         result = json_read(result_path)
         validate_promoted_task(task_path, result, task, plan, plan_sha256)
         task_results.append(result)
+        reporter.files_complete += len(result["inventory"])
+        reporter.bytes_complete += sum(row["bytes"] for row in result["inventory"])
     if missing:
         raise ScanError(
             f"cannot finalize: {len(missing)} of {len(plan['tasks'])} tasks are missing"
@@ -1000,6 +1509,15 @@ def finalize(arguments: argparse.Namespace) -> None:
     scanner_sha256s = {result.get("scanner_sha256") for result in task_results}
     if None in scanner_sha256s or len(scanner_sha256s) != 1:
         raise ScanError("promoted tasks were produced by different scanner binaries")
+    scanner_builds = {
+        json.dumps(result.get("scanner_build"), sort_keys=True)
+        for result in task_results if result.get("scanner_build") is not None
+    }
+    if len(scanner_builds) > 1:
+        raise ScanError("promoted tasks report different scanner builds")
+    scanner_build = (
+        json.loads(next(iter(scanner_builds))) if scanner_builds else None
+    )
     for result in task_results:
         for row in result["inventory"]:
             key = (row["motif_id"], row["chrom"], row["strand"])
@@ -1059,6 +1577,13 @@ def finalize(arguments: argparse.Namespace) -> None:
                 "completed_at_utc": result["completed_at_utc"],
                 "source_commit": result["source_commit"],
                 "scanner_sha256": result["scanner_sha256"],
+                "scanner_build_json": (
+                    json.dumps(result.get("scanner_build"), sort_keys=True)
+                    if result.get("scanner_build") is not None else None
+                ),
+                "scanner_source_commit_matches_plan": result.get(
+                    "scanner_source_commit_matches_plan"
+                ),
             }
         )
     scan_run = {
@@ -1085,6 +1610,14 @@ def finalize(arguments: argparse.Namespace) -> None:
         "task_count": len(scan_tasks),
         "file_count": len(inventory),
         "emitted_hit_count": sum(row["emitted_hits"] for row in inventory),
+        "parquet_bytes": sum(row["bytes"] for row in inventory),
+        "scanner_sha256": next(iter(scanner_sha256s)),
+        "scanner_build_json": (
+            json.dumps(scanner_build, sort_keys=True)
+            if scanner_build is not None else None
+        ),
+        "duckdb_version": duckdb_build_info(arguments.duckdb),
+        "finalization_validation_mode": "exact_inventory_size_mtime_when_available",
     }
     datasets = {
         "motif_set": [motif_set],
@@ -1102,19 +1635,8 @@ def finalize(arguments: argparse.Namespace) -> None:
         write_json_lines(source, rows)
         parquet_from_json(arguments.duckdb, source, destination)
 
-    task_data_link = staging_package / "task_data"
-    task_data_link.symlink_to((package / "task_data").resolve(), target_is_directory=True)
-    schema = Path(__file__).resolve().parent.parent / "sql" / "genome_scan_schema.sql"
     database = staging_package / "jaspar_genome_scan.duckdb"
-    process = subprocess.run(
-        [arguments.duckdb, str(database), "-bail", "-f", str(schema)],
-        cwd=staging_package,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if process.returncode != 0:
-        raise ScanError(process.stderr.strip() or "could not build DuckDB query index")
+    build_catalog_database(arguments.duckdb, staging_package, database, reporter)
 
     manifest = {
         "schema_version": 1,
@@ -1128,6 +1650,12 @@ def finalize(arguments: argparse.Namespace) -> None:
         "task_count": len(scan_tasks),
         "file_count": len(inventory),
         "emitted_hit_count": scan_run["emitted_hit_count"],
+        "parquet_bytes": scan_run["parquet_bytes"],
+        "scanner_sha256": next(iter(scanner_sha256s)),
+        "scanner_build": scanner_build,
+        "duckdb_version": scan_run["duckdb_version"],
+        "finalization_validation_mode": scan_run["finalization_validation_mode"],
+        "checksum_audit": "verification/checksum_audit.json",
         "database": database.name,
     }
     staged_manifest = staging_package / "manifest.json"
@@ -1157,6 +1685,274 @@ def finalize(arguments: argparse.Namespace) -> None:
     print(f"I: Finalized sparse scan package: {package}", file=sys.stderr)
 
 
+def rebuild_catalog(arguments: argparse.Namespace) -> None:
+    run_root = arguments.run_root.expanduser().resolve()
+    plan, _, _ = load_plan(run_root)
+    package = run_root / "package"
+    metadata = package / "tables" / "jaspar2026" / "scan_file_inventory"
+    if not metadata.is_dir():
+        raise ScanError(f"finalized scan metadata is absent: {metadata}")
+    if shutil.which(arguments.duckdb) is None:
+        raise ScanError(f"DuckDB executable not found: {arguments.duckdb}")
+    output = (
+        arguments.output.expanduser().resolve()
+        if arguments.output is not None
+        else package / "jaspar_genome_scan.rebuilt.duckdb"
+    )
+    reporter = OperationProgress("duckdb_catalog")
+    reporter.install()
+    build_catalog_database(arguments.duckdb, package, output, reporter)
+    expected_files = 2 * sum(task["motif_count"] for task in plan["tasks"])
+    query = (
+        "SELECT COUNT(*)::BIGINT AS files, "
+        "COALESCE(SUM(emitted_hits), 0)::BIGINT AS hits "
+        "FROM scan_file_inventory;"
+    )
+    process = subprocess.run(
+        [arguments.duckdb, "-readonly", "-json", str(output), "-c", query],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if process.returncode != 0:
+        raise ScanError(process.stderr.strip() or "rebuilt catalog validation failed")
+    rows = json.loads(process.stdout or "[]")
+    if len(rows) != 1 or rows[0].get("files") != expected_files:
+        raise ScanError("rebuilt catalog inventory does not match the immutable plan")
+    print(
+        f"I: Built metadata-only DuckDB catalog without opening hit payloads: {output}",
+        file=sys.stderr,
+    )
+
+
+def promoted_inventory(
+    run_root: Path,
+    plan: dict[str, Any],
+    plan_sha256: str,
+) -> list[tuple[dict[str, Any], dict[str, Any], Path]]:
+    package = run_root / "package"
+    entries: list[tuple[dict[str, Any], dict[str, Any], Path]] = []
+    for task in plan["tasks"]:
+        task_root = package / "task_data" / f"task_id={task['task_id']}"
+        result_path = task_root / "task_result.json"
+        if not result_path.is_file():
+            raise ScanError(f"promoted task result is missing: {result_path}")
+        result = json_read(result_path)
+        validate_promoted_task(task_root, result, task, plan, plan_sha256)
+        for row in result["inventory"]:
+            entries.append((task, row, task_root / row["output_relative_path"]))
+    return entries
+
+
+def inventory_fingerprint(
+    entries: Iterable[tuple[dict[str, Any], dict[str, Any], Path]],
+    *,
+    include_current_stat: bool = False,
+) -> str:
+    digest = hashlib.sha256()
+    for task, row, path in entries:
+        fields: list[object] = [
+            task["task_id"], row["output_relative_path"], row["bytes"], row["sha256"]
+        ]
+        if include_current_stat:
+            metadata = path.stat()
+            fields.extend([metadata.st_size, metadata.st_mtime_ns])
+        digest.update(("\t".join(map(str, fields)) + "\n").encode("utf-8"))
+    return digest.hexdigest()
+
+
+def read_verification_checkpoints(
+    checkpoint_directory: Path,
+    plan_sha256: str,
+    inventory_sha256: str,
+) -> dict[tuple[str, str, str, int, int], dict[str, Any]]:
+    verified: dict[tuple[str, str, str, int, int], dict[str, Any]] = {}
+    if not checkpoint_directory.is_dir():
+        return verified
+    for path in sorted(checkpoint_directory.iterdir()):
+        if not path.is_file() or not path.name.startswith("checksum-") \
+                or path.suffix != ".jsonl":
+            continue
+        with path.open(encoding="utf-8") as stream:
+            for line_number, line in enumerate(stream, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    print(
+                        f"W: Ignoring incomplete checkpoint line {line_number} in {path}",
+                        file=sys.stderr,
+                    )
+                    break
+                if row.get("plan_sha256") != plan_sha256 \
+                        or row.get("inventory_sha256") != inventory_sha256 \
+                        or row.get("state") != "verified":
+                    continue
+                key = (
+                    row["task_id"], row["output_relative_path"], row["sha256"],
+                    row["bytes"], row["file_mtime_ns"],
+                )
+                verified[key] = row
+    return verified
+
+
+def verification_status_path(package: Path) -> Path:
+    return package / "verification" / "progress.json"
+
+
+def write_verification_status(
+    package: Path,
+    reporter: OperationProgress,
+    state: str,
+    inventory_sha256: str,
+) -> None:
+    json_write_atomic(
+        verification_status_path(package),
+        {
+            "state": state,
+            "updated_at_utc": utc_now(),
+            "phase": reporter.phase,
+            "files_complete": reporter.files_complete,
+            "files_total": reporter.files_total,
+            "bytes_complete": reporter.bytes_complete,
+            "bytes_total": reporter.bytes_total,
+            "current_task": reporter.current_task,
+            "current_path": reporter.current_path,
+            "inventory_sha256": inventory_sha256,
+        },
+    )
+
+
+def verify_checksums(arguments: argparse.Namespace) -> None:
+    if not arguments.checksums:
+        raise ScanError("verify currently requires --checksums")
+    reporter = OperationProgress("checksum_preflight")
+    reporter.install()
+    run_root = arguments.run_root.expanduser().resolve()
+    plan, _, plan_sha256 = load_plan(run_root)
+    package = run_root / "package"
+    entries = promoted_inventory(run_root, plan, plan_sha256)
+    inventory_sha256 = inventory_fingerprint(entries)
+    stat_sha256 = inventory_fingerprint(entries, include_current_stat=True)
+    audit_path = package / "verification" / "checksum_audit.json"
+    if audit_path.is_file():
+        audit = json_read(audit_path)
+        if audit.get("plan_sha256") == plan_sha256 \
+                and audit.get("inventory_sha256") == inventory_sha256 \
+                and audit.get("current_stat_sha256") == stat_sha256 \
+                and audit.get("state") == "complete":
+            print(f"I: Reusing complete checksum audit: {audit_path}", file=sys.stderr)
+            return
+        raise ScanError(
+            f"existing checksum audit no longer matches package state: {audit_path}"
+        )
+
+    checkpoint_directory = package / "verification" / "checkpoints"
+    checkpoint_directory.mkdir(parents=True, exist_ok=True)
+    checkpoints = read_verification_checkpoints(
+        checkpoint_directory, plan_sha256, inventory_sha256
+    )
+    reporter.set_phase("checksum_audit")
+    reporter.files_total = len(entries)
+    reporter.bytes_total = sum(row["bytes"] for _, row, _ in entries)
+    for task, row, path in entries:
+        metadata = path.stat()
+        key = (
+            task["task_id"], row["output_relative_path"], row["sha256"],
+            row["bytes"], metadata.st_mtime_ns,
+        )
+        if key in checkpoints:
+            reporter.files_complete += 1
+            reporter.bytes_complete += row["bytes"]
+
+    segment = checkpoint_directory / (
+        f"checksum-{utc_now().replace(':', '')}-pid-{os.getpid()}.jsonl"
+    )
+    newly_verified = 0
+    print(
+        f"I: Checksum audit started with {reporter.files_complete}/"
+        f"{reporter.files_total} files already checkpointed.",
+        file=sys.stderr,
+        flush=True,
+    )
+    with segment.open("x", encoding="utf-8") as stream:
+        for task, row, path in entries:
+            metadata = path.stat()
+            key = (
+                task["task_id"], row["output_relative_path"], row["sha256"],
+                row["bytes"], metadata.st_mtime_ns,
+            )
+            if key in checkpoints:
+                continue
+            if arguments.max_files is not None \
+                    and newly_verified >= arguments.max_files:
+                break
+            reporter.current_task = task["task_id"]
+            reporter.current_path = str(path)
+            reporter.current_file_bytes = 0
+            observed = sha256_file(
+                path,
+                reporter,
+                arguments.max_read_mib_per_second,
+            )
+            if observed != row["sha256"]:
+                write_verification_status(
+                    package, reporter, "failed", inventory_sha256
+                )
+                raise ScanError(f"checksum mismatch: {path}")
+            checkpoint = {
+                "state": "verified",
+                "verified_at_utc": utc_now(),
+                "plan_sha256": plan_sha256,
+                "inventory_sha256": inventory_sha256,
+                "task_id": task["task_id"],
+                "output_relative_path": row["output_relative_path"],
+                "bytes": row["bytes"],
+                "file_mtime_ns": metadata.st_mtime_ns,
+                "sha256": observed,
+            }
+            stream.write(json.dumps(checkpoint, sort_keys=True, separators=(",", ":")))
+            stream.write("\n")
+            newly_verified += 1
+            reporter.files_complete += 1
+            reporter.bytes_complete += row["bytes"]
+            reporter.current_file_bytes = 0
+            if newly_verified % arguments.checkpoint_files == 0:
+                stream.flush()
+                os.fsync(stream.fileno())
+                write_verification_status(
+                    package, reporter, "running", inventory_sha256
+                )
+        stream.flush()
+        os.fsync(stream.fileno())
+
+    if reporter.files_complete != reporter.files_total:
+        write_verification_status(package, reporter, "partial", inventory_sha256)
+        print(
+            f"I: Checksum audit checkpointed {reporter.files_complete}/"
+            f"{reporter.files_total} files; rerun the same command to resume.",
+            file=sys.stderr,
+        )
+        return
+
+    reporter.set_phase("checksum_audit_complete", current_path="none", current_task="none")
+    audit = {
+        "schema_version": 1,
+        "state": "complete",
+        "verification_mode": "sha256_all_inventory_files",
+        "completed_at_utc": utc_now(),
+        "plan_sha256": plan_sha256,
+        "inventory_sha256": inventory_sha256,
+        "current_stat_sha256": stat_sha256,
+        "file_count": reporter.files_total,
+        "bytes": reporter.bytes_total,
+    }
+    json_write_new(audit_path, audit)
+    write_verification_status(package, reporter, "complete", inventory_sha256)
+    print(f"I: Completed checksum audit: {audit_path}", file=sys.stderr)
+
+
 def status(arguments: argparse.Namespace) -> None:
     run_root = arguments.run_root.expanduser().resolve()
     plan, _, _ = load_plan(run_root)
@@ -1182,6 +1978,28 @@ def status(arguments: argparse.Namespace) -> None:
     print(f"emitted_hits\t{emitted}")
     print(f"parquet_bytes\t{bytes_written}")
     print(f"finalized\t{str((package / 'manifest.json').is_file()).lower()}")
+    verification_path = verification_status_path(package)
+    if verification_path.is_file():
+        verification = json_read(verification_path)
+        print(f"checksum_verification_state\t{verification.get('state', 'unknown')}")
+        print(
+            "checksum_files_complete\t"
+            f"{verification.get('files_complete', 0)}"
+        )
+        print(
+            "checksum_files_total\t"
+            f"{verification.get('files_total', 0)}"
+        )
+        print(
+            "checksum_bytes_complete\t"
+            f"{verification.get('bytes_complete', 0)}"
+        )
+        print(
+            "checksum_bytes_total\t"
+            f"{verification.get('bytes_total', 0)}"
+        )
+    else:
+        print("checksum_verification_state\tnot_started")
 
 
 def argument_parser() -> argparse.ArgumentParser:
@@ -1243,15 +2061,111 @@ def argument_parser() -> argparse.ArgumentParser:
         "--duckdb-temp-directory", type=Path,
         help="optional job-local spill directory; promoted data never uses it",
     )
+    task_parser.add_argument(
+        "--task-work-directory", type=Path,
+        help=(
+            "optional scratch root for scanner output and validation; verified "
+            "files are copied once into durable staging before promotion"
+        ),
+    )
+    task_parser.add_argument(
+        "--genome-override", type=Path,
+        help="verified chromosome-only FASTA staged by run-chromosome",
+    )
+    task_parser.add_argument(
+        "--fasta-index-override", type=Path,
+        help="index paired with --genome-override",
+    )
+    task_parser.add_argument(
+        "--staged-input-metadata", type=Path,
+        help="hash and stat record written by the chromosome staging step",
+    )
     task_parser.add_argument("--allow-local", action="store_true", help=argparse.SUPPRESS)
+    task_parser.add_argument(
+        "--allow-scanner-provenance-mismatch", action="store_true",
+        help=(
+            "explicitly permit a dirty build or commit mismatch; the mismatch "
+            "is retained in task and run provenance"
+        ),
+    )
     task_parser.set_defaults(function=run_task)
 
+    chromosome_parser = subparsers.add_parser(
+        "run-chromosome",
+        help="stage one chromosome in scratch and run all of its motif batches",
+    )
+    chromosome_parser.add_argument("--run-root", required=True, type=Path)
+    chromosome_selection = chromosome_parser.add_mutually_exclusive_group(required=True)
+    chromosome_selection.add_argument("--chrom")
+    chromosome_selection.add_argument("--chrom-index", type=int)
+    chromosome_parser.add_argument("--scanner", required=True)
+    chromosome_parser.add_argument("--scratch-directory", required=True, type=Path)
+    chromosome_parser.add_argument("--duckdb", default="duckdb")
+    chromosome_parser.add_argument(
+        "--duckdb-memory-limit", type=duckdb_memory_limit, default="12GB"
+    )
+    chromosome_parser.add_argument(
+        "--minimum-scratch-free-gib", type=nonnegative_float, default=5.0,
+        help="free-space reserve checked before staging and every batch (default: 5)",
+    )
+    chromosome_parser.add_argument(
+        "--batch-workers", type=positive_integer, default=1,
+        help="concurrent motif-batch scanners sharing the staged FASTA (default: 1)",
+    )
+    chromosome_parser.add_argument(
+        "--scratch-task-output", action="store_true",
+        help=(
+            "also validate task Parquet in scratch before durable publication; "
+            "local copies remain until the cluster clears the job directory"
+        ),
+    )
+    chromosome_parser.add_argument(
+        "--allow-local", action="store_true", help=argparse.SUPPRESS
+    )
+    chromosome_parser.add_argument(
+        "--allow-scanner-provenance-mismatch", action="store_true",
+        help="forward the explicit run-task provenance override",
+    )
+    chromosome_parser.set_defaults(function=run_chromosome)
+
     finalize_parser = subparsers.add_parser(
-        "finalize", help="verify every task and publish metadata plus DuckDB index"
+        "finalize",
+        help="check exact task inventories and publish metadata plus DuckDB index",
     )
     finalize_parser.add_argument("--run-root", required=True, type=Path)
     finalize_parser.add_argument("--duckdb", default="duckdb")
     finalize_parser.set_defaults(function=finalize)
+
+    verify_parser = subparsers.add_parser(
+        "verify", help="run a resumable payload-integrity audit"
+    )
+    verify_parser.add_argument("--run-root", required=True, type=Path)
+    verify_parser.add_argument(
+        "--checksums", action="store_true",
+        help="recompute SHA-256 for every exact inventory path",
+    )
+    verify_parser.add_argument(
+        "--max-read-mib-per-second", type=positive_float,
+        help="optional process-wide read-rate ceiling for the shared filesystem",
+    )
+    verify_parser.add_argument(
+        "--checkpoint-files", type=positive_integer, default=100,
+        help="flush durable resume state after this many new files (default: 100)",
+    )
+    verify_parser.add_argument(
+        "--max-files", type=positive_integer,
+        help="verify at most this many new files, then exit with resumable state",
+    )
+    verify_parser.set_defaults(function=verify_checksums)
+
+    catalog_parser = subparsers.add_parser(
+        "build-catalog",
+        help="build a new metadata-only DuckDB catalog without opening hit Parquet",
+    )
+    catalog_parser.add_argument("--run-root", required=True, type=Path)
+    catalog_parser.add_argument("--output", type=Path)
+    catalog_parser.add_argument("--duckdb", default="duckdb")
+    catalog_parser.set_defaults(function=rebuild_catalog)
 
     status_parser = subparsers.add_parser(
         "status", help="report completed tasks, retained failures, rows, and bytes"
@@ -1267,7 +2181,7 @@ def main() -> int:
     try:
         arguments.function(arguments)
         return 0
-    except (ScanError, OSError, subprocess.SubprocessError) as error:
+    except (ScanError, StageError, OSError, subprocess.SubprocessError) as error:
         print(f"E: {error}", file=sys.stderr)
         return 1
 

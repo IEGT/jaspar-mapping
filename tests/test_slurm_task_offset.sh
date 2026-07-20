@@ -49,4 +49,47 @@ if SLURM_ARRAY_TASK_ID=0 \
     exit 1
 fi
 
+mkdir -p "$temporary/prepared-run/plan"
+cat > "$temporary/prepared-run/plan/scan_plan.json" <<'EOF'
+{
+  "sequence_regions": [
+    {"chrom": "1", "included_in_scan": true},
+    {"chrom": "2", "included_in_scan": true},
+    {"chrom": "MT", "included_in_scan": false}
+  ]
+}
+EOF
+submission=$(
+    "$repository_root/scripts/submit_genome_scan_slurm.sh" \
+        --run-root "$temporary/prepared-run" \
+        --scanner "$repository_root/pssm_scan" \
+        --source "$repository_root" --max-concurrent 2 --dry-run
+)
+grep -Fq -- '--array=0-1%2' <<< "$submission" || {
+    echo "E: Chromosome submission did not derive its array from the plan." >&2
+    exit 1
+}
+grep -Fq 'run_genome_scan_slurm_chromosome.sh' <<< "$submission" || {
+    echo "E: Chromosome submission omitted the scratch-aware wrapper." >&2
+    exit 1
+}
+
+# A manually submitted finalizer also runs from a Slurm spool copy. With the
+# source tree as its submitted working directory, it must still find the real
+# coordinator rather than looking beside the spool file.
+cp "$repository_root/scripts/run_genome_scan_slurm_finalize.sh" \
+    "$temporary/slurm-spool/finalizer-script"
+chmod +x "$temporary/slurm-spool/finalizer-script"
+(
+    cd "$source_tree"
+    CAPTURE_ARGUMENTS="$capture" PATH="$temporary/bin:/usr/bin:/bin" \
+        "$temporary/slurm-spool/finalizer-script" \
+        --run-root /data/example/run --duckdb /data/example/duckdb
+)
+manager=$(head -n 1 "$capture")
+[[ $manager == "$source_tree/scripts/manage_genome_scan.py" ]] || {
+    echo "E: Spool-copy finalizer resolved the manager as '$manager'." >&2
+    exit 1
+}
+
 echo "Slurm task-offset tests passed."

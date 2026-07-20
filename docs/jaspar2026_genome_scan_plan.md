@@ -92,66 +92,41 @@ the source file changes.
 
 ## Slurm execution
 
-Run at most 20 concurrent one-core tasks. Request 16 GiB per task even though
-the scanner's expected resident set is much smaller: this leaves ample room for
-Arrow and a DuckDB validation database capped at 12 GiB in memory. The
-validation database is transient; motif hits remain direct Parquet output, and
-the final durable DuckDB file is a small catalog of views and inventories rather
-than a materialized copy of all hits.
+Run at most 20 chromosome workers. Each worker copies exactly one chromosome
+from the indexed immutable FASTA on `/data` into its unique node-local
+`/scratch` directory, verifies its length and planned sequence SHA-256, creates
+a local `.fai`, and reuses that local sequence for all 43 motif batches. The
+source index supplies the byte offset for extraction; the local index describes
+the newly wrapped one-record FASTA to the unchanged scanner. Neither index
+affects scoring.
 
-All durable staging and promoted results stay below `/data/sm718`. When a node
-offers writable `/scratch`, the wrapper uses a unique job/restart directory
-there only for `TMPDIR` and possible DuckDB spill. It never relies on scratch
-for a completed task, and no upfront scratch distribution is required. Requeue
-creates a new durable attempt directory. A task is promoted only after every
-motif/orientation file in its batch passes row, coordinate, score, configuration,
-checksum, and window-accounting validation.
+Start with one scanner process and 16 GiB per chromosome worker. The scanner's
+resident set is smaller, but this leaves room for Arrow and DuckDB validation.
+`--batch-workers 2` or `4` can use more cores against the same staged FASTA;
+benchmark these settings first and scale the memory request with the concurrent
+children. Direct Parquet output and all durable staging remain below
+`/data/sm718`.
 
 ```sh
-mkdir -p "$RUN/logs"
-TASK_COUNT=$(python3 - "$RUN/plan/scan_plan.json" <<'PY'
-import json, sys
-print(len(json.load(open(sys.argv[1], encoding='utf-8'))['tasks']))
-PY
-)
-
-FIRST_TASKS=$(((TASK_COUNT + 1) / 2))
-SECOND_OFFSET=$FIRST_TASKS
-SECOND_TASKS=$((TASK_COUNT - SECOND_OFFSET))
-
-JOB_ID_A=$(sbatch --parsable \
-  --account=cluster --partition=requeue --requeue \
-  --array="0-$((FIRST_TASKS - 1))%10" \
-  --nodes=1 --ntasks=1 --cpus-per-task=1 --mem=16G --time=1-00:00:00 \
-  --chdir="$SOURCE" \
-  --output="$RUN/logs/slurm-%A_%a.out" \
-  --error="$RUN/logs/slurm-%A_%a.err" \
-  scripts/run_genome_scan_slurm_task.sh \
+scripts/submit_genome_scan_slurm.sh \
   --run-root "$RUN" --scanner "$SOURCE/pssm_scan_parquet" \
-  --duckdb-memory-limit 12GB)
-
-JOB_ID_B=$(sbatch --parsable \
-  --account=cluster --partition=requeue --requeue \
-  --array="0-$((SECOND_TASKS - 1))%10" \
-  --nodes=1 --ntasks=1 --cpus-per-task=1 --mem=16G --time=1-00:00:00 \
-  --chdir="$SOURCE" \
-  --output="$RUN/logs/slurm-%A_%a.out" \
-  --error="$RUN/logs/slurm-%A_%a.err" \
-  scripts/run_genome_scan_slurm_task.sh \
-  --run-root "$RUN" --scanner "$SOURCE/pssm_scan_parquet" \
-  --task-offset "$SECOND_OFFSET" --duckdb-memory-limit 12GB)
-printf 'Submitted %s and %s\n' "$JOB_ID_A" "$JOB_ID_B"
+  --account cluster --partition requeue \
+  --max-concurrent 20 --batch-workers 1 \
+  --memory 16G --time 0-08:00:00 --finalize --dry-run
 ```
 
-The two halves accommodate Haumea's `MaxArraySize=1001`. Each is throttled to
-10 live elements, so together they run at most 20 tasks; `--task-offset` maps
-the second array's local indices back to the immutable global task plan.
+Inspect the rendered command, then remove `--dry-run`. The chromosome array has
+only 25 elements and therefore no longer approaches Haumea's
+`MaxArraySize=1001`. The original task-array wrapper remains available for
+targeted retries and compatibility with the completed v3 run.
 
 No task removes or replaces a prior attempt. Failed attempts remain below
 `$RUN/staging/TASK_ID/`; successful task packages are atomically renamed below
 `$RUN/package/task_data/task_id=TASK_ID/`. A retry recognizes and reuses only a
-promoted task whose plan, completion record, file sizes, and SHA-256 checksums
-all agree.
+promoted task whose plan, completion record, exact paths, file sizes, recorded
+modification times where available, and provenance agree. The SHA-256 was
+computed after task-time Parquet validation; a later full reread is the explicit
+audit described below.
 
 ## Status and SIGUSR1
 
@@ -162,8 +137,8 @@ scripts/manage_genome_scan.py status --run-root "$RUN"
 ```
 
 Request one live progress line from an array element with Slurm's signal
-delivery (the wrapper `exec`s the coordinator, which forwards `SIGUSR1` to the
-scanner):
+delivery. A chromosome supervisor forwards the signal to exactly one active
+batch process:
 
 ```sh
 scancel --signal=USR1 --batch "${JOB_ID}_7"
@@ -184,19 +159,34 @@ Only finalize after `tasks_complete == tasks_total`:
 
 ```sh
 scripts/manage_genome_scan.py finalize --run-root "$RUN"
-cd "$RUN/package"
-duckdb jaspar_genome_scan.duckdb \
-  -c 'SELECT * FROM scan_inventory_summary;'
-duckdb jaspar_genome_scan.duckdb \
-  -c 'SELECT * FROM scan_task_completeness WHERE NOT complete;'
+scripts/query_genome_scan.py summary --package "$RUN/package"
+scripts/query_genome_scan.py sql --package "$RUN/package" \
+  --query 'SELECT * FROM scan_task_completeness WHERE NOT complete;'
 ```
 
 `manifest.json` is written last and is the package completion marker. If a
 finalizer is interrupted before that marker, a retry accepts existing metadata
 only after semantic equality checks and accepts an existing DuckDB index only
 after its run/file/hit inventory agrees; it never deletes a partial attempt.
+Finalization does not reread the complete hit payload. Request that separately,
+with resumable checkpoints and an optional shared-filesystem rate ceiling:
+
+```sh
+scripts/manage_genome_scan.py verify --run-root "$RUN" --checksums \
+  --max-read-mib-per-second 125
+```
+
+The DuckDB catalog physically contains its small metadata tables and does not
+bind the package-wide hit tree. Use `query_genome_scan.py` to resolve exact
+motif/chromosome files through the inventory. Catalog metadata therefore works
+from any current directory and catalog creation no longer inspects every hit
+footer.
 The raw query contract is
 [`../sql/genome_scan_schema.sql`](../sql/genome_scan_schema.sql).
+The operational details and acceptance tests are in
+[`scanner_maintenance.md`](scanner_maintenance.md), and the completed human
+run is recorded in
+[`jaspar2026_grch38_sparse_v3_run_report.md`](jaspar2026_grch38_sparse_v3_run_report.md).
 
 ## Mouse, rat, and synteny
 

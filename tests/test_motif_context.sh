@@ -204,6 +204,71 @@ SELECT CASE WHEN EXISTS (
        OR partner_minimum_score <> 0
 ) THEN error('pair feature lost genome identity or score floors') END;
 
+-- The pair model joins on anchor_hit_id, so a context package must contain
+-- exactly one feature row for each configuration-aware anchor identity.
+SELECT CASE WHEN EXISTS (
+    SELECT anchor_hit_id
+    FROM tp73_pair_feature
+    GROUP BY anchor_hit_id
+    HAVING COUNT(*) <> 1
+) THEN error('tp73_pair_feature anchor_hit_id is not unique') END;
+
+-- Partner-locus orientation classes form an exhaustive, exclusive partition.
+-- Counts are added here; subtracting them would invert the intended invariant.
+SELECT CASE WHEN EXISTS (
+    SELECT 1
+    FROM tp73_pair_feature
+    WHERE n_tandem_tp73_partner_loci < 0
+       OR n_same_orientation_partner_loci < 0
+       OR n_opposite_orientation_partner_loci < 0
+       OR n_ambiguous_orientation_partner_loci < 0
+       OR n_tandem_tp73_partner_loci <>
+            n_same_orientation_partner_loci
+            + n_opposite_orientation_partner_loci
+            + n_ambiguous_orientation_partner_loci
+       OR pair_class NOT IN (
+            'singleton',
+            'tandem_same_orientation',
+            'tandem_opposite_orientation',
+            'tandem_mixed_orientation',
+            'tandem_orientation_ambiguous'
+       )
+       OR (pair_class = 'singleton') <>
+            (n_tandem_tp73_partner_loci = 0)
+       OR (pair_class = 'tandem_orientation_ambiguous') <>
+            (n_tandem_tp73_partner_loci > 0
+             AND n_ambiguous_orientation_partner_loci > 0)
+       OR (pair_class = 'tandem_mixed_orientation') <>
+            (n_ambiguous_orientation_partner_loci = 0
+             AND n_same_orientation_partner_loci > 0
+             AND n_opposite_orientation_partner_loci > 0)
+       OR (pair_class = 'tandem_same_orientation') <>
+            (n_ambiguous_orientation_partner_loci = 0
+             AND n_same_orientation_partner_loci > 0
+             AND n_opposite_orientation_partner_loci = 0)
+       OR (pair_class = 'tandem_opposite_orientation') <>
+            (n_ambiguous_orientation_partner_loci = 0
+             AND n_same_orientation_partner_loci = 0
+             AND n_opposite_orientation_partner_loci > 0)
+       OR has_multiple_tandem_partner_loci <>
+            (n_tandem_tp73_partner_loci > 1)
+) THEN error('pair_class / partner-locus counts are inconsistent') END;
+
+-- NULL means that no partner exists. Models and exports rely on zero partners
+-- remaining distinguishable from a partner whose measured score is zero.
+SELECT CASE WHEN EXISTS (
+    SELECT 1
+    FROM tp73_pair_feature
+    WHERE (pair_class = 'singleton' AND (
+              best_partner_score IS NOT NULL
+           OR best_partner_pwm_relative_score IS NOT NULL
+           OR best_pair_min_score IS NOT NULL
+           OR best_pair_sum_score IS NOT NULL
+           OR best_pair_min_pwm_relative_score IS NOT NULL
+          ))
+       OR (pair_class <> 'singleton' AND best_partner_score IS NULL)
+) THEN error('singleton/non-singleton partner-score nullability is inconsistent') END;
+
 SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM tp73_context_pair_feature
     WHERE anchor_start = 140 AND anchor_strand = '+'

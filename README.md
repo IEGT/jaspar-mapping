@@ -118,7 +118,9 @@ so the inner loop avoids per-base hash-map lookups. Cluster-specific compiler
 flags can be passed without editing the Makefile, for example
 `make CXXOPTFLAGS="-march=x86-64-v3"`. Link-time optimization is opt-in via
 `make LTO=1`, and can be combined with target-specific flags, for example
-`make LTO=1 CXXOPTFLAGS="-march=x86-64-v3"`. The chromosome-wide all-motif target
+`make LTO=1 CXXOPTFLAGS="-march=x86-64-v3"`. Scanner targets rebuild all of
+their translation units so these settings and embedded provenance stay
+coherent. The chromosome-wide all-motif target
 defaults to BED coordinates plus matched sequences (`SCAN_CHR_FLAGS`), matching
 the Parquet schema and later half-site architecture derivation. Slurm-level
 chromosome or motif-family fan-out remains the default parallelization strategy; OpenMP and direct
@@ -195,6 +197,41 @@ accept `--regions`; use a chromosome with optional `--from`/`--to` bounds.
 The requeue-safe whole-genome planner, per-task validator, immutable inventories,
 SIGUSR1 workflow, and human/mouse/rat identity contract are documented in
 [`docs/jaspar2026_genome_scan_plan.md`](docs/jaspar2026_genome_scan_plan.md).
+The maintenance contract for node-local chromosome staging, fast finalization,
+resumable checksums, portable catalogs, and exact-file queries is documented in
+[`docs/scanner_maintenance.md`](docs/scanner_maintenance.md). The observed GRCh38
+v3 scale and original finalizer costs are recorded in
+[`docs/jaspar2026_grch38_sparse_v3_run_report.md`](docs/jaspar2026_grch38_sparse_v3_run_report.md).
+
+For production provenance, build from the clean commit named in the immutable
+plan and inspect `./pssm_scan_parquet --version-json`. The coordinator rejects a
+dirty or commit-mismatched scanner unless an explicit diagnostic override is
+given. A chromosome-oriented Slurm run can be rendered without submission:
+
+```sh
+scripts/submit_genome_scan_slurm.sh \
+  --run-root "$RUN" --scanner "$PWD/pssm_scan_parquet" \
+  --max-concurrent 20 --batch-workers 1 --finalize --dry-run
+```
+
+Each array element copies one indexed chromosome from the durable FASTA into
+node-local scratch, verifies its planned sequence digest, and reuses that copy
+across all motif batches for the chromosome. The source `.fai` supplies the
+byte offset; a new tiny `.fai` describes the staged one-record FASTA to the
+unchanged scanner. Neither index affects motif scores.
+
+Finalized metadata can be inspected from any working directory without binding
+every hit file:
+
+```sh
+scripts/query_genome_scan.py summary --package "$RUN/package"
+scripts/query_genome_scan.py hits --package "$RUN/package" \
+  --motif MA0861.2 --chrom 1 --minimum-score 0 --limit 20
+```
+
+Normal finalization does not reread all Parquet payloads. Use the separate,
+checkpointed `manage_genome_scan.py verify --run-root "$RUN" --checksums`
+operation when a complete SHA-256 audit is required.
 
 To inspect subthreshold scores without writing one row per genomic window, use
 `./pssm_scan --score-distribution` or `make score_distributions_chr1`. The Make

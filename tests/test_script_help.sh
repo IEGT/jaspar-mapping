@@ -13,6 +13,7 @@ cat > "$expected" <<'EOF'
 scripts/analyze_cutandrun_containment.py
 scripts/analyze_dense_cutandrun_coverage.py
 scripts/bedtools_map_serial.sh
+scripts/benchmark_sparse_layout.py
 scripts/build_fasta_index.py
 scripts/build_motif_context.py
 scripts/build_tp73_cutandrun_calibration_duckdb.sh
@@ -29,11 +30,16 @@ scripts/genelists.sh
 scripts/inspect_chr1_dense_dry_run.sh
 scripts/manage_genome_scan.py
 scripts/plot_tp73_score_distributions.R
+scripts/query_genome_scan.py
 scripts/run_chr1_2026_motif_panel.sh
 scripts/run_chr1_patz1_tp73_dry_run.sh
+scripts/run_genome_scan_slurm_chromosome.sh
+scripts/run_genome_scan_slurm_finalize.sh
 scripts/run_genome_scan_slurm_task.sh
 scripts/run_what_is_missing.sh
 scripts/shift_bed.awk
+scripts/stage_fasta_region.py
+scripts/submit_genome_scan_slurm.sh
 scripts/summarize_tp73_cutandrun_threshold.R
 scripts/summarize_tp73_patz1_cutandrun_threshold.R
 EOF
@@ -87,6 +93,23 @@ while IFS= read -r script; do
 done < "$expected"
 
 assert_help "OverlapTfPromoters/localMaxSkmelTADN.pl"
+
+scanner_build=$($repository_root/pssm_scan --version-json)
+python3 - "$scanner_build" <<'PY'
+import json
+import sys
+
+build = json.loads(sys.argv[1])
+required = {
+    "program", "version", "source_commit", "source_dirty", "compiler",
+    "cplusplus", "build_flags", "lto_enabled", "ndebug", "parquet_enabled",
+    "arrow_version", "parquet_version",
+}
+assert required <= build.keys()
+assert build["program"] == "pssm_scan"
+assert isinstance(build["source_dirty"], bool)
+assert "-O3" in build["build_flags"]
+PY
 
 panel_config=$("$repository_root/scripts/run_chr1_2026_motif_panel.sh" --print-config)
 [[ $(grep -c $'^Motif\t' <<< "$panel_config") -eq 5 ]] || {

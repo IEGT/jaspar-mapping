@@ -1,0 +1,24 @@
+#ifndef JASPAR_MAPPING_BUILD_INFO_H
+#define JASPAR_MAPPING_BUILD_INFO_H
+
+#ifndef PSSM_SCAN_VERSION
+#define PSSM_SCAN_VERSION "0.0.0"
+#endif
+
+#ifndef PSSM_SCAN_SOURCE_COMMIT
+#define PSSM_SCAN_SOURCE_COMMIT "unknown"
+#endif
+
+#ifndef PSSM_SCAN_LTO_ENABLED
+#define PSSM_SCAN_LTO_ENABLED 0
+#endif
+
+#ifndef PSSM_SCAN_SOURCE_DIRTY
+#define PSSM_SCAN_SOURCE_DIRTY 1
+#endif
+
+#ifndef PSSM_SCAN_BUILD_FLAGS
+#define PSSM_SCAN_BUILD_FLAGS "not_recorded"
+#endif
+
+#endif

@@ -1,35 +1,41 @@
 -- Query contract for a finalized sparse whole-genome scan package.
--- Run from the package root. Coordinates are BED 0-based half-open.
+-- Build from the package root. Metadata is copied into the small DuckDB catalog
+-- so it remains queryable from any working directory. Coordinates are BED
+-- 0-based half-open.
 
-CREATE OR REPLACE VIEW motif_set AS
-SELECT * FROM read_parquet('tables/jaspar2026/motif_set/*.parquet');
+CREATE OR REPLACE TABLE motif_set AS
+SELECT * FROM read_parquet('tables/jaspar2026/motif_set/part-000000.parquet');
 
-CREATE OR REPLACE VIEW genome AS
-SELECT * FROM read_parquet('tables/jaspar2026/genome/*.parquet');
+CREATE OR REPLACE TABLE genome AS
+SELECT * FROM read_parquet('tables/jaspar2026/genome/part-000000.parquet');
 
-CREATE OR REPLACE VIEW sequence_region AS
-SELECT * FROM read_parquet('tables/jaspar2026/sequence_region/*.parquet');
+CREATE OR REPLACE TABLE sequence_region AS
+SELECT * FROM read_parquet('tables/jaspar2026/sequence_region/part-000000.parquet');
 
-CREATE OR REPLACE VIEW motif_metadata AS
-SELECT * FROM read_parquet('tables/jaspar2026/motif_metadata/*.parquet');
+CREATE OR REPLACE TABLE motif_metadata AS
+SELECT * FROM read_parquet('tables/jaspar2026/motif_metadata/part-000000.parquet');
 
-CREATE OR REPLACE VIEW scan_run AS
-SELECT * FROM read_parquet('tables/jaspar2026/scan_run/*.parquet');
+CREATE OR REPLACE TABLE scan_run AS
+SELECT * FROM read_parquet('tables/jaspar2026/scan_run/part-000000.parquet');
 
-CREATE OR REPLACE VIEW scan_threshold_policy AS
-SELECT * FROM read_parquet('tables/jaspar2026/scan_threshold_policy/*.parquet');
-
-CREATE OR REPLACE VIEW scan_task AS
-SELECT * FROM read_parquet('tables/jaspar2026/scan_task/*.parquet');
-
-CREATE OR REPLACE VIEW scan_file_inventory AS
+CREATE OR REPLACE TABLE scan_threshold_policy AS
 SELECT * FROM read_parquet(
-    'tables/jaspar2026/scan_file_inventory/**/*.parquet',
-    hive_partitioning = true,
-    union_by_name = true
+    'tables/jaspar2026/scan_threshold_policy/part-000000.parquet'
 );
 
-CREATE OR REPLACE VIEW motif_hit AS
+CREATE OR REPLACE TABLE scan_task AS
+SELECT * FROM read_parquet('tables/jaspar2026/scan_task/part-000000.parquet');
+
+CREATE OR REPLACE TABLE scan_file_inventory AS
+SELECT * FROM read_parquet(
+    'tables/jaspar2026/scan_file_inventory/part-000000.parquet'
+);
+
+-- Hit payloads are intentionally not bound here. Opening a package-wide glob
+-- made DuckDB inspect every Parquet footer (131,650 files in the GRCh38 run)
+-- merely to create the catalog. Call motif_hit_files() with the exact paths
+-- selected from scan_file_inventory, normally through query_genome_scan.py.
+CREATE OR REPLACE MACRO motif_hit_files(file_paths) AS TABLE
 SELECT
     t.run_id,
     h.task_id,
@@ -57,11 +63,7 @@ SELECT
     'bed'::VARCHAR AS coordinate_mode,
     CAST(h.pwm_relative_score AS DOUBLE) AS pwm_relative_score,
     h.matched_seq
-FROM read_parquet(
-    'task_data/task_id=*/tables/jaspar2026/motif_hit/**/*.parquet',
-    hive_partitioning = true,
-    union_by_name = true
-) h
+FROM read_parquet(file_paths, hive_partitioning = true) h
 JOIN motif_metadata m USING (motif_set_id, motif_id)
 JOIN scan_task t ON t.task_id = h.task_id;
 

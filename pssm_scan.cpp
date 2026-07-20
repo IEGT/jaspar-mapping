@@ -38,10 +38,13 @@
 #ifdef PSSM_SCAN_WITH_PARQUET
 #include <arrow/api.h>
 #include <arrow/io/api.h>
+#include <arrow/util/config.h>
 #include <parquet/arrow/writer.h>
 #include <parquet/properties.h>
+#include <parquet/parquet_version.h>
 #endif
 
+#include "build_info.h"
 #include "progress.h"
 #include "pssm.h"
 #include "pssm_scan_core.h"
@@ -1917,6 +1920,55 @@ void printHelp(const std::string& programName, const std::string& genomeFile, co
 #endif
 #endif
     std::cout << " -h, --help           Display this help message" << std::endl;
+    std::cout << " --version            Display concise build provenance" << std::endl;
+    std::cout << " --version-json       Display machine-readable build provenance" << std::endl;
+}
+
+void printVersion(const bool asJson) {
+#ifdef PSSM_SCAN_WITH_PARQUET
+    static constexpr bool parquetEnabled = true;
+    const char* arrowVersion = ARROW_VERSION_STRING;
+    const std::string parquetVersion = std::to_string(PARQUET_VERSION_MAJOR) + "." +
+        std::to_string(PARQUET_VERSION_MINOR) + "." +
+        std::to_string(PARQUET_VERSION_PATCH);
+#else
+    static constexpr bool parquetEnabled = false;
+    const char* arrowVersion = "not_enabled";
+    const std::string parquetVersion = "not_enabled";
+#endif
+    if (!asJson) {
+        std::cout << "pssm_scan " << PSSM_SCAN_VERSION
+                  << " commit=" << PSSM_SCAN_SOURCE_COMMIT
+                  << " dirty=" << PSSM_SCAN_SOURCE_DIRTY
+                  << " compiler=" << __VERSION__
+                  << " cplusplus=" << __cplusplus
+                  << " lto=" << PSSM_SCAN_LTO_ENABLED
+                  << " parquet=" << (parquetEnabled ? "enabled" : "disabled")
+                  << " arrow=" << arrowVersion
+                  << " parquet_version=" << parquetVersion
+                  << " flags=" << PSSM_SCAN_BUILD_FLAGS << std::endl;
+        return;
+    }
+    std::cout << "{\"program\":\"pssm_scan\",\"version\":\""
+              << jsonEscape(PSSM_SCAN_VERSION)
+              << "\",\"source_commit\":\"" << jsonEscape(PSSM_SCAN_SOURCE_COMMIT)
+              << "\",\"source_dirty\":"
+              << (PSSM_SCAN_SOURCE_DIRTY ? "true" : "false")
+              << ",\"compiler\":\"" << jsonEscape(__VERSION__)
+              << "\",\"cplusplus\":" << __cplusplus
+              << ",\"lto_enabled\":"
+              << (PSSM_SCAN_LTO_ENABLED ? "true" : "false")
+              << ",\"ndebug\":"
+#ifdef NDEBUG
+              << "true"
+#else
+              << "false"
+#endif
+              << ",\"parquet_enabled\":" << (parquetEnabled ? "true" : "false")
+              << ",\"arrow_version\":\"" << jsonEscape(arrowVersion)
+              << "\",\"parquet_version\":\"" << jsonEscape(parquetVersion)
+              << "\",\"build_flags\":\"" << jsonEscape(PSSM_SCAN_BUILD_FLAGS)
+              << "\"}" << std::endl;
 }
 
 } // namespace
@@ -1947,6 +1999,8 @@ int main(int argc, char* argv[]) {
     bool skipN = true;  // Default to skipping N
     bool skipNormalization = false;  // Default to not skip normalization
     bool showHelp = false; // Do not show help after all variables have been assigned
+    bool showVersion = false;
+    bool showVersionJson = false;
     long targetFrom = -1L, targetTo = -1L ;
     std::string targetChromosome ;
     std::vector<Region> regions;
@@ -2000,6 +2054,8 @@ int main(int argc, char* argv[]) {
         {"verbose", no_argument, 0, 'v'},
         {"debug", no_argument, 0, 'd'},
         {"help", no_argument, 0, 'h'},
+        {"version", no_argument, 0, 0},
+        {"version-json", no_argument, 0, 0},
         {0, 0, 0, 0}
     };
 
@@ -2157,6 +2213,10 @@ int main(int argc, char* argv[]) {
                     } else {
                         denseBlockSize = static_cast<size_t>(parsedDenseBlockSize);
                     }
+                } else if (std::string(long_options[option_index].name) == "version") {
+                    showVersion = true;
+                } else if (std::string(long_options[option_index].name) == "version-json") {
+                    showVersionJson = true;
                 }
                 break;
             case 's':
@@ -2184,6 +2244,11 @@ int main(int argc, char* argv[]) {
             printHelp(argv[0],genomeFile,fastaIndexFile,gzipIndexFile,pssmFile,targetMotifID,threshold,minPwmRelativeScore,maxPwmRelativeScore,pseudocount,targetChromosome,targetFrom,targetTo,regionsFile,outdir,showSequence,scoreMode,scoreDistribution,distributionBinWidth,sparseParquet,denseScores,denseBlockSize,strandMode,coordinateMode,motifListFile,motifSetID,genomeID,backgroundModelID,pseudocountScheme,scanFileStatsFile);
             return 1;
         }
+    }
+
+    if (showVersion || showVersionJson) {
+        printVersion(showVersionJson);
+        return 0;
     }
 
     if (minPwmRelativeScore > maxPwmRelativeScore) {

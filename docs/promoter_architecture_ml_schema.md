@@ -82,11 +82,17 @@ Full column lists live in `sql/schema.sql`; the essentials:
 The executable whole-genome batching, validation, inventory, and cross-species
 identity contract is specified in
 [`jaspar2026_genome_scan_plan.md`](jaspar2026_genome_scan_plan.md). The raw-only
-DuckDB surface is `sql/genome_scan_schema.sql`; optional synteny bridges are in
+DuckDB metadata surface is `sql/genome_scan_schema.sql`; raw hits are opened
+through its `motif_hit_files(exact_paths)` macro after inventory pruning, as
+implemented by `scripts/query_genome_scan.py`. Optional synteny bridges are in
 `sql/cross_species_schema.sql`.
 
 - **`motif_hit`** — keyed by `genome_id, motif_set_id, chrom, start, end, motif_id, strand, score_mode, pseudocount`. Its logical configuration also exposes `background_model_id`, `pseudocount_scheme`, `minimum_score`, both PWM-relative bounds, `n_policy`, matched-sequence policy, and coordinate mode. The physical file still stores only `start`, `end`, float32 `score`, float32 `pwm_relative_score`, and nullable `matched_seq`; row-constant identity lives in Hive partitions and `motif_name` comes from `motif_metadata`.
 - **`genome / sequence_region / scan_run / scan_threshold_policy / scan_task / scan_file_inventory`** — immutable production provenance and completeness tables. The file inventory includes expected and skipped-N windows, sentinel/threshold/PWM rejections, emitted rows, bytes, SHA-256, task state, Slurm IDs, scanner checksum, and source commit. A zero-hit Parquet file still has an inventory row.
+- New scan packages also record payload modification time, complete scanner
+  build JSON, DuckDB version, aggregate Parquet bytes, and the finalization
+  validation mode. Full payload SHA-256 rereads live in the separate resumable
+  verification report.
 - **`motif_score_dense`** — logical view over dense score blocks, also keyed by explicit `genome_id` and `motif_set_id`. Physical files store only `block_start` plus a `FLOAT[] scores` vector; run identity lives in Hive partitions, while requested range and N policy are encoded in collision-resistant part filenames.
 - **`motif_cutandrun_score_bin_stats`** — dense-score calibration output by score bin and CUT&RUN sample: window counts, covered-window counts, baseline fraction, enrichment ratio, log2 enrichment, and signal summaries.
 - **`motif_cutandrun_containment_curve`** — score-threshold calibration from
