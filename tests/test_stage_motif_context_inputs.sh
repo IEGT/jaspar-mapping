@@ -9,24 +9,35 @@ package="$temporary/scan_package"
 staged="$temporary/staged"
 mkdir -p "$package/task_data/task_id=batch-a/tables/hits"
 mkdir -p "$package/task_data/task_id=batch-b/tables/hits"
+mkdir -p "$package/tables/jaspar2026/scan_file_inventory"
 
 for strand in plus minus; do
     printf 'parquet\n' > "$package/task_data/task_id=batch-a/tables/hits/tp73-$strand.parquet"
     printf 'parquet\n' > "$package/task_data/task_id=batch-b/tables/hits/patz1-$strand.parquet"
 done
 
-duckdb "$package/context.duckdb" -c "
-CREATE TABLE scan_file_inventory (
-    task_id VARCHAR, output_relative_path VARCHAR, motif_id VARCHAR,
-    chrom VARCHAR, strand VARCHAR, emitted_hits BIGINT, bytes BIGINT,
-    sha256 VARCHAR
-);
-INSERT INTO scan_file_inventory VALUES
-    ('batch-a', 'tables/hits/tp73-plus.parquet', 'MA0861.2', '1', '+', 2, 8, 'a'),
-    ('batch-a', 'tables/hits/tp73-minus.parquet', 'MA0861.2', '1', '-', 2, 8, 'b'),
-    ('batch-b', 'tables/hits/patz1-plus.parquet', 'MA1961.2', '1', '+', 2, 8, 'c'),
-    ('batch-b', 'tables/hits/patz1-minus.parquet', 'MA1961.2', '1', '-', 2, 8, 'd');
-" >/dev/null
+(
+    cd "$package"
+    duckdb context.duckdb -c "
+    CREATE TABLE inventory_source (
+        task_id VARCHAR, output_relative_path VARCHAR, motif_id VARCHAR,
+        chrom VARCHAR, strand VARCHAR, emitted_hits BIGINT, bytes BIGINT,
+        sha256 VARCHAR
+    );
+    INSERT INTO inventory_source VALUES
+        ('batch-a', 'tables/hits/tp73-plus.parquet', 'MA0861.2', '1', '+', 2, 8, 'a'),
+        ('batch-a', 'tables/hits/tp73-minus.parquet', 'MA0861.2', '1', '-', 2, 8, 'b'),
+        ('batch-b', 'tables/hits/patz1-plus.parquet', 'MA1961.2', '1', '+', 2, 8, 'c'),
+        ('batch-b', 'tables/hits/patz1-minus.parquet', 'MA1961.2', '1', '-', 2, 8, 'd');
+    COPY inventory_source TO
+        'tables/jaspar2026/scan_file_inventory/data.parquet'
+        (FORMAT PARQUET);
+    DROP TABLE inventory_source;
+    CREATE VIEW scan_file_inventory AS SELECT * FROM read_parquet(
+        'tables/jaspar2026/scan_file_inventory/**/*.parquet'
+    );
+    " >/dev/null
+)
 printf '{"database":"context.duckdb"}\n' > "$package/manifest.json"
 
 "$repository_root/scripts/stage_motif_context_inputs.py" \

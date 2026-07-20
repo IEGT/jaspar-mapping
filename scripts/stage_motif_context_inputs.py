@@ -67,7 +67,8 @@ def package_database(package: Path) -> tuple[Path, Path]:
     return manifest, database
 
 
-def inventory_rows(duckdb: str, database: Path, motifs: list[str],
+def inventory_rows(duckdb: str, database: Path, package: Path,
+                   motifs: list[str],
                    chromosomes: list[str]) -> list[dict[str, object]]:
     chrom_filter = ""
     if chromosomes:
@@ -86,6 +87,7 @@ ORDER BY motif_id, chrom, strand;
         text=True,
         capture_output=True,
         check=False,
+        cwd=package,
     )
     if process.returncode != 0:
         raise StagingError(process.stderr.strip() or "DuckDB inventory query failed")
@@ -175,7 +177,9 @@ def stage(arguments: argparse.Namespace) -> None:
     motifs = unique_values(arguments.motif)
     chromosomes = unique_values(arguments.chrom)
     manifest, database = package_database(package)
-    rows = inventory_rows(arguments.duckdb, database, motifs, chromosomes)
+    rows = inventory_rows(
+        arguments.duckdb, database, package, motifs, chromosomes
+    )
     validate_inventory(rows, motifs, chromosomes)
 
     contract: dict[str, object] = {
