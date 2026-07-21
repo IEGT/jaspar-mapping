@@ -36,8 +36,16 @@ def sql_string(value: str | Path) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
-def run_json(command: list[str]) -> list[dict[str, object]]:
-    process = subprocess.run(command, text=True, capture_output=True, check=False)
+def run_json(
+    command: list[str], *, working_directory: Path | None = None
+) -> list[dict[str, object]]:
+    process = subprocess.run(
+        command,
+        cwd=working_directory,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
     if process.returncode != 0:
         raise CalibrationError(process.stderr.strip() or "command failed")
     try:
@@ -95,9 +103,13 @@ FROM scan_file_inventory
 WHERE CAST(chrom AS VARCHAR) = {sql_string(chrom)}
 ORDER BY motif_id, strand;
 """
-    return run_json([
-        duckdb, "-readonly", "-json", str(database), "-c", query
-    ])
+    # Finalized scan catalogs intentionally use package-relative Parquet views.
+    # Resolve those views from the catalog directory, independent of the
+    # caller's current working directory.
+    return run_json(
+        [duckdb, "-readonly", "-json", str(database), "-c", query],
+        working_directory=database.parent,
+    )
 
 
 def inventory_path(row: dict[str, object]) -> Path:

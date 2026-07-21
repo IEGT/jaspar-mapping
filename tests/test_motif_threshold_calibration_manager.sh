@@ -46,11 +46,20 @@ for task, motif in motifs:
               hashlib.sha256(path.read_bytes()).hexdigest(), 1, sep="\t")
 PY
 
-"$duckdb" "$package/jaspar_genome_scan.duckdb" -batch <<SQL >/dev/null
-CREATE TABLE scan_file_inventory AS
-SELECT * FROM read_csv_auto('$temporary/inventory.tsv', delim='\t', header=true);
-ALTER TABLE scan_file_inventory ADD COLUMN chrom VARCHAR DEFAULT '1';
+mkdir -p "$package/tables/jaspar2026/scan_file_inventory"
+pushd "$package" >/dev/null
+"$duckdb" jaspar_genome_scan.duckdb -batch <<SQL >/dev/null
+COPY (
+    SELECT *, '1'::VARCHAR AS chrom
+    FROM read_csv_auto('$temporary/inventory.tsv', delim='\t', header=true)
+) TO '$package/tables/jaspar2026/scan_file_inventory/part-000000.parquet'
+  (FORMAT PARQUET);
+CREATE VIEW scan_file_inventory AS
+SELECT * FROM read_parquet(
+    'tables/jaspar2026/scan_file_inventory/**/*.parquet'
+);
 SQL
+popd >/dev/null
 printf '%s\n' '{"database":"jaspar_genome_scan.duckdb"}' > "$package/manifest.json"
 
 run="$temporary/run"
