@@ -100,8 +100,8 @@ directory. Source scan files are opened read-only and are never rewritten.
 Use a dedicated run below `/data/sm718`. The helper creates separately recorded
 DuckDB/Python and R Micromamba runtimes when absent. Keeping them separate
 avoids incompatible ICU constraints between DuckDB 1.5.4 and R 4.5.1; the
-Python environment also supplies `pyBigWig` for chromosome-local control
-exports. It then submits the shared-label setup, the dependent 2,632-element
+Python environment also supplies Bioconda's `pyBigWig` for chromosome-local
+control exports. It then submits the shared-label setup, the dependent 2,632-element
 array with at most 20 live tasks, and a finalizer dependent on the complete
 array:
 

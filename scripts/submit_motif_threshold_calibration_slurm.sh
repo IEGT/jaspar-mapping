@@ -100,6 +100,7 @@ if [[ ! -x $duckdb_prefix/bin/duckdb ||
     [[ $micromamba == */* ]] || micromamba=$(command -v "$micromamba" || true)
     [[ -x $micromamba ]] || { echo "E: Micromamba is unavailable." >&2; exit 1; }
     "$micromamba" create --yes --override-channels --channel conda-forge \
+        --channel bioconda \
         --prefix "$duckdb_prefix" duckdb-cli=1.5.4 pybigwig python=3.12
 fi
 if [[ ! -x $r_prefix/bin/Rscript ]]; then
