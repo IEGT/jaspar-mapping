@@ -29,6 +29,7 @@ Options:
   --cpus N                CPUs per motif task (default: 2)
   --memory SIZE           Memory per motif task (default: 16G)
   --time LIMIT            Time per motif task (default: 02:00:00)
+  --reuse-plan            Reuse a compatible immutable prepared plan
   --dry-run               Print submissions without calling sbatch
   -h, --help              Show this help
 
@@ -36,6 +37,7 @@ Separate DuckDB/Python and R runtimes are created once from conda-forge when
 absent, avoiding incompatible ICU constraints; both explicit solutions are
 recorded. Existing runtime, plan, anchor, and task outputs
 are reused only after contract checks; source scan payloads are never changed.
+Plan reuse also verifies that scientific scripts match the recorded plan commit.
 EOF
 }
 
@@ -53,6 +55,7 @@ array_size=1000
 cpus=2
 memory=16G
 wall_time=02:00:00
+reuse_plan=0
 dry_run=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -70,6 +73,7 @@ while [[ $# -gt 0 ]]; do
         --cpus) cpus=${2:?}; shift 2 ;;
         --memory) memory=${2:?}; shift 2 ;;
         --time) wall_time=${2:?}; shift 2 ;;
+        --reuse-plan) reuse_plan=1; shift ;;
         --dry-run) dry_run=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "E: Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -133,14 +137,77 @@ bigwig_python="$duckdb_prefix/bin/python3"
 "$bigwig_python" -c 'import pyBigWig'
 
 anchor="$run_root/input/tp73_chr1_anchor_evidence.parquet"
-task_count=$(python3 "$source/scripts/manage_motif_threshold_calibration.py" prepare \
-    --run-root "$run_root" --scan-package "$scan_package" --jaspar "$jaspar" \
-    --anchor-evidence "$anchor" --source "$source" --duckdb "$duckdb")
+task_file="$run_root/plan/calibration_tasks.tsv"
+run_config="$run_root/plan/run_config.json"
+if [[ $reuse_plan -eq 1 ]]; then
+    [[ -s $task_file && -s $run_config ]] || {
+        echo "E: --reuse-plan requires an existing task file and run configuration." >&2
+        exit 1
+    }
+    plan_values=$(python3 - "$run_config" "$task_file" "$scan_package" \
+        "$jaspar" "$source" "$anchor" <<'PY'
+import csv
+import json
+import pathlib
+import sys
+
+config_path, task_path, scan, jaspar, source, anchor = map(pathlib.Path, sys.argv[1:])
+config = json.loads(config_path.read_text())
+expected = {
+    "scan_package": str(scan.resolve()),
+    "jaspar": str(jaspar.resolve()),
+    "source": str(source.resolve()),
+    "anchor_evidence": str(anchor.resolve()),
+}
+for key, value in expected.items():
+    if config.get(key) != value:
+        raise SystemExit(f"prepared plan {key} differs: {config.get(key)!r} != {value!r}")
+with task_path.open(newline="") as handle:
+    rows = list(csv.DictReader(handle, delimiter="\t"))
+count = int(config.get("cofactor_task_count", -1))
+if count <= 0 or len(rows) != count:
+    raise SystemExit("prepared plan task count is inconsistent")
+if [int(row["task_index"]) for row in rows] != list(range(count)):
+    raise SystemExit("prepared plan task indices are not contiguous")
+print(f'{count}\t{config["source_commit"]}')
+PY
+    )
+    IFS=$'\t' read -r task_count plan_source_commit <<< "$plan_values"
+    scientific_paths=(
+        scripts/build_tp73_anchor_evidence.py
+        scripts/build_sparse_context_maxima.py
+        scripts/evaluate_tp73_cofactor_thresholds.R
+        scripts/build_motif_score_thresholds.py
+        scripts/manage_motif_threshold_calibration.py
+        scripts/export_bigwig_chrom_bedgraph.py
+    )
+    git -C "$source" cat-file -e "$plan_source_commit^{commit}" 2>/dev/null || {
+        echo "E: Prepared plan source commit is unavailable: $plan_source_commit" >&2
+        exit 1
+    }
+    if ! git -C "$source" diff --quiet "$plan_source_commit..HEAD" -- \
+        "${scientific_paths[@]}"; then
+        echo "E: Scientific calibration code changed since the prepared plan." >&2
+        exit 1
+    fi
+    if ! git -C "$source" diff --quiet -- "${scientific_paths[@]}" ||
+       ! git -C "$source" diff --cached --quiet -- "${scientific_paths[@]}"; then
+        echo "E: Scientific calibration code has uncommitted changes." >&2
+        exit 1
+    fi
+else
+    task_count=$(python3 "$source/scripts/manage_motif_threshold_calibration.py" prepare \
+        --run-root "$run_root" --scan-package "$scan_package" --jaspar "$jaspar" \
+        --anchor-evidence "$anchor" --source "$source" --duckdb "$duckdb")
+    plan_source_commit=$(python3 -c \
+        'import json,sys; print(json.load(open(sys.argv[1]))["source_commit"])' \
+        "$run_config")
+fi
 [[ $task_count =~ ^[1-9][0-9]*$ ]] || {
     echo "E: Invalid prepared task count: $task_count" >&2
     exit 1
 }
-task_file="$run_root/plan/calibration_tasks.tsv"
+execution_source_commit=$(git -C "$source" rev-parse HEAD)
 submission_record="$run_root/plan/slurm_submission.tsv"
 if [[ -e $submission_record && $dry_run -eq 0 ]]; then
     echo "E: Run already has a Slurm submission record: $submission_record" >&2
@@ -227,11 +294,12 @@ if [[ $dry_run -eq 1 ]]; then
 fi
 final_job=$("${final_submission[@]}")
 
-printf 'setup_job\tarray_jobs\tfinalize_job\ttask_count\tmax_concurrent\tarray_size\tarray_chunks\n' \
+printf 'setup_job\tarray_jobs\tfinalize_job\ttask_count\tmax_concurrent\tarray_size\tarray_chunks\tplan_source_commit\texecution_source_commit\treused_plan\n' \
     > "$submission_record"
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$setup_job" "$array_jobs_text" "$final_job" "$task_count" \
-    "$max_concurrent" "$array_size" "$array_chunk" \
+    "$max_concurrent" "$array_size" "$array_chunk" "$plan_source_commit" \
+    "$execution_source_commit" "$reuse_plan" \
     >> "$submission_record"
 echo "I: Submitted setup=$setup_job arrays=$array_jobs_text finalizer=$final_job tasks=$task_count live=$max_concurrent chunks=$array_chunk" >&2
 printf '%s\n' "$array_jobs_text"

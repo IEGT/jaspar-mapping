@@ -106,6 +106,11 @@ dependent arrays that cover all 2,632 tasks with at most 20 live tasks overall,
 and a finalizer dependent on the last array. Global task offsets keep every
 local array index below Haumea's `MaxArraySize = 1001` limit:
 
+When an operational wrapper changes after planning, `--reuse-plan` preserves
+the immutable plan only if all scientific calibration scripts still match the
+plan's recorded commit. `slurm_submission.tsv` then records both the plan and
+execution-wrapper commits.
+
 ```sh
 SOURCE=/data/sm718/GitHub/jaspar-mapping
 SCAN=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_sparse_v3/package
@@ -119,6 +124,7 @@ RUN=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_context_thresholds_v1
   --source "$SOURCE" \
   --account cluster --partition requeue \
   --max-concurrent 20 --array-size 1000 \
+  --reuse-plan \
   --cpus 2 --memory 16G --time 02:00:00
 ```
 
