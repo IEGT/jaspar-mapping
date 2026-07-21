@@ -20,6 +20,7 @@ Options:
   --source DIR            Repository root (default: script parent)
   --duckdb FILE           DuckDB CLI (default: duckdb)
   --rscript FILE          Rscript executable (default: Rscript)
+  --task-offset N         Add N to the array task ID (default: 0)
   --threads N             DuckDB threads (default: 2)
   --memory-limit SIZE     DuckDB ceiling (default: 12GB)
   --max-temp-size SIZE    DuckDB scratch ceiling (default: 80GB)
@@ -38,6 +39,7 @@ anchor_evidence=""
 source=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 duckdb=duckdb
 rscript=Rscript
+task_offset=0
 threads=2
 memory_limit=12GB
 max_temp_size=80GB
@@ -51,6 +53,7 @@ while [[ $# -gt 0 ]]; do
         --source) source=${2:?}; shift 2 ;;
         --duckdb) duckdb=${2:?}; shift 2 ;;
         --rscript) rscript=${2:?}; shift 2 ;;
+        --task-offset) task_offset=${2:?}; shift 2 ;;
         --threads) threads=${2:?}; shift 2 ;;
         --memory-limit) memory_limit=${2:?}; shift 2 ;;
         --max-temp-size) max_temp_size=${2:?}; shift 2 ;;
@@ -66,6 +69,10 @@ done
 }
 [[ ${SLURM_ARRAY_TASK_ID:-} =~ ^[0-9]+$ ]] || {
     echo "E: SLURM_ARRAY_TASK_ID is required." >&2
+    exit 2
+}
+[[ $task_offset =~ ^[0-9]+$ ]] || {
+    echo "E: --task-offset must be a non-negative integer." >&2
     exit 2
 }
 [[ $threads =~ ^[1-9][0-9]*$ ]] || {
@@ -85,15 +92,16 @@ done
     exit 1
 }
 
-task_row=$(awk -F '\t' -v task="$SLURM_ARRAY_TASK_ID" \
+global_task_index=$((task_offset + SLURM_ARRAY_TASK_ID))
+task_row=$(awk -F '\t' -v task="$global_task_index" \
     'NR > 1 && $1 == task { print; found = 1; exit }
      END { if (!found) exit 1 }' "$task_file") || {
-    echo "E: No task row for array index $SLURM_ARRAY_TASK_ID." >&2
+    echo "E: No task row for global task index $global_task_index." >&2
     exit 1
 }
 IFS=$'\t' read -r task_index motif_id motif_name plus_relative minus_relative \
     plus_bytes minus_bytes plus_sha minus_sha plus_hits minus_hits <<< "$task_row"
-[[ $task_index == "$SLURM_ARRAY_TASK_ID" ]]
+[[ $task_index == "$global_task_index" ]]
 [[ $motif_id =~ ^[A-Za-z0-9._-]+$ ]]
 for relative in "$plus_relative" "$minus_relative"; do
     [[ $relative != /* && $relative != *".."* ]] || {
@@ -137,8 +145,9 @@ progress_report() {
     local now elapsed
     now=$(date +%s)
     elapsed=$((now - start_epoch))
-    printf 'I: progress signal=SIGUSR1 phase=%s task=%s motif=%s elapsed_s=%s child_pid=%s maxima=%s metrics=%s\n' \
-        "$phase" "$task_index" "$motif_id" "$elapsed" "${child_pid:-none}" \
+    printf 'I: progress signal=SIGUSR1 phase=%s task=%s array_task=%s task_offset=%s motif=%s elapsed_s=%s child_pid=%s maxima=%s metrics=%s\n' \
+        "$phase" "$task_index" "$SLURM_ARRAY_TASK_ID" "$task_offset" \
+        "$motif_id" "$elapsed" "${child_pid:-none}" \
         "$([[ -s ${maxima:-/nonexistent} ]] && echo ready || echo pending)" \
         "$([[ -s ${metrics:-/nonexistent} ]] && echo ready || echo pending)" >&2
 }

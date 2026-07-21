@@ -49,6 +49,49 @@ if SLURM_ARRAY_TASK_ID=0 \
     exit 1
 fi
 
+# Threshold calibration uses the same offset scheme when a motif set is larger
+# than Slurm's maximum local array index. A completed synthetic task lets this
+# exercise index resolution without invoking DuckDB or R.
+mkdir -p "$temporary/threshold-bin"
+cat > "$temporary/threshold-bin/stat" <<'EOF'
+#!/usr/bin/env bash
+[[ $1 == -c && $2 == %s && $# -eq 3 ]]
+bytes=$(wc -c < "$3")
+printf '%d\n' "$bytes"
+EOF
+chmod +x "$temporary/threshold-bin/stat"
+threshold_run="$temporary/threshold-run"
+threshold_scan="$temporary/threshold-scan"
+mkdir -p "$threshold_run/plan" "$threshold_run/input" \
+    "$threshold_scan/task_data/task_id=example"
+touch "$threshold_run/input/anchors.parquet"
+printf 'plus\n' > "$threshold_scan/task_data/task_id=example/plus.parquet"
+printf 'minus\n' > "$threshold_scan/task_data/task_id=example/minus.parquet"
+plus_bytes=$(( $(wc -c < "$threshold_scan/task_data/task_id=example/plus.parquet") ))
+minus_bytes=$(( $(wc -c < "$threshold_scan/task_data/task_id=example/minus.parquet") ))
+printf 'task_index\tmotif_id\tmotif_name\tplus_relative_path\tminus_relative_path\tplus_bytes\tminus_bytes\tplus_sha256\tminus_sha256\tplus_emitted_hits\tminus_emitted_hits\n' \
+    > "$threshold_run/plan/calibration_tasks.tsv"
+printf '1007\tMTEST.1\tTEST\ttask_data/task_id=example/plus.parquet\ttask_data/task_id=example/minus.parquet\t%s\t%s\tplus-sha\tminus-sha\t1\t1\n' \
+    "$plus_bytes" "$minus_bytes" >> "$threshold_run/plan/calibration_tasks.tsv"
+threshold_final="$threshold_run/tasks/task-001007-MTEST.1"
+mkdir -p "$threshold_final"
+printf '{"motif_id":"MTEST.1"}\n' > "$threshold_final/complete.json"
+printf 'header\n' > "$threshold_final/threshold_metrics.tsv"
+threshold_output=$(
+    PATH="$temporary/threshold-bin:/usr/bin:/bin" SLURM_ARRAY_TASK_ID=7 \
+    "$repository_root/scripts/run_motif_threshold_calibration_slurm_task.sh" \
+        --run-root "$threshold_run" --scan-package "$threshold_scan" \
+        --task-file "$threshold_run/plan/calibration_tasks.tsv" \
+        --anchor-evidence "$threshold_run/input/anchors.parquet" \
+        --source "$repository_root" --duckdb /usr/bin/true \
+        --rscript /usr/bin/true --task-offset 1000 2>&1
+)
+grep -Fq 'Reusing completed threshold task 1007 (MTEST.1).' \
+    <<< "$threshold_output" || {
+    echo "E: Threshold task offset did not resolve global task 1007." >&2
+    exit 1
+}
+
 mkdir -p "$temporary/prepared-run/plan"
 cat > "$temporary/prepared-run/plan/scan_plan.json" <<'EOF'
 {

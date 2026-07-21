@@ -25,6 +25,7 @@ Options:
   --account NAME          Slurm account (default: cluster)
   --partition NAME        Slurm partition (default: requeue)
   --max-concurrent N      Live array tasks (default: 20)
+  --array-size N          Tasks per scheduler array (default: 1000)
   --cpus N                CPUs per motif task (default: 2)
   --memory SIZE           Memory per motif task (default: 16G)
   --time LIMIT            Time per motif task (default: 02:00:00)
@@ -48,6 +49,7 @@ micromamba=${MAMBA_EXE:-micromamba}
 account=cluster
 partition=requeue
 max_concurrent=20
+array_size=1000
 cpus=2
 memory=16G
 wall_time=02:00:00
@@ -64,6 +66,7 @@ while [[ $# -gt 0 ]]; do
         --account) account=${2:?}; shift 2 ;;
         --partition) partition=${2:?}; shift 2 ;;
         --max-concurrent) max_concurrent=${2:?}; shift 2 ;;
+        --array-size) array_size=${2:?}; shift 2 ;;
         --cpus) cpus=${2:?}; shift 2 ;;
         --memory) memory=${2:?}; shift 2 ;;
         --time) wall_time=${2:?}; shift 2 ;;
@@ -77,8 +80,9 @@ done
     usage >&2
     exit 2
 }
-[[ $max_concurrent =~ ^[1-9][0-9]*$ && $cpus =~ ^[1-9][0-9]*$ ]] || {
-    echo "E: --max-concurrent and --cpus must be positive integers." >&2
+[[ $max_concurrent =~ ^[1-9][0-9]*$ &&
+   $array_size =~ ^[1-9][0-9]*$ && $cpus =~ ^[1-9][0-9]*$ ]] || {
+    echo "E: --max-concurrent, --array-size, and --cpus must be positive integers." >&2
     exit 2
 }
 mkdir -p "$run_root/plan" "$run_root/logs" "$run_root/input" "$run_root/tasks"
@@ -168,32 +172,50 @@ if [[ ! -s $anchor ]]; then
     dependency=(--dependency="afterok:$setup_job")
 fi
 
-array_submission=(
-    sbatch --parsable --account="$account" --partition="$partition" --requeue
-    --job-name=jaspar2026_thr --array="0-$((task_count - 1))%${max_concurrent}"
-    --nodes=1 --ntasks=1 --cpus-per-task="$cpus" --mem="$memory"
-    --time="$wall_time" --signal=B:USR1@300 --chdir="$source"
-    --output="$run_root/logs/threshold-%A_%a.out"
-    --error="$run_root/logs/threshold-%A_%a.err"
-    "${dependency[@]}"
-    "$source/scripts/run_motif_threshold_calibration_slurm_task.sh"
-    --run-root "$run_root" --scan-package "$scan_package" --task-file "$task_file"
-    --anchor-evidence "$anchor" --source "$source" --duckdb "$duckdb"
-    --rscript "$rscript" --threads "$cpus" --memory-limit 12GB
-    --max-temp-size 80GB --minimum-class-fraction 0.01
-)
-if [[ $dry_run -eq 1 ]]; then
-    printf '%q ' "${array_submission[@]}"; printf '\n'
-    array_job=ARRAY_JOB_ID
-else
-    array_job=$("${array_submission[@]}")
-fi
+array_jobs=()
+array_start=0
+array_chunk=0
+while (( array_start < task_count )); do
+    chunk_tasks=$((task_count - array_start))
+    if (( chunk_tasks > array_size )); then
+        chunk_tasks=$array_size
+    fi
+    array_end=$((chunk_tasks - 1))
+    array_submission=(
+        sbatch --parsable --account="$account" --partition="$partition" --requeue
+        --job-name="jaspar2026_thr_${array_chunk}"
+        --array="0-${array_end}%${max_concurrent}"
+        --nodes=1 --ntasks=1 --cpus-per-task="$cpus" --mem="$memory"
+        --time="$wall_time" --signal=B:USR1@300 --chdir="$source"
+        --output="$run_root/logs/threshold-%A_%a.out"
+        --error="$run_root/logs/threshold-%A_%a.err"
+        "${dependency[@]}"
+        "$source/scripts/run_motif_threshold_calibration_slurm_task.sh"
+        --run-root "$run_root" --scan-package "$scan_package" --task-file "$task_file"
+        --anchor-evidence "$anchor" --source "$source" --duckdb "$duckdb"
+        --rscript "$rscript" --task-offset "$array_start"
+        --threads "$cpus" --memory-limit 12GB
+        --max-temp-size 80GB --minimum-class-fraction 0.01
+    )
+    if [[ $dry_run -eq 1 ]]; then
+        printf '%q ' "${array_submission[@]}"; printf '\n'
+        array_job="ARRAY_JOB_ID_${array_chunk}"
+    else
+        array_job=$("${array_submission[@]}")
+    fi
+    array_jobs+=("$array_job")
+    dependency=(--dependency="afterok:$array_job")
+    array_start=$((array_start + chunk_tasks))
+    array_chunk=$((array_chunk + 1))
+done
+last_array_job=$array_job
+array_jobs_text=$(IFS=,; printf '%s' "${array_jobs[*]}")
 
 final_submission=(
     sbatch --parsable --account="$account" --partition="$partition" --requeue
     --job-name=jaspar_thr_final --nodes=1 --ntasks=1 --cpus-per-task=2
     --mem=8G --time=01:00:00 --chdir="$source"
-    --dependency="afterok:$array_job"
+    --dependency="afterok:$last_array_job"
     --output="$run_root/logs/finalize-%j.out"
     --error="$run_root/logs/finalize-%j.err"
     "$source/scripts/run_motif_threshold_calibration_finalize.sh"
@@ -205,10 +227,11 @@ if [[ $dry_run -eq 1 ]]; then
 fi
 final_job=$("${final_submission[@]}")
 
-printf 'setup_job\tarray_job\tfinalize_job\ttask_count\tmax_concurrent\n' \
+printf 'setup_job\tarray_jobs\tfinalize_job\ttask_count\tmax_concurrent\tarray_size\tarray_chunks\n' \
     > "$submission_record"
-printf '%s\t%s\t%s\t%s\t%s\n' \
-    "$setup_job" "$array_job" "$final_job" "$task_count" "$max_concurrent" \
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$setup_job" "$array_jobs_text" "$final_job" "$task_count" \
+    "$max_concurrent" "$array_size" "$array_chunk" \
     >> "$submission_record"
-echo "I: Submitted setup=$setup_job array=$array_job finalizer=$final_job tasks=$task_count live=$max_concurrent" >&2
-printf '%s\n' "$array_job"
+echo "I: Submitted setup=$setup_job arrays=$array_jobs_text finalizer=$final_job tasks=$task_count live=$max_concurrent chunks=$array_chunk" >&2
+printf '%s\n' "$array_jobs_text"

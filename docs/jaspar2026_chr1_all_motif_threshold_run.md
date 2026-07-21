@@ -101,9 +101,10 @@ Use a dedicated run below `/data/sm718`. The helper creates separately recorded
 DuckDB/Python and R Micromamba runtimes when absent. Keeping them separate
 avoids incompatible ICU constraints between DuckDB 1.5.4 and R 4.5.1; the
 Python environment also supplies Bioconda's `pyBigWig` for chromosome-local
-control exports. It then submits the shared-label setup, the dependent 2,632-element
-array with at most 20 live tasks, and a finalizer dependent on the complete
-array:
+control exports. It then submits the shared-label setup, scheduler-sized
+dependent arrays that cover all 2,632 tasks with at most 20 live tasks overall,
+and a finalizer dependent on the last array. Global task offsets keep every
+local array index below Haumea's `MaxArraySize = 1001` limit:
 
 ```sh
 SOURCE=/data/sm718/GitHub/jaspar-mapping
@@ -117,10 +118,11 @@ RUN=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_context_thresholds_v1
   --cutandrun-dir "$SOURCE/cutandrun_20250602_noDuplicates" \
   --source "$SOURCE" \
   --account cluster --partition requeue \
-  --max-concurrent 20 --cpus 2 --memory 16G --time 02:00:00
+  --max-concurrent 20 --array-size 1000 \
+  --cpus 2 --memory 16G --time 02:00:00
 ```
 
-The array's `--requeue` policy protects node interruptions; the scheduled USR1
+Each array's `--requeue` policy protects node interruptions; the scheduled USR1
 report five minutes before the time limit provides a final phase indication.
 The July 22 Haumea maintenance remains an operational reason to inspect job
 state rather than assume uninterrupted execution.
