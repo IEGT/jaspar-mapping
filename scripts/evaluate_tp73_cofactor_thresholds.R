@@ -22,7 +22,11 @@ usage <- function(status = 0L) {
         "  --folds N               Contiguous genomic folds (default: 5)",
         "  --chrom-size BP         Chromosome span; default derives from anchors",
         "  --spline-df N           TP73 natural-spline degrees of freedom (default: 4)",
+        "  --minimum-class-fraction N",
+        "                          Skip fitting when either anchor class is smaller",
+        "                          than N (default: 0)",
         "  --duckdb COMMAND        DuckDB CLI executable (default: duckdb)",
+        "  --compact-output        Omit detailed per-fold tables and the plot",
         "  -h, --help              Show this help"
     ), con = stream)
     quit(status = status)
@@ -38,15 +42,23 @@ values <- list(
     folds = 5L,
     chrom_size = "auto",
     spline_df = 4L,
+    minimum_class_fraction = 0,
+    compact_output = FALSE,
     duckdb = "duckdb"
 )
 known <- c(
     "--anchor-evidence", "--cofactor-maxima", "--output-prefix",
-    "--thresholds", "--folds", "--chrom-size", "--spline-df", "--duckdb"
+    "--thresholds", "--folds", "--chrom-size", "--spline-df",
+    "--minimum-class-fraction", "--duckdb"
 )
 index <- 1L
 while (index <= length(arguments)) {
     option <- arguments[[index]]
+    if (option == "--compact-output") {
+        values$compact_output <- TRUE
+        index <- index + 1L
+        next
+    }
     if (!option %in% known) {
         writeLines(paste("E: unknown argument:", option), con = stderr())
         usage(2L)
@@ -86,6 +98,14 @@ if (values$folds < 2L) {
 if (values$spline_df < 2L) {
     stop("--spline-df must be at least 2", call. = FALSE)
 }
+values$minimum_class_fraction <- suppressWarnings(as.numeric(
+    values$minimum_class_fraction
+))
+if (!is.finite(values$minimum_class_fraction) ||
+    values$minimum_class_fraction < 0 ||
+    values$minimum_class_fraction >= 0.5) {
+    stop("--minimum-class-fraction must be in [0, 0.5)", call. = FALSE)
+}
 threshold_mode <- if (tolower(values$thresholds) == "auto") {
     "observed_integer_grid"
 } else {
@@ -108,7 +128,9 @@ if (threshold_mode == "explicit") {
 
 suppressPackageStartupMessages({
     library(data.table)
-    library(ggplot2)
+    if (!values$compact_output) {
+        library(ggplot2)
+    }
 })
 
 values$anchor_evidence <- normalizePath(values$anchor_evidence, mustWork = TRUE)
@@ -416,6 +438,40 @@ threshold_rows <- list()
 sample_fold_rows <- list()
 coefficient_rows <- list()
 raw_rows <- list()
+unevaluable_threshold_row <- function(motif_id, threshold, anchors_retained,
+                                      status, note) {
+    data.table(
+        motif_id = motif_id,
+        threshold = threshold,
+        anchors_total = nrow(anchor_features),
+        anchors_retained = anchors_retained,
+        retained_fraction = anchors_retained / nrow(anchor_features),
+        discordant_observations = nrow(evidence),
+        baseline_macro_roc_auc = baseline_macro$roc_auc,
+        augmented_macro_roc_auc = NA_real_,
+        delta_macro_roc_auc = NA_real_,
+        baseline_macro_average_precision = baseline_macro$average_precision,
+        augmented_macro_average_precision = NA_real_,
+        delta_macro_average_precision = NA_real_,
+        baseline_macro_log_loss = baseline_macro$log_loss,
+        augmented_macro_log_loss = NA_real_,
+        delta_macro_log_loss = NA_real_,
+        baseline_macro_brier_score = baseline_macro$brier_score,
+        augmented_macro_brier_score = NA_real_,
+        delta_macro_brier_score = NA_real_,
+        median_adjusted_odds_ratio = NA_real_,
+        minimum_adjusted_odds_ratio = NA_real_,
+        maximum_adjusted_odds_ratio = NA_real_,
+        median_raw_sample_odds_ratio = NA_real_,
+        samples_with_raw_odds_ratio_below_one = NA_integer_,
+        samples_total = nrow(samples),
+        sample_fold_cells = nrow(baseline_cells),
+        sample_fold_cells_with_roc_auc_gain = NA_integer_,
+        sample_fold_cells_with_log_loss_gain = NA_integer_,
+        evaluation_status = status,
+        evaluation_note = note
+    )
+}
 for (motif_index in seq_len(nrow(motif_map))) {
     motif_id <- motif_map$motif_id[[motif_index]]
     score_column <- motif_map$score_column[[motif_index]]
@@ -426,9 +482,10 @@ for (motif_index in seq_len(nrow(motif_map))) {
         observed_maximum <- suppressWarnings(max(anchor_scores, na.rm = TRUE))
         if (!is.finite(observed_maximum) || observed_maximum < 0) {
             message("I: no non-negative observed threshold for ", motif_id)
-            next
+            motif_thresholds <- 0
+        } else {
+            motif_thresholds <- seq.int(0, floor(observed_maximum))
         }
-        motif_thresholds <- seq.int(0, floor(observed_maximum))
     }
     for (threshold in motif_thresholds) {
         message("I: fitting ", motif_id, " at score >= ", threshold)
@@ -436,12 +493,19 @@ for (motif_index in seq_len(nrow(motif_map))) {
             !is.na(evidence_scores) & evidence_scores >= threshold
         )]
         anchors_retained <- sum(!is.na(anchor_scores) & anchor_scores >= threshold)
+        retained_fraction <- anchors_retained / nrow(anchor_features)
         if (anchors_retained == 0L || anchors_retained == nrow(anchor_features)) {
             if (threshold_mode == "observed_integer_grid") {
                 message(
                     "I: skipping ", motif_id, " at ", threshold,
                     " because the anchor indicator is constant"
                 )
+                threshold_rows[[length(threshold_rows) + 1L]] <-
+                    unevaluable_threshold_row(
+                        motif_id, threshold, anchors_retained,
+                        "constant_indicator",
+                        "retained-anchor indicator is constant"
+                    )
                 next
             }
             stop(
@@ -449,16 +513,35 @@ for (motif_index in seq_len(nrow(motif_map))) {
                 " has a constant retained-anchor indicator", call. = FALSE
             )
         }
+        if (retained_fraction < values$minimum_class_fraction ||
+            retained_fraction > 1 - values$minimum_class_fraction) {
+            message(
+                "I: skipping ", motif_id, " at ", threshold,
+                " because retained/absent class support is below ",
+                values$minimum_class_fraction
+            )
+            threshold_rows[[length(threshold_rows) + 1L]] <-
+                unevaluable_threshold_row(
+                    motif_id, threshold, anchors_retained,
+                    "insufficient_class_support",
+                    "retained or absent anchor fraction is below the fit floor"
+                )
+            next
+        }
         augmented_formula <- as.formula(paste(
             "outcome ~ sample_id +", tp73_term, "+ retained"
         ))
         prediction <- rep(NA_real_, nrow(evidence))
         fold_coefficients <- vector("list", values$folds)
+        fold_failure <- NULL
         for (held_out in seq_len(values$folds)) {
             training <- evidence[fold != held_out]
             if (training[, uniqueN(retained)] != 2L) {
                 if (threshold_mode == "observed_integer_grid") {
                     fold_coefficients <- NULL
+                    fold_failure <- paste0(
+                        "training fold ", held_out, " has a constant indicator"
+                    )
                     break
                 }
                 retained_counts <- training[, .N, by = retained][order(retained)]
@@ -473,12 +556,27 @@ for (motif_index in seq_len(nrow(motif_map))) {
                 )
             }
             testing_indexes <- which(evidence$fold == held_out)
-            fit <- glm(
-                augmented_formula, data = training, family = binomial(),
-                control = glm.control(maxit = 50L, epsilon = 1e-8)
+            fit <- tryCatch(
+                suppressWarnings(glm(
+                    augmented_formula, data = training, family = binomial(),
+                    control = glm.control(maxit = 50L, epsilon = 1e-8)
+                )),
+                error = function(condition) NULL
             )
-            if (!isTRUE(fit$converged) ||
-                !is.finite(coef(fit)[["retained"]])) {
+            retained_coefficient <- if (is.null(fit)) {
+                NA_real_
+            } else {
+                unname(coef(fit)["retained"])
+            }
+            if (is.null(fit) || !isTRUE(fit$converged) ||
+                !is.finite(retained_coefficient)) {
+                if (threshold_mode == "observed_integer_grid") {
+                    fold_coefficients <- NULL
+                    fold_failure <- paste0(
+                        "model did not converge in fold ", held_out
+                    )
+                    break
+                }
                 stop(
                     motif_id, " threshold ", threshold,
                     " model did not converge in fold ", held_out,
@@ -492,8 +590,8 @@ for (motif_index in seq_len(nrow(motif_map))) {
                 motif_id = motif_id,
                 threshold = threshold,
                 fold = held_out,
-                retained_log_odds = unname(coef(fit)[["retained"]]),
-                adjusted_odds_ratio = exp(unname(coef(fit)[["retained"]]))
+                retained_log_odds = retained_coefficient,
+                adjusted_odds_ratio = exp(retained_coefficient)
             )
             rm(fit, training)
             gc(verbose = FALSE)
@@ -501,8 +599,13 @@ for (motif_index in seq_len(nrow(motif_map))) {
         if (is.null(fold_coefficients)) {
             message(
                 "I: skipping ", motif_id, " at ", threshold,
-                " because a training fold has a constant indicator"
+                ": ", fold_failure
             )
+            threshold_rows[[length(threshold_rows) + 1L]] <-
+                unevaluable_threshold_row(
+                    motif_id, threshold, anchors_retained,
+                    "model_not_evaluable", fold_failure
+                )
             next
         }
         if (any(!is.finite(prediction))) {
@@ -510,7 +613,9 @@ for (motif_index in seq_len(nrow(motif_map))) {
                  call. = FALSE)
         }
         coefficients <- rbindlist(fold_coefficients)
-        coefficient_rows[[length(coefficient_rows) + 1L]] <- coefficients
+        if (!values$compact_output) {
+            coefficient_rows[[length(coefficient_rows) + 1L]] <- coefficients
+        }
 
         cells <- cell_metrics(prediction)
         cells <- merge(
@@ -527,7 +632,9 @@ for (motif_index in seq_len(nrow(motif_map))) {
             delta_log_loss = log_loss - log_loss_baseline,
             delta_brier_score = brier_score - brier_score_baseline
         )]
-        sample_fold_rows[[length(sample_fold_rows) + 1L]] <- cells
+        if (!values$compact_output) {
+            sample_fold_rows[[length(sample_fold_rows) + 1L]] <- cells
+        }
 
         raw <- evidence[, .(
             retained_anti = sum(retained == 1L & outcome == 1L),
@@ -542,7 +649,9 @@ for (motif_index in seq_len(nrow(motif_map))) {
                 ((retained_anti + 0.5) * (absent_control + 0.5)) /
                 ((retained_control + 0.5) * (absent_anti + 0.5))
         )]
-        raw_rows[[length(raw_rows) + 1L]] <- raw
+        if (!values$compact_output) {
+            raw_rows[[length(raw_rows) + 1L]] <- raw
+        }
 
         threshold_rows[[length(threshold_rows) + 1L]] <- data.table(
             motif_id = motif_id,
@@ -574,7 +683,9 @@ for (motif_index in seq_len(nrow(motif_map))) {
             sample_fold_cells_with_roc_auc_gain =
                 sum(cells$delta_roc_auc > 0),
             sample_fold_cells_with_log_loss_gain =
-                sum(cells$delta_log_loss < 0)
+                sum(cells$delta_log_loss < 0),
+            evaluation_status = "evaluated",
+            evaluation_note = NA_character_
         )
         rm(prediction, cells, coefficients, raw)
         gc(verbose = FALSE)
@@ -582,28 +693,43 @@ for (motif_index in seq_len(nrow(motif_map))) {
 }
 evidence[, retained := NULL]
 
-threshold_metrics <- rbindlist(threshold_rows)
-sample_fold_metrics <- rbindlist(sample_fold_rows, use.names = TRUE, fill = TRUE)
-fold_coefficients <- rbindlist(coefficient_rows)
-raw_association <- rbindlist(raw_rows)
+threshold_metrics <- rbindlist(threshold_rows, use.names = TRUE, fill = TRUE)
+if (nrow(threshold_metrics) == 0L) {
+    stop("threshold evaluator produced no candidate rows", call. = FALSE)
+}
 setorder(threshold_metrics, motif_id, threshold)
-setorder(sample_fold_metrics, motif_id, threshold, fold, sample_id)
-setorder(fold_coefficients, motif_id, threshold, fold)
-setorder(raw_association, motif_id, threshold, sample_id)
 fwrite(
     threshold_metrics, paste0(output_prefix, "_threshold_metrics.tsv"), sep = "\t"
 )
-fwrite(
-    sample_fold_metrics,
-    paste0(output_prefix, "_sample_fold_metrics.tsv"), sep = "\t"
-)
-fwrite(
-    fold_coefficients,
-    paste0(output_prefix, "_fold_coefficients.tsv"), sep = "\t"
-)
-fwrite(
-    raw_association, paste0(output_prefix, "_raw_association.tsv"), sep = "\t"
-)
+if (!values$compact_output) {
+    sample_fold_metrics <- rbindlist(
+        sample_fold_rows, use.names = TRUE, fill = TRUE
+    )
+    fold_coefficients <- rbindlist(
+        coefficient_rows, use.names = TRUE, fill = TRUE
+    )
+    raw_association <- rbindlist(raw_rows, use.names = TRUE, fill = TRUE)
+    if (nrow(sample_fold_metrics) > 0L) {
+        setorder(sample_fold_metrics, motif_id, threshold, fold, sample_id)
+    }
+    if (nrow(fold_coefficients) > 0L) {
+        setorder(fold_coefficients, motif_id, threshold, fold)
+    }
+    if (nrow(raw_association) > 0L) {
+        setorder(raw_association, motif_id, threshold, sample_id)
+    }
+    fwrite(
+        sample_fold_metrics,
+        paste0(output_prefix, "_sample_fold_metrics.tsv"), sep = "\t"
+    )
+    fwrite(
+        fold_coefficients,
+        paste0(output_prefix, "_fold_coefficients.tsv"), sep = "\t"
+    )
+    fwrite(
+        raw_association, paste0(output_prefix, "_raw_association.tsv"), sep = "\t"
+    )
+}
 
 run_config <- data.table(
     anchor_evidence = values$anchor_evidence,
@@ -619,6 +745,14 @@ run_config <- data.table(
     chrom_size = chrom_size,
     chrom_size_source = chrom_size_source,
     spline_df = values$spline_df,
+    minimum_class_fraction = values$minimum_class_fraction,
+    compact_output = values$compact_output,
+    evaluated_candidate_count = sum(
+        threshold_metrics$evaluation_status == "evaluated"
+    ),
+    unevaluable_candidate_count = sum(
+        threshold_metrics$evaluation_status != "evaluated"
+    ),
     source_score_floor = source_floors[[1L]],
     context_flank_bp = paste(unique(maxima$context_flank_bp), collapse = ","),
     capture_prefilter_center_bp =
@@ -633,6 +767,11 @@ run_config <- data.table(
 )
 fwrite(run_config, paste0(output_prefix, "_run_config.tsv"), sep = "\t")
 
+if (values$compact_output ||
+    !any(threshold_metrics$evaluation_status == "evaluated")) {
+    message("I: wrote TP73 cofactor threshold sweep: ", output_prefix)
+    quit(status = 0L)
+}
 plot_data <- rbindlist(list(
     threshold_metrics[, .(
         motif_id, threshold,

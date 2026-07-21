@@ -133,4 +133,49 @@ SELECT CASE WHEN NOT EXISTS (
 ) THEN error('automatic threshold provenance is incomplete') END;
 SQL
 
+"$duckdb" -batch :memory: >/dev/null <<SQL
+COPY (
+    SELECT
+        '1'::VARCHAR AS chrom,
+        (i * 1000)::BIGINT AS anchor_start,
+        (i * 1000 + 16)::BIGINT AS anchor_end,
+        'M_NEGATIVE'::VARCHAR AS motif_id,
+        -0.5::FLOAT AS context_score,
+        -1.0::DOUBLE AS source_score_floor,
+        150::BIGINT AS context_flank_bp,
+        180::BIGINT AS capture_prefilter_center_bp,
+        16::BIGINT AS observed_max_anchor_span_bp,
+        14::BIGINT AS observed_max_context_span_bp,
+        'signed_interval_edge_distance'::VARCHAR AS context_distance_metric
+    FROM range(100) AS r(i)
+) TO '$temporary/negative-maxima.parquet' (FORMAT PARQUET);
+SQL
+
+"$repository_root/scripts/evaluate_tp73_cofactor_thresholds.R" \
+    --anchor-evidence "$temporary/anchors.parquet" \
+    --cofactor-maxima "$temporary/negative-maxima.parquet" \
+    --output-prefix "$temporary/result_negative" \
+    --thresholds auto --folds 5 --chrom-size 100000 \
+    --spline-df 3 --minimum-class-fraction 0.01 --compact-output \
+    --duckdb "$duckdb" >/dev/null
+
+"$duckdb" -batch :memory: >/dev/null <<SQL
+CREATE VIEW negative_metrics AS
+SELECT * FROM read_csv_auto('$temporary/result_negative_threshold_metrics.tsv',
+                            delim='\t', header=true);
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM negative_metrics
+    WHERE motif_id = 'M_NEGATIVE' AND threshold = 0
+      AND anchors_retained = 0
+      AND evaluation_status = 'constant_indicator'
+      AND delta_macro_roc_auc IS NULL
+) THEN error('negative-only motif did not receive an explicit unevaluable row') END;
+SQL
+
+[[ ! -e $temporary/result_negative_sample_fold_metrics.tsv &&
+   ! -e $temporary/result_negative_threshold_sweep.png ]] || {
+    echo "E: Compact threshold evaluation wrote detailed artifacts." >&2
+    exit 1
+}
+
 echo "TP73 cofactor-threshold tests passed."

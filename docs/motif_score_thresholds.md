@@ -175,6 +175,11 @@ append rows to a new immutable threshold-set version. Never mutate the first
 chromosome-1 set when the candidate grid, context geometry, evidence labels, or
 validation design changes.
 
+The production chromosome-1 all-motif execution contract, reproducible
+CUT&RUN anchor reconstruction, Slurm layout, status reporting, and finalization
+gate are specified in
+[`jaspar2026_chr1_all_motif_threshold_run.md`](jaspar2026_chr1_all_motif_threshold_run.md).
+
 On Haumea, the scalable unit should be one neighboring motif against the fixed
 TP73 anchor/label table. Resolve its exact plus/minus chromosome files through
 `scan_file_inventory`, derive maxima and metric rows in a requeueable task, and
