@@ -19,7 +19,8 @@ Options:
   --output FILE           New TP73 anchor-evidence Parquet
   --source DIR            Repository root (default: script parent)
   --duckdb FILE           DuckDB CLI (default: duckdb)
-  --bigwig-to-bedgraph FILE  UCSC converter (default: bigWigToBedGraph)
+  --bigwig-python FILE    Python with pyBigWig (default: python3)
+  --bigwig-exporter FILE  Export helper (default: source-tree helper)
   --threads N             DuckDB threads (default: 4)
   --memory-limit SIZE     DuckDB ceiling (default: 12GB)
   -h, --help              Show this help
@@ -32,7 +33,8 @@ cutandrun_dir=""
 output=""
 source=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 duckdb=duckdb
-bigwig_to_bedgraph=bigWigToBedGraph
+bigwig_python=python3
+bigwig_exporter=""
 threads=4
 memory_limit=12GB
 while [[ $# -gt 0 ]]; do
@@ -43,7 +45,8 @@ while [[ $# -gt 0 ]]; do
         --output) output=${2:?}; shift 2 ;;
         --source) source=${2:?}; shift 2 ;;
         --duckdb) duckdb=${2:?}; shift 2 ;;
-        --bigwig-to-bedgraph) bigwig_to_bedgraph=${2:?}; shift 2 ;;
+        --bigwig-python) bigwig_python=${2:?}; shift 2 ;;
+        --bigwig-exporter) bigwig_exporter=${2:?}; shift 2 ;;
         --threads) threads=${2:?}; shift 2 ;;
         --memory-limit) memory_limit=${2:?}; shift 2 ;;
         -h|--help) usage; exit 0 ;;
@@ -60,10 +63,11 @@ for path in "$run_root" "$scan_package" "$cutandrun_dir"; do
 done
 target_plan="$run_root/plan/target_anchor_files.tsv"
 [[ -f $target_plan ]] || { echo "E: Target anchor plan is missing: $target_plan" >&2; exit 1; }
+bigwig_exporter=${bigwig_exporter:-$source/scripts/export_bigwig_chrom_bedgraph.py}
 [[ -x $duckdb ]] || duckdb=$(command -v "$duckdb" || true)
-[[ -x $bigwig_to_bedgraph ]] || bigwig_to_bedgraph=$(command -v "$bigwig_to_bedgraph" || true)
-[[ -x $duckdb && -x $bigwig_to_bedgraph ]] || {
-    echo "E: DuckDB or bigWigToBedGraph is unavailable." >&2
+[[ -x $bigwig_python ]] || bigwig_python=$(command -v "$bigwig_python" || true)
+[[ -x $duckdb && -x $bigwig_python && -f $bigwig_exporter ]] || {
+    echo "E: DuckDB, pyBigWig Python, or BigWig exporter is unavailable." >&2
     exit 1
 }
 
@@ -107,7 +111,8 @@ for sample in "${samples[@]}"; do
     if [[ ! -e $control ]]; then
         staging="$control.export-job-${SLURM_JOB_ID:-manual}-pid-$$"
         [[ ! -e $staging ]] || { echo "E: Control staging exists: $staging" >&2; exit 1; }
-        "$bigwig_to_bedgraph" -chrom=1 "$control_bigwig" "$staging"
+        "$bigwig_python" "$bigwig_exporter" \
+            --input "$control_bigwig" --output "$staging" --chrom 1
         [[ -s $staging ]] || { echo "E: Empty BigWig export for $sample." >&2; exit 1; }
         [[ ! -e $control ]] || { echo "E: Control appeared concurrently: $control" >&2; exit 1; }
         mv "$staging" "$control"

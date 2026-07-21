@@ -31,8 +31,9 @@ Options:
   --dry-run               Print submissions without calling sbatch
   -h, --help              Show this help
 
-The runtime is created once from conda-forge when absent and its explicit
-package solution is recorded. Existing runtime, plan, anchor, and task outputs
+Separate DuckDB/Python and R runtimes are created once from conda-forge when
+absent, avoiding incompatible ICU constraints; both explicit solutions are
+recorded. Existing runtime, plan, anchor, and task outputs
 are reused only after contract checks; source scan payloads are never changed.
 EOF
 }
@@ -88,8 +89,10 @@ cutandrun_dir=$(cd "$cutandrun_dir" && pwd -P)
 source=$(cd "$source" && pwd -P)
 runtime_prefix=${runtime_prefix:-$run_root/runtime}
 
-if [[ ! -x $runtime_prefix/bin/duckdb || ! -x $runtime_prefix/bin/Rscript ||
-      ! -x $runtime_prefix/bin/bigWigToBedGraph ]]; then
+duckdb_prefix="$runtime_prefix/duckdb"
+r_prefix="$runtime_prefix/r"
+if [[ ! -x $duckdb_prefix/bin/duckdb ||
+      ! -x $duckdb_prefix/bin/python3 ]]; then
     [[ $dry_run -eq 0 ]] || {
         echo "E: Dry-run requires an existing runtime: $runtime_prefix" >&2
         exit 1
@@ -97,16 +100,32 @@ if [[ ! -x $runtime_prefix/bin/duckdb || ! -x $runtime_prefix/bin/Rscript ||
     [[ $micromamba == */* ]] || micromamba=$(command -v "$micromamba" || true)
     [[ -x $micromamba ]] || { echo "E: Micromamba is unavailable." >&2; exit 1; }
     "$micromamba" create --yes --override-channels --channel conda-forge \
-        --prefix "$runtime_prefix" \
-        duckdb-cli=1.5.4 r-base=4.5.1 r-data.table=1.18.4 \
-        ucsc-bigwigtobedgraph
-    "$micromamba" list --prefix "$runtime_prefix" --explicit \
-        > "$run_root/plan/runtime-explicit.txt"
+        --prefix "$duckdb_prefix" duckdb-cli=1.5.4 pybigwig python=3.12
 fi
-duckdb="$runtime_prefix/bin/duckdb"
-rscript="$runtime_prefix/bin/Rscript"
-bigwig_to_bedgraph="$runtime_prefix/bin/bigWigToBedGraph"
+if [[ ! -x $r_prefix/bin/Rscript ]]; then
+    [[ $dry_run -eq 0 ]] || {
+        echo "E: Dry-run requires an existing R runtime: $r_prefix" >&2
+        exit 1
+    }
+    [[ $micromamba == */* ]] || micromamba=$(command -v "$micromamba" || true)
+    [[ -x $micromamba ]] || { echo "E: Micromamba is unavailable." >&2; exit 1; }
+    "$micromamba" create --yes --override-channels --channel conda-forge \
+        --prefix "$r_prefix" r-base=4.5.1 r-data.table=1.18.4
+fi
+if [[ ! -s $run_root/plan/runtime-duckdb-explicit.txt ||
+      ! -s $run_root/plan/runtime-r-explicit.txt ]]; then
+    [[ $micromamba == */* ]] || micromamba=$(command -v "$micromamba" || true)
+    [[ -x $micromamba ]] || { echo "E: Micromamba is needed to record runtimes." >&2; exit 1; }
+    "$micromamba" list --prefix "$duckdb_prefix" --explicit \
+        > "$run_root/plan/runtime-duckdb-explicit.txt"
+    "$micromamba" list --prefix "$r_prefix" --explicit \
+        > "$run_root/plan/runtime-r-explicit.txt"
+fi
+duckdb="$duckdb_prefix/bin/duckdb"
+rscript="$r_prefix/bin/Rscript"
+bigwig_python="$duckdb_prefix/bin/python3"
 "$rscript" -e 'stopifnot(requireNamespace("data.table", quietly=TRUE))'
+"$bigwig_python" -c 'import pyBigWig'
 
 anchor="$run_root/input/tp73_chr1_anchor_evidence.parquet"
 task_count=$(python3 "$source/scripts/manage_motif_threshold_calibration.py" prepare \
@@ -131,7 +150,8 @@ setup_submission=(
     "$source/scripts/run_motif_threshold_anchor_setup.sh"
     --run-root "$run_root" --scan-package "$scan_package"
     --cutandrun-dir "$cutandrun_dir" --output "$anchor" --source "$source"
-    --duckdb "$duckdb" --bigwig-to-bedgraph "$bigwig_to_bedgraph"
+    --duckdb "$duckdb" --bigwig-python "$bigwig_python"
+    --bigwig-exporter "$source/scripts/export_bigwig_chrom_bedgraph.py"
     --threads 4 --memory-limit 12GB
 )
 

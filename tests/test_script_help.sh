@@ -26,6 +26,7 @@ scripts/evaluate_tp73_cofactor_thresholds.R
 scripts/evaluate_tp73_multifactor_model.R
 scripts/evaluate_tp73_pair_stratified_model.R
 scripts/export_bigwig_chrom_bedgraph.R
+scripts/export_bigwig_chrom_bedgraph.py
 scripts/export_dense_bed.py
 scripts/fetch_region_to_embl.py
 scripts/fix_missing_bidirect.sh

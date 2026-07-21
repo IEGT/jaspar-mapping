@@ -70,7 +70,8 @@ RUN/
     target_anchor_files.tsv
     motifs.txt
     run_config.json
-    runtime-explicit.txt
+    runtime-duckdb-explicit.txt
+    runtime-r-explicit.txt
     slurm_submission.tsv
   input/
     control_bedgraph/
@@ -96,10 +97,13 @@ directory. Source scan files are opened read-only and are never rewritten.
 
 ## Haumea submission
 
-Use a dedicated run below `/data/sm718`. The helper creates a recorded
-Micromamba runtime when one is absent, submits the shared-label setup, submits
-the dependent 2,632-element array with at most 20 live tasks, and submits a
-finalizer dependent on the complete array:
+Use a dedicated run below `/data/sm718`. The helper creates separately recorded
+DuckDB/Python and R Micromamba runtimes when absent. Keeping them separate
+avoids incompatible ICU constraints between DuckDB 1.5.4 and R 4.5.1; the
+Python environment also supplies `pyBigWig` for chromosome-local control
+exports. It then submits the shared-label setup, the dependent 2,632-element
+array with at most 20 live tasks, and a finalizer dependent on the complete
+array:
 
 ```sh
 SOURCE=/data/sm718/GitHub/jaspar-mapping
