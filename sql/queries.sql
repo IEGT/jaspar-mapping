@@ -372,3 +372,88 @@ WHERE p.genome_id = $genome_id
   AND p.pseudocount = $pseudocount
 ORDER BY p.nearest_member_anchor_neighbor_interval_distance_bp,
          p.pair_member_interval_distance_bp, p.cofactor_pair_id;
+
+-- Q16. Inspect one explicitly versioned convenient-threshold set. Pending and
+--      no-gain motifs remain visible rather than silently falling back to zero.
+--      Params: $threshold_set_id, $genome_id, $motif_set_id, $score_mode,
+--      $pseudocount, $threshold_role, $target_motif_id,
+--      $calibration_stratum_id
+SELECT
+    motif_id,
+    motif_name,
+    recommended_threshold,
+    useful_threshold_min,
+    useful_threshold_max,
+    selected_retained_fraction,
+    selected_metric_gain,
+    selected_adjusted_odds_ratio,
+    association_direction,
+    calibration_status,
+    calibration_scope,
+    evidence_dataset_id
+FROM motif_score_threshold
+WHERE threshold_set_id = $threshold_set_id
+  AND genome_id = $genome_id
+  AND motif_set_id = $motif_set_id
+  AND score_mode = $score_mode
+  AND pseudocount = $pseudocount
+  AND threshold_role = $threshold_role
+  AND target_motif_id = $target_motif_id
+  AND calibration_stratum_id = $calibration_stratum_id
+ORDER BY motif_name, motif_id;
+
+-- Q17. Apply one threshold set to raw TP73-neighbor relationships. This view of
+--      the data remains derived: motif_context_pair and its continuous scores
+--      are not discarded or rewritten.
+--      Params: $threshold_set_id, $genome_id, $motif_set_id, $chrom,
+--      $threshold_role, $target_motif_id, $score_mode, $pseudocount,
+--      $calibration_stratum_id
+SELECT
+    p.anchor_hit_id,
+    p.chrom,
+    p.anchor_start,
+    p.anchor_end,
+    p.anchor_strand,
+    p.neighbor_hit_id,
+    p.neighbor_start,
+    p.neighbor_end,
+    p.neighbor_motif_id,
+    p.neighbor_motif_name,
+    p.neighbor_strand,
+    p.neighbor_score,
+    t.recommended_threshold,
+    p.anchor_neighbor_interval_distance_bp,
+    p.interval_relation,
+    p.interval_distance_band,
+    p.relative_orientation,
+    p.anchor_oriented_side
+FROM motif_context_pair p
+JOIN motif_convenient_threshold t
+  ON t.genome_id = p.genome_id
+ AND t.motif_set_id = p.motif_set_id
+ AND t.motif_id = p.neighbor_motif_id
+ AND t.score_mode = p.score_mode
+ AND t.pseudocount = p.pseudocount
+ AND t.background_model_id = p.background_model_id
+ AND t.pseudocount_scheme = p.pseudocount_scheme
+WHERE t.threshold_set_id = $threshold_set_id
+  AND t.genome_id = $genome_id
+  AND t.motif_set_id = $motif_set_id
+  AND p.chrom = $chrom
+  AND t.threshold_role = $threshold_role
+  AND t.target_motif_id = $target_motif_id
+  AND t.calibration_stratum_id = $calibration_stratum_id
+  AND t.score_mode = $score_mode
+  AND t.pseudocount = $pseudocount
+  AND t.threshold_inclusive
+  AND t.context_distance_metric = 'signed_interval_edge_distance'
+  AND (t.context_min_interval_distance_bp IS NULL
+       OR p.anchor_neighbor_interval_distance_bp >=
+          t.context_min_interval_distance_bp)
+  AND (t.context_max_interval_distance_bp IS NULL
+       OR p.anchor_neighbor_interval_distance_bp <=
+          t.context_max_interval_distance_bp)
+  AND (t.context_relation_filter = 'any'
+       OR p.interval_relation = t.context_relation_filter)
+  AND p.neighbor_score >= t.recommended_threshold
+ORDER BY p.anchor_start, p.neighbor_motif_id, p.neighbor_score DESC;

@@ -12,6 +12,9 @@ For motif-score calibration against raw CUT&RUN fragments, also read
 
 For TP73-local motif spacing, tandem TP73 sites, or transcript/intron context,
 also read [`docs/tp73_motif_context.md`](docs/tp73_motif_context.md).
+For motif-specific convenient thresholds, score-floor calibration, or applying
+thresholds to context queries, also read
+[`docs/motif_score_thresholds.md`](docs/motif_score_thresholds.md).
 
 For whole-genome JASPAR 2026 scans, Slurm batching/requeue behavior, production
 inventories, or cross-species identity, also read

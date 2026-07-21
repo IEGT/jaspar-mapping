@@ -186,7 +186,10 @@ check-duckdb: cutandrun_score_calibration pssm_scan_parquet
 	bash tests/test_dense_cutandrun_calibration.sh
 	bash tests/test_streaming_cutandrun_calibration.sh
 	bash tests/test_motif_context.sh
+	bash tests/test_motif_score_thresholds.sh
 	bash tests/test_stage_motif_context_inputs.sh
+	bash tests/test_sparse_context_maxima.sh
+	bash tests/test_tp73_cofactor_thresholds.sh
 	bash tests/test_sparse_parquet.sh
 	bash tests/test_sparse_parquet_parity.sh
 	bash tests/test_genome_scan_manager.sh

@@ -82,6 +82,87 @@ SELECT * FROM read_parquet('tables/jaspar2026/scan_run/*.parquet');
 CREATE OR REPLACE VIEW scan_threshold_policy AS
 SELECT * FROM read_parquet('tables/jaspar2026/scan_threshold_policy/*.parquet');
 
+-- Evidence-derived interpretation thresholds are deliberately separate from
+-- scan_threshold_policy. The latter says which rows were retained on disk;
+-- this table says how a named downstream analysis proposes to turn continuous
+-- scores into an inclusive binary feature. Consumers must bind threshold_set_id
+-- and the complete scoring/target configuration rather than treating a score as
+-- an intrinsic, assay-independent property of a motif.
+CREATE OR REPLACE VIEW motif_score_threshold AS
+SELECT
+    schema_version,
+    threshold_set_id,
+    genome_id,
+    motif_set_id,
+    motif_id,
+    motif_name,
+    threshold_role,
+    target_motif_id,
+    target_motif_name,
+    score_mode,
+    CAST(pseudocount AS DOUBLE) AS pseudocount,
+    background_model_id,
+    pseudocount_scheme,
+    CAST(source_minimum_score AS DOUBLE) AS source_minimum_score,
+    threshold_inclusive,
+    context_flank_bp,
+    context_distance_metric,
+    context_min_interval_distance_bp,
+    context_max_interval_distance_bp,
+    context_relation_filter,
+    calibration_stratum_id,
+    calibration_stratum,
+    calibration_scope,
+    evidence_dataset_id,
+    outcome_id,
+    fold_definition,
+    n_folds,
+    candidate_grid,
+    CAST(candidate_threshold_min AS DOUBLE) AS candidate_threshold_min,
+    CAST(candidate_threshold_max AS DOUBLE) AS candidate_threshold_max,
+    candidate_threshold_count,
+    eligible_threshold_count,
+    CAST(minimum_class_fraction AS DOUBLE) AS minimum_class_fraction,
+    selection_metric,
+    selection_rule,
+    CAST(near_optimal_fraction AS DOUBLE) AS near_optimal_fraction,
+    CAST(recommended_threshold AS DOUBLE) AS recommended_threshold,
+    CAST(useful_threshold_min AS DOUBLE) AS useful_threshold_min,
+    CAST(useful_threshold_max AS DOUBLE) AS useful_threshold_max,
+    CAST(baseline_metric_value AS DOUBLE) AS baseline_metric_value,
+    CAST(selected_metric_value AS DOUBLE) AS selected_metric_value,
+    CAST(selected_metric_gain AS DOUBLE) AS selected_metric_gain,
+    n_anchors,
+    n_observations,
+    selected_retained_anchor_count,
+    CAST(selected_retained_fraction AS DOUBLE) AS selected_retained_fraction,
+    CAST(selected_adjusted_odds_ratio AS DOUBLE)
+        AS selected_adjusted_odds_ratio,
+    association_direction,
+    samples_consistent_with_direction,
+    samples_total,
+    sample_fold_cells,
+    sample_fold_cells_with_roc_auc_gain,
+    sample_fold_cells_with_log_loss_gain,
+    calibration_status,
+    calibration_run_id,
+    source_metrics_uri,
+    source_metrics_sha256,
+    jaspar_uri,
+    jaspar_sha256,
+    source_commit,
+    source_dirty,
+    notes
+FROM read_parquet(
+    'tables/jaspar2026/motif_score_threshold/*.parquet',
+    union_by_name = 1
+);
+
+CREATE OR REPLACE VIEW motif_convenient_threshold AS
+SELECT *
+FROM motif_score_threshold
+WHERE recommended_threshold IS NOT NULL;
+
 CREATE OR REPLACE VIEW scan_task AS
 SELECT * FROM read_parquet('tables/jaspar2026/scan_task/*.parquet');
 

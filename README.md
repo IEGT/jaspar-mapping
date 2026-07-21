@@ -306,6 +306,10 @@ non-overlapping tandem-gap definition, orientation-collapsed singleton/tandem
 feature classes, pair-stratified promoter predictors, and transcript/intron
 features are documented in
 [`docs/tp73_motif_context.md`](docs/tp73_motif_context.md).
+The separate, versioned registry of evidence-derived convenient score
+thresholds, including explicit pending/no-gain states and the distinction from
+scan storage floors, is documented in
+[`docs/motif_score_thresholds.md`](docs/motif_score_thresholds.md).
 The strict CUT&RUN coverage-immersion rule, synthetic local test, threshold
 metrics, and true-data landing convention are documented in
 [`docs/cutandrun_motif_score_calibration.md`](docs/cutandrun_motif_score_calibration.md).

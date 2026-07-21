@@ -16,9 +16,12 @@ scripts/bedtools_map_serial.sh
 scripts/benchmark_sparse_layout.py
 scripts/build_fasta_index.py
 scripts/build_motif_context.py
+scripts/build_motif_score_thresholds.py
+scripts/build_sparse_context_maxima.py
 scripts/build_tp73_cutandrun_calibration_duckdb.sh
 scripts/compare_tp73_cofactor_summaries.R
 scripts/dense_tsv_to_parquet.sh
+scripts/evaluate_tp73_cofactor_thresholds.R
 scripts/evaluate_tp73_multifactor_model.R
 scripts/evaluate_tp73_pair_stratified_model.R
 scripts/export_bigwig_chrom_bedgraph.R

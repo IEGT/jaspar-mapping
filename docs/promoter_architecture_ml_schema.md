@@ -44,6 +44,7 @@ tables/jaspar2026/
   motif_set/… genome/… sequence_region/…
   scan_run/… scan_threshold_policy/… scan_task/… scan_file_inventory/…
   motif_metadata/…          # tiny motif dimension: motif_id, name, length, source
+  motif_score_threshold/…   # versioned evidence-derived interpretation floors
   motif_score_dense/
     motif_set_id=*/genome_id=*/motif_id=*/score_mode=*/pseudocount=*/
     background_model_id=*/pseudocount_scheme=*/chrom=*/strand=*/…
@@ -96,6 +97,12 @@ implemented by `scripts/query_genome_scan.py`. Optional synteny bridges are in
 
 - **`motif_hit`** — keyed by `genome_id, motif_set_id, chrom, start, end, motif_id, strand, score_mode, pseudocount`. Its logical configuration also exposes `background_model_id`, `pseudocount_scheme`, `minimum_score`, both PWM-relative bounds, `n_policy`, matched-sequence policy, and coordinate mode. The physical file still stores only `start`, `end`, float32 `score`, float32 `pwm_relative_score`, and nullable `matched_seq`; row-constant identity lives in Hive partitions and `motif_name` comes from `motif_metadata`.
 - **`genome / sequence_region / scan_run / scan_threshold_policy / scan_task / scan_file_inventory`** — immutable production provenance and completeness tables. The file inventory includes expected and skipped-N windows, sentinel/threshold/PWM rejections, emitted rows, bytes, SHA-256, task state, Slurm IDs, scanner checksum, and source commit. A zero-hit Parquet file still has an inventory row.
+- **`motif_score_threshold`** — versioned, evidence-derived inclusive score
+  thresholds for one declared target/assay/use case. It is separate from the
+  scan storage floor, preserves pending/no-gain null states, and records the
+  candidate grid, near-optimal range, validation design, retained fraction,
+  metric gain, direction, and source checksums. See
+  [`motif_score_thresholds.md`](motif_score_thresholds.md).
 - New scan packages also record payload modification time, complete scanner
   build JSON, DuckDB version, aggregate Parquet bytes, and the finalization
   validation mode. Full payload SHA-256 rereads live in the separate resumable

@@ -364,6 +364,21 @@ rather than fragmenting sparse classes into independent fits. CUT&RUN remains
 an experimental-evidence block and is not silently mixed into the sequence-only
 architecture features.
 
+For threshold sensitivity against the strict CUT&RUN immersion label,
+`scripts/build_sparse_context_maxima.py` derives interval-defined maxima for a
+specified set of exact single-chromosome motif-hit partitions. It writes a
+source-file run config beside its Parquet output and rejects multi-chromosome
+anchors because the sparse partition files do not repeat chromosome in every
+row. `scripts/evaluate_tp73_cofactor_thresholds.R` then compares score floors
+with contiguous chromosome folds. The chromosome-1 POU2F2, POU4F1, and TCF7
+result is documented in
+[`tp73_pou4f1_tcf7_chr1_thresholds_20260721.md`](tp73_pou4f1_tcf7_chr1_thresholds_20260721.md).
+
+Do not conflate the TP73 source scan floor with context anchor eligibility. The
+production TP73 scan may retain scores down to -5 while a context package can
+conservatively select local-peak anchors only from scores at least -1. Both
+values must remain explicit provenance.
+
 ## Legacy wide exporter
 
 `context` remains available for the historical R workflow, now with explicit
