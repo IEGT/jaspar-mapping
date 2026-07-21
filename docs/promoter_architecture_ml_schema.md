@@ -45,6 +45,7 @@ tables/jaspar2026/
   scan_run/… scan_threshold_policy/… scan_task/… scan_file_inventory/…
   motif_metadata/…          # tiny motif dimension: motif_id, name, length, source
   motif_score_threshold/…   # versioned evidence-derived interpretation floors
+  tp73_motif_threshold_count/… # zero-complete per-anchor thresholded locus counts
   motif_score_dense/
     motif_set_id=*/genome_id=*/motif_id=*/score_mode=*/pseudocount=*/
     background_model_id=*/pseudocount_scheme=*/chrom=*/strand=*/…
@@ -103,6 +104,10 @@ implemented by `scripts/query_genome_scan.py`. Optional synteny bridges are in
   candidate grid, near-optimal range, validation design, retained fraction,
   metric gain, direction, and source checksums. See
   [`motif_score_thresholds.md`](motif_score_thresholds.md).
+- **`tp73_motif_threshold_count`** — one physical TP73 locus per neighboring
+  motif and threshold set, including explicit zeroes. It counts distinct
+  alignment spans above the motif-specific threshold after collapsing strand
+  alternatives, while retaining the unthresholded maximum score.
 - New scan packages also record payload modification time, complete scanner
   build JSON, DuckDB version, aggregate Parquet bytes, and the finalization
   validation mode. Full payload SHA-256 rereads live in the separate resumable

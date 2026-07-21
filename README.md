@@ -310,6 +310,8 @@ The separate, versioned registry of evidence-derived convenient score
 thresholds, including explicit pending/no-gain states and the distinction from
 scan storage floors, is documented in
 [`docs/motif_score_thresholds.md`](docs/motif_score_thresholds.md).
+It also defines the zero-complete per-TP73-anchor count of distinct neighboring
+motif loci above those thresholds.
 The strict CUT&RUN coverage-immersion rule, synthetic local test, threshold
 metrics, and true-data landing convention are documented in
 [`docs/cutandrun_motif_score_calibration.md`](docs/cutandrun_motif_score_calibration.md).

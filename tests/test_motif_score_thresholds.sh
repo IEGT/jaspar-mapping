@@ -217,8 +217,11 @@ EXECUTE q16(
 
 PREPARE q17 AS
 SQL
-        awk '/^-- Q17\./ { capture = 1 } capture { print }' \
-            "$repository_root/sql/queries.sql"
+        awk '
+            /^-- Q17\./ { capture = 1 }
+            /^-- Q18\./ { capture = 0 }
+            capture { print }
+        ' "$repository_root/sql/queries.sql"
         cat <<'SQL'
 EXECUTE q17(
     threshold_set_id := 'synthetic_v1', genome_id := 'genome1',

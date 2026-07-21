@@ -282,6 +282,9 @@ The package contains:
   TP73 alignment span with explicit orientation state;
 - `tables/jaspar2026/tp73_motif_context_summary/`: nonempty motif-, band-,
   side-, and orientation-stratified groups partitioned by neighboring motif;
+- `tables/jaspar2026/tp73_motif_threshold_count/`: optional zero-complete
+  physical-anchor x motif counts materialized from one explicitly named
+  convenient-threshold set;
 - `tables/jaspar2026/cofactor_motif_locus.parquet` and
   `cofactor_motif_pair.parquet`: TP73-context loci plus necessary outside pair
   partners, and canonical pairs having at least one context member;
@@ -373,6 +376,14 @@ row. `scripts/evaluate_tp73_cofactor_thresholds.R` then compares score floors
 with contiguous chromosome folds. The chromosome-1 POU2F2, POU4F1, and TCF7
 result is documented in
 [`tp73_pou4f1_tcf7_chr1_thresholds_20260721.md`](tp73_pou4f1_tcf7_chr1_thresholds_20260721.md).
+
+After calibration, the same sparse builder accepts `--threshold-parquet` and
+`--threshold-set-id` to count distinct cofactor alignment spans above each
+motif-specific threshold. Identical-span strand alternatives count once and
+anchor/motif combinations with no qualifying span are retained as zero. This
+threshold-derived count is separate from `tp73_motif_context_summary`, whose
+historical `n_neighbor_loci` continues to describe every locus retained at the
+scan storage floor.
 
 Do not conflate the TP73 source scan floor with context anchor eligibility. The
 production TP73 scan may retain scores down to -5 while a context package can

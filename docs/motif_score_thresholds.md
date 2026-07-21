@@ -80,6 +80,34 @@ retained-anchor fraction, selected metric/gain, adjusted odds ratio, effect
 direction, and descriptive sample/fold consistency counts. The sample-fold
 cells are correlated summaries, not independent evidence.
 
+## Threshold-qualified occurrence counts
+
+Once a threshold set has been selected, the sparse context builder can
+materialize `tp73_motif_threshold_count`. Its grain is one physical TP73
+alignment locus, neighboring motif accession, and fully identified threshold
+set. The initial feature schema is version 1.
+`n_neighbor_loci_above_threshold` is the number of distinct neighboring
+alignment spans whose best orientation-specific score meets the motif's
+inclusive threshold and recorded interval-distance/relation bounds.
+
+The count deliberately collapses `+` and `-` records at an identical genomic
+span. Those records are alternative motif orientations, not two physical
+places. Every requested anchor/motif combination is emitted, including an
+explicit zero when no locus qualifies. This makes the field suitable for a
+long-form ML feature or a later wide pivot without conflating missing rows with
+zero occurrences.
+
+The term "locus" is intentional. Passing a sequence-score threshold does not
+show that the corresponding protein bound the DNA. CUT&RUN remains a separate
+experimental label or feature block.
+
+For a populated registry, rerun `scripts/build_sparse_context_maxima.py` with
+`--threshold-parquet` and `--threshold-set-id`. The tool validates that every
+requested motif has exactly one populated threshold row, that score and source
+floors are compatible, and that the registered interval geometry fits inside
+the supplied capture flank. The output retains `context_score` as the
+unthresholded maximum alongside the threshold-qualified count.
+
 ## Null and status semantics
 
 - `exploratory_positive_gain`: a positive held-out gain was observed and the
@@ -139,6 +167,8 @@ populated convenience subset `motif_convenient_threshold`. Q16 in
 rows. Q17 applies only populated thresholds to `motif_context_pair` while
 preserving the underlying continuous records and enforcing the calibrated
 interval-distance and relation bounds.
+Q18 reads the materialized, zero-complete `tp73_motif_threshold_count` surface
+for one cofactor and returns one row per physical TP73 anchor.
 
 For a genome-wide all-JASPAR fill, process motif partitions independently and
 append rows to a new immutable threshold-set version. Never mutate the first

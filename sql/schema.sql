@@ -445,6 +445,49 @@ FROM read_parquet(
     hive_partitioning = 1
 );
 
+-- Zero-complete threshold-derived occurrence counts at physical TP73-locus x
+-- neighboring-motif grain. Opposite-strand reports with the same neighboring
+-- alignment span are one locus. The threshold identity and calibrated interval
+-- bounds are part of every row; historical storage-floor summaries remain
+-- available in tp73_motif_context_summary.
+CREATE OR REPLACE VIEW tp73_motif_threshold_count AS
+SELECT
+    schema_version,
+    CAST(chrom AS VARCHAR) AS chrom,
+    anchor_locus_id,
+    anchor_start,
+    anchor_end,
+    CAST(motif_id AS VARCHAR) AS motif_id,
+    motif_name,
+    context_score,
+    n_neighbor_loci_above_threshold,
+    has_neighbor_locus_above_threshold,
+    threshold_set_id,
+    CAST(genome_id AS VARCHAR) AS genome_id,
+    CAST(motif_set_id AS VARCHAR) AS motif_set_id,
+    threshold_role,
+    target_motif_id,
+    score_mode,
+    CAST(pseudocount AS DOUBLE) AS pseudocount,
+    background_model_id,
+    pseudocount_scheme,
+    calibration_stratum_id,
+    CAST(recommended_threshold AS DOUBLE) AS recommended_threshold,
+    calibration_status,
+    context_min_interval_distance_bp,
+    context_max_interval_distance_bp,
+    context_relation_filter,
+    CAST(source_score_floor AS DOUBLE) AS source_score_floor,
+    context_flank_bp,
+    capture_prefilter_center_bp,
+    observed_max_anchor_span_bp,
+    observed_max_context_span_bp,
+    context_distance_metric
+FROM read_parquet(
+    'tables/jaspar2026/tp73_motif_threshold_count/*.parquet',
+    union_by_name = 1
+);
+
 -- TP73-context-relevant same-motif cofactor architecture. Identical-span
 -- strand alternatives are collapsed before canonical pairs are formed. Loci
 -- include context members plus outside partners; pairs require at least one

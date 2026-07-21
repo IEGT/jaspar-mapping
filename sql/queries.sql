@@ -457,3 +457,39 @@ WHERE t.threshold_set_id = $threshold_set_id
        OR p.interval_relation = t.context_relation_filter)
   AND p.neighbor_score >= t.recommended_threshold
 ORDER BY p.anchor_start, p.neighbor_motif_id, p.neighbor_score DESC;
+
+-- Q18. One zero-complete count for every physical TP73 anchor and one selected
+--      neighboring motif. Counts are distinct alignment spans meeting the
+--      motif's inclusive convenient threshold and its recorded interval bounds;
+--      strand alternatives at one span count once.
+--      Params: $threshold_set_id, $genome_id, $motif_set_id, $chrom,
+--      $threshold_role, $target_motif_id, $neighbor_motif_id, $score_mode,
+--      $pseudocount, $calibration_stratum_id
+SELECT
+    anchor_locus_id,
+    chrom,
+    anchor_start,
+    anchor_end,
+    target_motif_id,
+    motif_id AS neighbor_motif_id,
+    motif_name AS neighbor_motif_name,
+    context_score AS best_unthresholded_neighbor_score,
+    recommended_threshold,
+    n_neighbor_loci_above_threshold,
+    has_neighbor_locus_above_threshold,
+    context_min_interval_distance_bp,
+    context_max_interval_distance_bp,
+    context_relation_filter,
+    calibration_status
+FROM tp73_motif_threshold_count
+WHERE threshold_set_id = $threshold_set_id
+  AND genome_id = $genome_id
+  AND motif_set_id = $motif_set_id
+  AND chrom = $chrom
+  AND threshold_role = $threshold_role
+  AND target_motif_id = $target_motif_id
+  AND motif_id = $neighbor_motif_id
+  AND score_mode = $score_mode
+  AND pseudocount = $pseudocount
+  AND calibration_stratum_id = $calibration_stratum_id
+ORDER BY anchor_start, anchor_end, anchor_locus_id;

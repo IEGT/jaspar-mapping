@@ -51,6 +51,31 @@ and POU4F1 5. REST receives a threshold of 0. KLF14 (`MA0740.2`) receives 4;
 its useful 2-5 range indicates that the precise integer is not sharply
 identified.
 
+## Threshold-qualified occurrence counts
+
+Applying the selected thresholds produces one zero-complete row for each of
+310,782 physical TP73 anchors and each of the nine motifs (2,797,038 rows).
+Identical-span strand alternatives are collapsed before counting. The 80 MiB
+Parquet contains 3,156,085 qualifying cofactor loci in total.
+
+| Motif | Anchors with any | Anchors with 2+ | Mean loci/anchor | Maximum | Total loci |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| E2F1 | 41.01% | 37,921 | 0.576 | 14 | 179,056 |
+| SP1 | 47.20% | 73,806 | 0.982 | 38 | 305,319 |
+| REST | 34.19% | 25,516 | 0.447 | 14 | 138,785 |
+| POU2F2 | 40.03% | 46,035 | 0.642 | 26 | 199,413 |
+| KLF14 | 43.76% | 55,959 | 0.774 | 27 | 240,437 |
+| TCF7 | 69.51% | 123,715 | 1.423 | 13 | 442,195 |
+| POU4F1 | 70.71% | 156,483 | 2.500 | 62 | 776,904 |
+| TFAP2C | 61.38% | 105,129 | 1.249 | 22 | 388,121 |
+| PATZ1 | 56.47% | 111,516 | 1.563 | 52 | 485,855 |
+
+For every motif, the number of anchors with at least one qualifying locus is
+identical to `selected_retained_anchor_count` in the threshold registry. This
+is an end-to-end check that the occurrence-count builder uses the same score,
+interval, and inclusive-boundary semantics as calibration. The values remain
+sequence-locus counts, not experimental observations of protein binding.
+
 ## Data and provenance
 
 KLF14 was added with a direct sparse-Parquet scan of both chromosome-1 strands
@@ -64,6 +89,13 @@ The populated registry is:
 ```text
 dry_runs/jaspar2026_chr1_convenient_thresholds_20260721/
   tables/jaspar2026/motif_score_threshold/part-000000.parquet
+```
+
+The corresponding zero-complete count table is:
+
+```text
+dry_runs/jaspar2026_chr1_convenient_thresholds_20260721/
+  tables/jaspar2026/tp73_motif_threshold_count/part-000000.parquet
 ```
 
 Its threshold-set ID is `tp73_chr1_cutrun_context_roc_auc_v1`. Every row pins
