@@ -104,3 +104,47 @@ candidate, their difference, support fractions, and a categorical sensitivity
 conclusion. `negative_threshold_higher_auc` means only that the negative
 candidate performed better in this exploratory chromosome-1 analysis; it is
 not an automatic recommendation to change the production storage floor.
+
+## Preserved informative-threshold distribution
+
+![Provisional JASPAR 2026 informative-threshold distribution](figures/jaspar2026_informative_threshold_distribution.svg)
+
+The upper panel combines the checked-in v1 registry with this sensitivity run.
+For each of the 438 motifs originally assigned threshold 0, it substitutes the
+recorded best negative threshold only when that candidate has a strictly higher
+held-out macro ROC AUC than threshold 0. Positive v1 thresholds are unchanged,
+143 motifs remain at 0, and the 17 v1 motifs without an evaluable recommendation
+remain excluded from the bars. This produces 295 provisional negative
+thresholds. The outline at 0 shows the original 438-motif bin before those
+substitutions.
+
+The lower panel expands those 295 motifs by selected threshold. The wide bars
+count every strictly positive point-estimate gain; the narrow bars identify the
+220 motifs whose gain exceeds 0.001. Exact AUC ties use the run's recorded rule:
+the lower numeric, hence more negative, threshold wins. Of the 295 motifs, 194
+(65.8%) select -1 through -4 and 268 (90.8%) select -1 through -10. Threshold
+-1 is the mode (69 motifs), followed by -2 (51), -3 (41), and -4 (33).
+
+The aggregate plotting data are preserved in
+[`figures/jaspar2026_informative_threshold_distribution.tsv`](figures/jaspar2026_informative_threshold_distribution.tsv).
+They were derived from:
+
+- the v1 compact threshold list with SHA-256
+  `1c121a4ef80f68df11f9d2c4570d83e783fccf935f76ccd393acff0dbfdff799`;
+- `negative_threshold_sensitivity.parquet` from the finalized Haumea run, with
+  SHA-256
+  `1fbbb9e532ff1cbfc64977a0a2448d344a86c6cd68e22ed38aca8161f5c5cd7b`;
+- source floor -20 and inclusive integer candidates from -20 through 0.
+
+Regenerate the SVG without plotting-library dependencies:
+
+```sh
+python3 scripts/plot_informative_threshold_distribution.py \
+  docs/figures/jaspar2026_informative_threshold_distribution.tsv \
+  docs/figures/jaspar2026_informative_threshold_distribution.svg
+```
+
+This is deliberately labelled provisional. It visualizes the unconstrained
+information optimum from the chromosome-1 TP73-context model. It does not yet
+apply the proposed genome-background density ceiling of one physical locus per
+300 bp, and it does not replace the versioned v1 registry.

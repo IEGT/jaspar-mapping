@@ -35,6 +35,7 @@ scripts/genelists.sh
 scripts/inspect_chr1_dense_dry_run.sh
 scripts/manage_genome_scan.py
 scripts/manage_motif_threshold_calibration.py
+scripts/plot_informative_threshold_distribution.py
 scripts/plot_tp73_score_distributions.R
 scripts/query_genome_scan.py
 scripts/run_chr1_2026_motif_panel.sh
