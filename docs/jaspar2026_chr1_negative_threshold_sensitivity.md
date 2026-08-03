@@ -83,15 +83,15 @@ Example submission after building a clean Arrow scanner:
 
 ```sh
 SOURCE=/data/sm718/GitHub/jaspar-mapping
-SCAN_RUN=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_sparse_v3
+INPUT=/data/sm718/codex/jaspar2026_chr1_dense_5motifs_5684241/input/public
 V1_RUN=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_context_thresholds_v1
 RUN=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_context_negative_sensitivity_v1
 
 "$SOURCE/scripts/submit_negative_threshold_sensitivity_slurm.sh" \
   --run-root "$RUN" \
   --threshold-list "$SOURCE/thresholds/jaspar2026_grch38_chr1_tp73_context_v1.tsv" \
-  --jaspar "$SCAN_RUN/input/JASPAR2026_CORE_non-redundant_pfms_jaspar.txt" \
-  --genome "$SCAN_RUN/input/Homo_sapiens.GRCh38.dna.primary_assembly.fasta" \
+  --jaspar "$INPUT/JASPAR2026_CORE_non-redundant_pfms_jaspar.txt" \
+  --genome "$INPUT/Homo_sapiens.GRCh38.dna.primary_assembly.fasta" \
   --anchor-evidence "$V1_RUN/input/tp73_chr1_anchor_evidence.parquet" \
   --runtime-prefix "$V1_RUN/runtime" \
   --source "$SOURCE" --account cluster --partition requeue \
