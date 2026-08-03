@@ -146,5 +146,5 @@ python3 scripts/plot_informative_threshold_distribution.py \
 
 This is deliberately labelled provisional. It visualizes the unconstrained
 information optimum from the chromosome-1 TP73-context model. It does not yet
-apply the proposed genome-background density ceiling of one physical locus per
-300 bp, and it does not replace the versioned v1 registry.
+apply the later genome-background density ceiling of one physical locus per
+200 valid alignment starts, and it does not replace the versioned v1 registry.

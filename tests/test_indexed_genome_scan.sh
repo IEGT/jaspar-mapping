@@ -85,6 +85,33 @@ distribution_file=$(find "$distribution_dir" -type f -name 'Any_TEST.1_score_dis
 distribution_count=$(awk -F '\t' 'NR > 1 { count += $16 } END { print count + 0 }' "$distribution_file")
 [[ "$distribution_count" -eq 24 ]] ||
     fail "score distribution counted $distribution_count windows, expected 24"
+awk -F '\t' 'NR > 1 && $17 != "orientation_records" { exit 1 }' \
+    "$distribution_file" || fail "ordinary both-strand distribution lost its aggregation label"
+
+collapsed_dir="$tmp_dir/distribution-collapsed"
+mkdir -p "$collapsed_dir"
+"$pssm_scan_bin" \
+    --genome "$fasta" \
+    --fasta-index "$fasta_index" \
+    --pssm "$pssm" \
+    --motif TEST.1 \
+    --outdir "$collapsed_dir" \
+    --score-distribution \
+    --collapse-orientations \
+    --distribution-bin-width 1 \
+    --strand both \
+    > "$tmp_dir/distribution-collapsed.stdout" \
+    2> "$tmp_dir/distribution-collapsed.stderr"
+
+collapsed_file=$(find "$collapsed_dir" -type f \
+    -name 'Any_TEST.1_score_distribution_*both-collapsed*.tsv' -print)
+[[ -f "$collapsed_file" ]] || fail "collapsed score distribution was not created"
+collapsed_count=$(awk -F '\t' 'NR > 1 { count += $16 } END { print count + 0 }' \
+    "$collapsed_file")
+[[ "$collapsed_count" -eq 12 ]] ||
+    fail "collapsed distribution counted $collapsed_count loci, expected 12"
+awk -F '\t' 'NR > 1 && $17 != "max_score_per_alignment_span" { exit 1 }' \
+    "$collapsed_file" || fail "collapsed distribution lacks its physical-locus label"
 
 dense_dir="$tmp_dir/dense"
 "$pssm_scan_bin" \

@@ -214,6 +214,28 @@ run rescans only the 438 motifs recommended at zero and tests every integer
 threshold from -20 through zero. It is a left-censoring and filtering-bias
 audit; it does not mutate the v1 registry or its compact export.
 
+## Density-capped production floor
+
+The next whole-genome generation combines the provisional informative result
+with a permissive default and a storage-density ceiling. For each motif:
+
+```text
+candidate_minimum_score = min(informative_threshold, -1)
+final_minimum_score = max(candidate_minimum_score, density_threshold)
+```
+
+An unevaluable informative threshold uses `-1`; TP73 is added separately at
+`-5`. The density threshold is the lowest integer candidate retaining at most
+`floor(valid_chromosome_1_alignment_starts / 200)` physical loci. At one
+alignment span, plus and minus scores are collapsed by their maximum. This is a
+reciprocal density target, not a nearest-neighbor-distance statistic. The
+production scan continues to store passing orientations separately.
+
+The restart-safe calibration and whole-genome handoff are specified in
+[`jaspar2026_informative_density200_scan.md`](jaspar2026_informative_density200_scan.md).
+The resulting TSV/JSON becomes a new immutable threshold set; it does not
+rewrite the v1 TP73-context registry.
+
 On Haumea, the scalable unit should be one neighboring motif against the fixed
 TP73 anchor/label table. Resolve its exact plus/minus chromosome files through
 `scan_file_inventory`, derive maxima and metric rows in a requeueable task, and

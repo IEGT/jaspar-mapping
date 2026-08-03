@@ -1,5 +1,13 @@
 # JASPAR 2026 Whole-Genome Scan Preflight
 
+The fixed TP73 `-5` / other-motif `-1` policy below documents the completed v3
+generation. The next production generation, using motif-specific informative
+floors plus a chromosome-1 ceiling of one physical locus per 200 valid starts,
+is specified in
+[`jaspar2026_informative_density200_scan.md`](jaspar2026_informative_density200_scan.md).
+That newer plan retains this document's genome identity, scratch staging,
+requeue, integrity, and cross-species contracts.
+
 ## Scope and frozen decisions
 
 This is an execution plan, not an executed run. It scans canonical human
@@ -93,12 +101,11 @@ the source file changes.
 ## Slurm execution
 
 Run at most 20 chromosome workers. Each worker copies exactly one chromosome
-from the indexed immutable FASTA on `/data` into its unique node-local
-`/scratch` directory, verifies its length and planned sequence SHA-256, creates
-a local `.fai`, and reuses that local sequence for all 43 motif batches. The
-source index supplies the byte offset for extraction; the local index describes
-the newly wrapped one-record FASTA to the unchanged scanner. Neither index
-affects scoring.
+and the small JASPAR source from `/data` into its unique node-local `/scratch`
+directory, verifies their checksums, creates a local chromosome `.fai`, and
+reuses those local inputs for all motif batches. The source index supplies the
+byte offset for extraction; the local index describes the newly wrapped
+one-record FASTA to the unchanged scanner. Neither index affects scoring.
 
 Start with one scanner process and 16 GiB per chromosome worker. The scanner's
 resident set is smaller, but this leaves room for Arrow and DuckDB validation.

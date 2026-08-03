@@ -171,6 +171,8 @@ check: pssm_scan $(TEST_BINARIES)
 	bash tests/test_progress_signal.sh
 	bash tests/test_slurm_task_offset.sh
 	bash tests/test_build_fasta_index.sh
+	bash tests/test_density_capped_thresholds.sh
+	bash tests/test_motif_density_calibration.sh
 	bash tests/test_stage_fasta_region.sh
 	bash tests/test_submit_motif_context_slurm.sh
 	bash tests/test_cutandrun_containment.sh

@@ -74,6 +74,10 @@ task_count=$(
     echo "E: Chromosome worker did not index its staged FASTA." >&2
     exit 1
 }
+[[ -s $temporary/chromosome-scratch/motifs.jaspar ]] || {
+    echo "E: Chromosome worker did not stage its JASPAR source." >&2
+    exit 1
+}
 
 # A retry must validate and reuse the promoted task rather than rescan it.
 "$manager" run-task --run-root "$run_root" --task-index 0 \
@@ -127,6 +131,13 @@ grep -Fq 'deliberate catalog-build failure' "$temporary/finalize-failure.stderr"
             SELECT 1 FROM scan_threshold_policy
             WHERE policy_id = 'default_uncalibrated' AND minimum_score = -1
         ) THEN error('threshold policies were not preserved') END;
+        SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM scan_motif_threshold
+            WHERE motif_id = 'MA0861.2' AND final_minimum_score = -5
+        ) OR NOT EXISTS (
+            SELECT 1 FROM scan_motif_threshold
+            WHERE motif_id = 'MA0001.1' AND final_minimum_score = -1
+        ) THEN error('legacy per-motif thresholds were not materialized') END;
         SELECT CASE WHEN EXISTS (
             SELECT 1 FROM scan_file_inventory
             WHERE state <> 'complete'
@@ -335,5 +346,116 @@ then
     echo "E: Failed task was promoted." >&2
     exit 1
 fi
+
+# A rich per-motif registry must group motifs only with identical thresholds,
+# survive task execution, and become a queryable provenance table.
+threshold_registry="$temporary/motif-thresholds.tsv"
+cat > "$threshold_registry" <<'EOF'
+motif_id	informative_threshold	informative_source	default_minimum_score	candidate_minimum_score	density_minimum_spacing_bp	density_maximum_loci	density_threshold	final_minimum_score	density_limited	density_chrom	valid_locus_starts	skipped_locus_starts	loci_at_candidate_threshold	loci_at_final_threshold	mean_spacing_bp_at_final_threshold	distribution_sha256
+MA0001.1	-2	synthetic_context	-1	-2	4	2	0	0	true	1	8	0	4	1	8	1111111111111111111111111111111111111111111111111111111111111111
+MA0861.2	-5	synthetic_cutrun	-1	-5	4	1	-4	-4	true	1	7	0	3	1	7	2222222222222222222222222222222222222222222222222222222222222222
+EOF
+python3 - "$threshold_registry" "$temporary/motif-thresholds.json" \
+    "$temporary/genome.fna" "$temporary/motifs.jaspar" "$source_commit" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+thresholds = pathlib.Path(sys.argv[1])
+genome = pathlib.Path(sys.argv[3])
+jaspar = pathlib.Path(sys.argv[4])
+metadata = {
+    "schema_version": 1,
+    "threshold_set_id": "synthetic_density4_v1",
+    "genome_id": "synthetic_genome_v1",
+    "motif_set_id": "synthetic_jaspar_v1",
+    "score_mode": "log2_relative_risk",
+    "pseudocount": 1,
+    "genome_fasta_sha256": hashlib.sha256(genome.read_bytes()).hexdigest(),
+    "density_chrom": "1",
+    "density_chrom_sequence_sha256": hashlib.sha256(b"ACGTNACGT").hexdigest(),
+    "jaspar_sha256": hashlib.sha256(jaspar.read_bytes()).hexdigest(),
+    "source_commit": sys.argv[5],
+    "orientation_aggregation": "max_score_per_alignment_span",
+    "distribution_bin_width": 1,
+    "candidate_formula": "min(informative_threshold, default_minimum_score)",
+    "final_formula": "max(candidate_minimum_score, density_threshold)",
+    "density_minimum_spacing_bp": 4,
+    "default_minimum_score": -1,
+    "informative_thresholds_sha256": "3" * 64,
+    "negative_sensitivity_sha256": None,
+    "override_thresholds_sha256": "4" * 64,
+    "distribution_manifest_sha256": "5" * 64,
+    "motifs": 2,
+    "threshold_tsv_sha256": hashlib.sha256(thresholds.read_bytes()).hexdigest(),
+}
+pathlib.Path(sys.argv[2]).write_text(
+    json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="ascii"
+)
+PY
+
+threshold_run="$temporary/threshold-run"
+threshold_task_count=$(
+    "$manager" prepare \
+        --run-root "$threshold_run" --run-id synthetic_threshold_scan_v1 \
+        --source-commit "$source_commit" \
+        --genome "$temporary/genome.fna" \
+        --fasta-index "$temporary/genome.fna.fai" \
+        --jaspar "$temporary/motifs.jaspar" \
+        --genome-id synthetic_genome_v1 --motif-set-id synthetic_jaspar_v1 \
+        --taxon-id 9606 --species 'Homo sapiens synthetic' \
+        --assembly-name SYN1 --assembly-accession GCA_SYNTHETIC \
+        --ensembl-release 113 \
+        --fasta-url https://example.invalid/genome.fna \
+        --jaspar-url https://example.invalid/motifs.jaspar \
+        --chrom 1 --motif-batch-size 64 --minimum-free-gib 0 \
+        --motif-thresholds "$threshold_registry" \
+        --motif-threshold-metadata "$temporary/motif-thresholds.json" \
+        | awk -F= '$1 == "TASK_COUNT" { print $2 }'
+)
+[[ $threshold_task_count == 2 ]] || {
+    echo "E: Distinct thresholds were not split into two tasks." >&2
+    exit 1
+}
+python3 - "$threshold_run/plan/scan_plan.json" <<'PY'
+import json
+import sys
+
+plan = json.load(open(sys.argv[1], encoding="utf-8"))
+assert plan["schema_version"] == 2
+assert len(plan["threshold_policies"]) == 1
+assert plan["threshold_policies"][0]["selector_type"] == "per_motif_registry"
+assert {task["minimum_score"] for task in plan["tasks"]} == {-4.0, 0.0}
+for task in plan["tasks"]:
+    assert len(task["motif_ids"]) == 1
+PY
+
+"$manager" run-chromosome --run-root "$threshold_run" --chrom 1 \
+    --scanner "$scanner" --duckdb duckdb --allow-local \
+    --scratch-directory "$temporary/threshold-scratch" \
+    --minimum-scratch-free-gib 0 --batch-workers 2 \
+    --allow-scanner-provenance-mismatch >/dev/null
+"$manager" finalize --run-root "$threshold_run" --duckdb duckdb >/dev/null
+(
+    cd "$threshold_run/package"
+    duckdb jaspar_genome_scan.duckdb -bail -c "
+        SELECT CASE WHEN (SELECT count(*) FROM scan_motif_threshold) <> 2
+            THEN error('rich motif threshold table has the wrong size') END;
+        SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM scan_motif_threshold
+            WHERE motif_id = 'MA0861.2'
+              AND threshold_set_id = 'synthetic_density4_v1'
+              AND candidate_minimum_score = -5
+              AND density_threshold = -4
+              AND final_minimum_score = -4
+              AND density_limited
+        ) THEN error('rich TP73 threshold provenance was lost') END;
+        SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM scan_motif_threshold
+            WHERE motif_id = 'MA0001.1' AND final_minimum_score = 0
+        ) THEN error('rich cofactor threshold was lost') END;
+    " >/dev/null
+)
 
 echo "Genome-scan manager tests passed."

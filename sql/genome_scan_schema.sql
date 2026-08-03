@@ -31,6 +31,36 @@ SELECT * FROM read_parquet(
     'tables/jaspar2026/scan_file_inventory/part-000000.parquet'
 );
 
+-- Backward-compatible fallback for packages finalized before detailed
+-- per-motif threshold provenance was stored. The catalog builder replaces this
+-- table from scan_motif_threshold Parquet when that file is present.
+CREATE OR REPLACE TABLE scan_motif_threshold AS
+SELECT
+    run_id,
+    genome_id,
+    motif_set_id,
+    ('legacy_' || run_id)::VARCHAR AS threshold_set_id,
+    NULL::VARCHAR AS threshold_registry_sha256,
+    motif_id,
+    NULL::DOUBLE AS informative_threshold,
+    'legacy_scan_inventory'::VARCHAR AS informative_source,
+    NULL::DOUBLE AS default_minimum_score,
+    MIN(CAST(minimum_score AS DOUBLE)) AS candidate_minimum_score,
+    NULL::DOUBLE AS density_minimum_spacing_bp,
+    NULL::BIGINT AS density_maximum_loci,
+    NULL::DOUBLE AS density_threshold,
+    MIN(CAST(minimum_score AS DOUBLE)) AS final_minimum_score,
+    NULL::BOOLEAN AS density_limited,
+    NULL::VARCHAR AS density_chrom,
+    NULL::BIGINT AS valid_locus_starts,
+    NULL::BIGINT AS skipped_locus_starts,
+    NULL::BIGINT AS loci_at_candidate_threshold,
+    NULL::BIGINT AS loci_at_final_threshold,
+    NULL::DOUBLE AS mean_spacing_bp_at_final_threshold,
+    NULL::VARCHAR AS distribution_sha256
+FROM scan_file_inventory
+GROUP BY run_id, genome_id, motif_set_id, motif_id;
+
 -- Hit payloads are intentionally not bound here. Opening a package-wide glob
 -- made DuckDB inspect every Parquet footer (131,650 files in the GRCh38 run)
 -- merely to create the catalog. Call motif_hit_files() with the exact paths

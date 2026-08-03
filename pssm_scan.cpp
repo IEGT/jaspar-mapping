@@ -1732,6 +1732,81 @@ int scanScoreDistribution(const std::string& chromosome, const EncodedChromosome
     return 0;
 }
 
+/** \brief Collect one score per genomic alignment span, taking the better orientation.
+ *
+ * This is the physical-locus distribution used for density calibration. A
+ * genomic start is counted once even when both motif orientations pass a later
+ * threshold. Sequence-unavailable starts (for example an N under --skip-N) are
+ * likewise skipped once.
+ */
+int scanCollapsedOrientationScoreDistribution(
+        const std::string& chromosome,
+        const EncodedChromosome& encodedChromosome,
+        const PSSM& pssm, const FlatPSSM& flatPssm, long from, long to,
+        ScoreDistribution& distribution, ProgressRunState& progressState) {
+    const size_t motifLength = pssm.motifLength;
+    const size_t sequenceLength = encodedChromosome.sequence.size();
+    if (encodedChromosome.minusCodes.empty()) {
+        std::cerr << "E: Collapsed-orientation distribution requires minus-strand codes."
+                  << std::endl;
+        return -1;
+    }
+
+    size_t posStart = from > 0L ? static_cast<size_t>(from) : 0;
+    size_t posEnd = sequenceLength;
+    if (to > 0L && to < static_cast<long>(sequenceLength)) {
+        posEnd = static_cast<size_t>(to);
+    }
+    if (posEnd < motifLength || posStart > posEnd - motifLength) {
+        std::cerr << "W: Requested distribution interval is shorter than motif "
+                  << pssm.motifName << "." << std::endl;
+        return 0;
+    }
+
+    const size_t lastWindowStart = posEnd - motifLength;
+    const size_t statusCheckMask = 0x3fff;
+    for (size_t blockStart = posStart; blockStart <= lastWindowStart;
+         blockStart += DEFAULT_SCORE_BLOCK_SIZE) {
+        const size_t windowCount = std::min(
+            DEFAULT_SCORE_BLOCK_SIZE, lastWindowStart - blockStart + 1);
+        const ScoreBlock plusBlock = calculateScoreBlock(
+            encodedChromosome.plusCodes, sequenceLength, false,
+            blockStart, windowCount, flatPssm);
+        const ScoreBlock minusBlock = calculateScoreBlock(
+            encodedChromosome.minusCodes, sequenceLength, true,
+            blockStart, windowCount, flatPssm);
+        for (size_t offset = 0; offset < windowCount; ++offset) {
+            const bool plusAvailable = plusBlock.sequenceValid[offset] &&
+                !isSkippedScore(plusBlock.scores[offset]);
+            const bool minusAvailable = minusBlock.sequenceValid[offset] &&
+                !isSkippedScore(minusBlock.scores[offset]);
+            if (!plusAvailable && !minusAvailable) {
+                distribution.add(SENTINEL_SCORE);
+            } else if (!minusAvailable) {
+                distribution.add(plusBlock.scores[offset]);
+            } else if (!plusAvailable) {
+                distribution.add(minusBlock.scores[offset]);
+            } else {
+                distribution.add(std::max(
+                    plusBlock.scores[offset], minusBlock.scores[offset]));
+            }
+        }
+
+        if (((blockStart - posStart) & statusCheckMask) == 0) {
+            maybePrintRequestedProgress(
+                "score_distribution_locus_max", pssm, chromosome,
+                "both_collapsed", progressState, posStart, posEnd,
+                motifLength, blockStart);
+        }
+    }
+
+    maybePrintRequestedProgress(
+        "score_distribution_locus_max", pssm, chromosome,
+        "both_collapsed", progressState, posStart, posEnd,
+        motifLength, lastWindowStart);
+    return 0;
+}
+
 /** \brief Slide the PSSM across one sequence and write dense score blocks.
  */
 int scanDenseScores(const std::string& chromosome, const EncodedChromosome& encodedChromosome, const std::string& strand,
@@ -1849,8 +1924,8 @@ int scanDenseScores(const std::string& chromosome, const EncodedChromosome& enco
 
 void writeScoreDistribution(std::ofstream& outFile, const ScoreDistribution& distribution, const PSSM& pssm,
                             const std::string& chromosome, const std::string& strand, const std::string& scoreMode,
-                            double pseudocount) {
-    outFile << "MotifID\tMotifName\tChromosome\tStrand\tScoreMode\tPseudocount\tBinScheme\tBinWidth\tValidWindows\tSkippedWindows\tMinScore\tMaxScore\tMeanScore\tScoreBinStart\tScoreBinEnd\tBinCount\n";
+                            double pseudocount, const std::string& orientationAggregation) {
+    outFile << "MotifID\tMotifName\tChromosome\tStrand\tScoreMode\tPseudocount\tBinScheme\tBinWidth\tValidWindows\tSkippedWindows\tMinScore\tMaxScore\tMeanScore\tScoreBinStart\tScoreBinEnd\tBinCount\tOrientationAggregation\n";
     if (distribution.skippedWindows > 0) {
         outFile << pssm.motifID << "\t" << pssm.motifName << "\t" << chromosome << "\t" << strand << "\t" << scoreMode
                 << "\t" << std::fixed << std::setprecision(6) << pseudocount
@@ -1864,6 +1939,7 @@ void writeScoreDistribution(std::ofstream& outFile, const ScoreDistribution& dis
                 << "\t-Inf"
                 << "\t-10000"
                 << "\t" << distribution.skippedWindows
+                << "\t" << orientationAggregation
                 << '\n';
     }
     for (const auto& [bin, count] : distribution.bins) {
@@ -1879,6 +1955,7 @@ void writeScoreDistribution(std::ofstream& outFile, const ScoreDistribution& dis
                 << "\t" << bin.start
                 << "\t" << bin.end
                 << "\t" << count
+                << "\t" << orientationAggregation
                 << '\n';
     }
 }
@@ -2246,7 +2323,7 @@ struct PreparedMotif {
 };
 
 void printHelp(const std::string& programName, const std::string& genomeFile, const std::string& fastaIndexFile, const std::string& gzipIndexFile, const std::string& pssmFile, const std::string& targetMotifID, double threshold, double minPwmRelativeScore, double maxPwmRelativeScore, double pseudocount, const std::string& chromosome, long from, long to, const std::string& regions, const std::string& outdir, bool showSequence, const std::string& scoreMode, bool scoreDistribution, const std::string& distributionBinWidth, bool sparseParquet, bool denseScores, size_t denseBlockSize, StrandMode strandMode, CoordinateMode coordinateMode, const std::string& motifListFile, const std::string& motifSetID, const std::string& genomeID, const std::string& backgroundModelID, const std::string& pseudocountScheme, const std::string& scanFileStatsFile) {
-    std::cout << "Usage: " << programName << " [-v] [-c chromosome] [-t toBp] [-f fromBp] [-g genome_file] [-p pssm_file] [-m motif_id | --motif-list file] [--score-mode log2_relative_risk|log_odds] [--pseudocount value] [--strand +|-|both] [--coordinate-mode legacy|bed] [--score-distribution] [--distribution-bin-width adaptive|width] [--sparse-parquet] [--dense-scores] [--dense-block-size windows] [--context-maxima output.parquet --regions anchors.tsv --context-flank bp] [--skip-N | --neutral-N] [--skip-normalization]" << std::endl;
+    std::cout << "Usage: " << programName << " [-v] [-c chromosome] [-t toBp] [-f fromBp] [-g genome_file] [-p pssm_file] [-m motif_id | --motif-list file] [--score-mode log2_relative_risk|log_odds] [--pseudocount value] [--strand +|-|both] [--coordinate-mode legacy|bed] [--score-distribution] [--collapse-orientations] [--distribution-bin-width adaptive|width] [--sparse-parquet] [--dense-scores] [--dense-block-size windows] [--context-maxima output.parquet --regions anchors.tsv --context-flank bp] [--skip-N | --neutral-N] [--skip-normalization]" << std::endl;
     std::cout << " -v, --verbose        Allow verbose output (set to " << beVerbose << ")" << std::endl;
     std::cout << " -d, --debug          Allow debug output (set to " << showDebug << ")" << std::endl;
     std::cout << " -g, --genome         Path to genome FASTA file (set to '" << genomeFile  << "')" << std::endl;
@@ -2274,6 +2351,7 @@ void printHelp(const std::string& programName, const std::string& genomeFile, co
     std::cout << " --strand             Strand to scan: +, -, or both (set to '" << strandModeName(strandMode) << "')" << std::endl;
     std::cout << " --coordinate-mode    Output coordinate convention: legacy or bed (set to '" << coordinateModeName(coordinateMode) << "')" << std::endl;
     std::cout << " --score-distribution Write a score histogram instead of BED hits; default strand is + unless --strand is set (set to " << scoreDistribution << ")" << std::endl;
+    std::cout << " --collapse-orientations With --score-distribution --strand both, count each genomic alignment span once using its maximum orientation score" << std::endl;
     std::cout << " --distribution-bin-width Score histogram bin width or adaptive ladder (set to '" << distributionBinWidth << "')" << std::endl;
     std::cout << " --sparse-parquet     Write thresholded hits directly to partitioned Parquet (set to " << sparseParquet << "; requires Arrow build, explicit --threshold, and BED coordinates)" << std::endl;
     std::cout << " --dense-scores       Write dense " << denseScoreFormatName() << " score blocks for one motif and one chromosome (set to " << denseScores << ")" << std::endl;
@@ -2379,6 +2457,7 @@ int main(int argc, char* argv[]) {
     std::string outdir = ".";
     std::string scoreMode = "log2_relative_risk";
     bool scoreDistribution = false;
+    bool collapseOrientations = false;
     std::string distributionBinWidth = "adaptive";
     bool sparseParquet = false;
     bool denseScores = false;
@@ -2418,6 +2497,7 @@ int main(int argc, char* argv[]) {
         {"strand", required_argument, 0, 0},
         {"coordinate-mode", required_argument, 0, 0},
         {"score-distribution", no_argument, 0, 0},
+        {"collapse-orientations", no_argument, 0, 0},
         {"distribution-bin-width", required_argument, 0, 0},
         {"sparse-parquet", no_argument, 0, 0},
         {"dense-scores", no_argument, 0, 0},
@@ -2566,6 +2646,8 @@ int main(int argc, char* argv[]) {
                     }
                 } else if (std::string(long_options[option_index].name) == "score-distribution") {
                     scoreDistribution = true;
+                } else if (std::string(long_options[option_index].name) == "collapse-orientations") {
+                    collapseOrientations = true;
                 } else if (std::string(long_options[option_index].name) == "distribution-bin-width") {
                     distributionBinWidth = optarg;
                     std::string normalizedBinWidth = distributionBinWidth;
@@ -2692,6 +2774,16 @@ int main(int argc, char* argv[]) {
 
     if (scoreDistribution && !strandModeSet) {
         strandMode = StrandMode::Plus;
+    }
+    if (collapseOrientations && !scoreDistribution) {
+        std::cerr << "E: --collapse-orientations requires --score-distribution."
+                  << std::endl;
+        return 1;
+    }
+    if (collapseOrientations && strandMode != StrandMode::Both) {
+        std::cerr << "E: --collapse-orientations requires --strand both."
+                  << std::endl;
+        return 1;
     }
     if (denseScores) {
         if (!motifListFile.empty()) {
@@ -3095,7 +3187,8 @@ int main(int argc, char* argv[]) {
             if (scoreDistribution) {
                 const std::string chromosomeLabel = targetChromosome.empty() ? "all" : targetChromosome;
                 const std::string distributionStrandLabel = strandModeName(strandMode);
-                const std::string distributionStrandFileLabel = strandModeFileLabel(strandMode);
+                const std::string distributionStrandFileLabel = collapseOrientations ?
+                    "both-collapsed" : strandModeFileLabel(strandMode);
                 std::string distributionBinWidthForFile = distributionBinWidth;
                 std::replace(distributionBinWidthForFile.begin(), distributionBinWidthForFile.end(), '/', '-');
                 std::replace(distributionBinWidthForFile.begin(), distributionBinWidthForFile.end(), '\\', '-');
@@ -3118,7 +3211,30 @@ int main(int argc, char* argv[]) {
 
                 ScoreDistribution& distribution = *preparedMotif.distribution;
 
-                if (!regions.empty()) {
+                if (collapseOrientations && !regions.empty()) {
+                    for (const auto& region : regions) {
+                        if (region.chromosome != chromosome) {
+                            continue;
+                        }
+                        const long seqLength = static_cast<long>(
+                            encodedChromosome.sequence.length());
+                        const long regionFrom = std::max(0L, region.from);
+                        const long regionTo = std::min(seqLength, region.to);
+                        if (scanCollapsedOrientationScoreDistribution(
+                                chromosome, encodedChromosome, preparedPssm,
+                                flatPssm, regionFrom, regionTo, distribution,
+                                progressState) != 0) {
+                            return 1;
+                        }
+                    }
+                } else if (collapseOrientations) {
+                    if (scanCollapsedOrientationScoreDistribution(
+                            chromosome, encodedChromosome, preparedPssm,
+                            flatPssm, targetFrom, targetTo, distribution,
+                            progressState) != 0) {
+                        return 1;
+                    }
+                } else if (!regions.empty()) {
                     for (const auto& region : regions) {
                         if (region.chromosome != chromosome) {
                             continue;
@@ -3167,7 +3283,12 @@ int main(int argc, char* argv[]) {
                     }
                     writeScoreDistribution(outFileDistribution, distribution, preparedPssm,
                                            chromosomeLabel, distributionStrandLabel,
-                                           effectiveScoreMode, effectivePseudocount);
+                                           effectiveScoreMode, effectivePseudocount,
+                                           collapseOrientations ?
+                                               "max_score_per_alignment_span" :
+                                               (strandMode == StrandMode::Both ?
+                                                   "orientation_records" :
+                                                   "single_orientation"));
                     std::cout << "Score distribution saved to: " << outputFileNameDistribution << std::endl;
                 }
                 continue;

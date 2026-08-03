@@ -19,6 +19,9 @@ thresholds to context queries, also read
 For whole-genome JASPAR 2026 scans, Slurm batching/requeue behavior, production
 inventories, or cross-species identity, also read
 [`docs/jaspar2026_genome_scan_plan.md`](docs/jaspar2026_genome_scan_plan.md).
+For the informative-or-`-1` per-motif policy, chromosome-1 physical-locus
+density calibration, or the 200 bp production ceiling, also read
+[`docs/jaspar2026_informative_density200_scan.md`](docs/jaspar2026_informative_density200_scan.md).
 For scanner execution, scratch staging, finalization, checksum verification,
 build provenance, or exact-file DuckDB queries, also read
 [`docs/scanner_maintenance.md`](docs/scanner_maintenance.md).

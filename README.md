@@ -197,6 +197,9 @@ accept `--regions`; use a chromosome with optional `--from`/`--to` bounds.
 The requeue-safe whole-genome planner, per-task validator, immutable inventories,
 SIGUSR1 workflow, and human/mouse/rat identity contract are documented in
 [`docs/jaspar2026_genome_scan_plan.md`](docs/jaspar2026_genome_scan_plan.md).
+The motif-specific informative-or-`-1` policy, chromosome-1 physical-locus
+density ceiling, and its scratch-staged production handoff are documented in
+[`docs/jaspar2026_informative_density200_scan.md`](docs/jaspar2026_informative_density200_scan.md).
 The maintenance contract for node-local chromosome staging, fast finalization,
 resumable checksums, portable catalogs, and exact-file queries is documented in
 [`docs/scanner_maintenance.md`](docs/scanner_maintenance.md). The observed GRCh38

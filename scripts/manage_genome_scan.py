@@ -12,6 +12,7 @@ staging. Failed staging directories are deliberately retained for diagnosis.
 from __future__ import annotations
 
 import argparse
+import csv
 import datetime as dt
 import gzip
 import hashlib
@@ -36,7 +37,8 @@ class ScanError(RuntimeError):
 
 IDENTIFIER = re.compile(r"^[A-Za-z0-9._-]+$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
-PLAN_SCHEMA_VERSION = 1
+PLAN_SCHEMA_VERSION = 2
+SUPPORTED_PLAN_SCHEMA_VERSIONS = {1, 2}
 
 
 class OperationProgress:
@@ -409,10 +411,212 @@ def safe_label(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-") or "sequence"
 
 
+def optional_float(value: str, label: str) -> float | None:
+    if value in {"", "NA"}:
+        return None
+    result = float(value)
+    if not math.isfinite(result):
+        raise ScanError(f"{label} must be finite or NA")
+    return result
+
+
+def parse_boolean(value: str, label: str) -> bool:
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    raise ScanError(f"{label} must be true or false")
+
+
+def read_motif_threshold_registry(
+    threshold_path: Path,
+    metadata_path: Path,
+    motif_ids: set[str],
+    arguments: argparse.Namespace,
+    fasta_sha256: str,
+    sequence_sha256_by_chrom: dict[str, str],
+    jaspar_sha256: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    metadata = json_read(metadata_path)
+    if metadata.get("threshold_tsv_sha256") != sha256_file(threshold_path):
+        raise ScanError("motif-threshold TSV checksum disagrees with its metadata")
+    expected_metadata = {
+        "schema_version": 1,
+        "genome_id": arguments.genome_id,
+        "motif_set_id": arguments.motif_set_id,
+        "score_mode": arguments.score_mode,
+        "genome_fasta_sha256": fasta_sha256,
+        "jaspar_sha256": jaspar_sha256,
+        "source_commit": arguments.source_commit,
+        "orientation_aggregation": "max_score_per_alignment_span",
+        "distribution_bin_width": 1,
+        "candidate_formula": "min(informative_threshold, default_minimum_score)",
+        "final_formula": "max(candidate_minimum_score, density_threshold)",
+    }
+    for field, expected in expected_metadata.items():
+        if metadata.get(field) != expected:
+            raise ScanError(f"motif-threshold metadata {field} mismatch")
+    if abs(float(metadata.get("pseudocount", math.nan)) - arguments.pseudocount) > 1e-9:
+        raise ScanError("motif-threshold metadata pseudocount mismatch")
+    density_chrom = str(metadata.get("density_chrom", ""))
+    if density_chrom not in sequence_sha256_by_chrom:
+        raise ScanError("motif-threshold density chromosome is absent from the genome")
+    if (metadata.get("density_chrom_sequence_sha256")
+            != sequence_sha256_by_chrom[density_chrom]):
+        raise ScanError("motif-threshold density chromosome checksum mismatch")
+    density_spacing = float(metadata.get("density_minimum_spacing_bp", math.nan))
+    default_score = float(metadata.get("default_minimum_score", math.nan))
+    if not math.isfinite(density_spacing) or density_spacing <= 0:
+        raise ScanError("motif-threshold density spacing is invalid")
+    if not math.isfinite(default_score):
+        raise ScanError("motif-threshold default score is invalid")
+    threshold_set_id = metadata.get("threshold_set_id")
+    if not isinstance(threshold_set_id, str) or not IDENTIFIER.fullmatch(threshold_set_id):
+        raise ScanError("motif-threshold set ID is invalid")
+    for field in (
+        "informative_thresholds_sha256", "distribution_manifest_sha256",
+    ):
+        digest = metadata.get(field)
+        if (not isinstance(digest, str) or len(digest) != 64
+                or any(character not in "0123456789abcdef" for character in digest)):
+            raise ScanError(f"motif-threshold metadata {field} is invalid")
+    for field in ("negative_sensitivity_sha256", "override_thresholds_sha256"):
+        digest = metadata.get(field)
+        if digest is not None and (
+            not isinstance(digest, str) or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+        ):
+            raise ScanError(f"motif-threshold metadata {field} is invalid")
+
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    with threshold_path.open(encoding="ascii", newline="") as stream:
+        reader = csv.DictReader(stream, delimiter="\t")
+        required = {
+            "motif_id", "informative_threshold", "informative_source",
+            "default_minimum_score", "candidate_minimum_score",
+            "density_minimum_spacing_bp", "density_maximum_loci",
+            "density_threshold", "final_minimum_score", "density_limited",
+            "density_chrom", "valid_locus_starts", "skipped_locus_starts",
+            "loci_at_candidate_threshold", "loci_at_final_threshold",
+            "mean_spacing_bp_at_final_threshold", "distribution_sha256",
+        }
+        if reader.fieldnames is None or not required.issubset(reader.fieldnames):
+            raise ScanError("motif-threshold registry has an incomplete schema")
+        for source in reader:
+            motif_id = source["motif_id"]
+            if not motif_id or motif_id in seen:
+                raise ScanError(f"blank or duplicate motif threshold: {motif_id!r}")
+            seen.add(motif_id)
+            final_score = optional_float(
+                source["final_minimum_score"], f"final threshold for {motif_id}"
+            )
+            if final_score is None:
+                raise ScanError(f"final threshold is absent for {motif_id}")
+            informative_threshold = optional_float(
+                source["informative_threshold"],
+                f"informative threshold for {motif_id}",
+            )
+            row = {
+                    "motif_id": motif_id,
+                    "informative_threshold": informative_threshold,
+                    "informative_source": source["informative_source"],
+                    "default_minimum_score": float(source["default_minimum_score"]),
+                    "candidate_minimum_score": float(source["candidate_minimum_score"]),
+                    "density_minimum_spacing_bp": float(
+                        source["density_minimum_spacing_bp"]
+                    ),
+                    "density_maximum_loci": int(source["density_maximum_loci"]),
+                    "density_threshold": float(source["density_threshold"]),
+                    "final_minimum_score": final_score,
+                    "density_limited": parse_boolean(
+                        source["density_limited"], f"density flag for {motif_id}"
+                    ),
+                    "density_chrom": source["density_chrom"],
+                    "valid_locus_starts": int(source["valid_locus_starts"]),
+                    "skipped_locus_starts": int(source["skipped_locus_starts"]),
+                    "loci_at_candidate_threshold": int(
+                        source["loci_at_candidate_threshold"]
+                    ),
+                    "loci_at_final_threshold": int(
+                        source["loci_at_final_threshold"]
+                    ),
+                    "mean_spacing_bp_at_final_threshold": optional_float(
+                        source["mean_spacing_bp_at_final_threshold"],
+                        f"mean spacing for {motif_id}",
+                    ),
+                    "distribution_sha256": source["distribution_sha256"],
+                }
+            numeric_thresholds = (
+                row["default_minimum_score"], row["candidate_minimum_score"],
+                row["density_threshold"], row["final_minimum_score"],
+            )
+            if any(not math.isfinite(value) or abs(value - round(value)) > 1e-9
+                   for value in numeric_thresholds):
+                raise ScanError(f"thresholds are not on the integer grid for {motif_id}")
+            if (informative_threshold is not None
+                    and abs(informative_threshold - round(informative_threshold)) > 1e-9):
+                raise ScanError(
+                    f"informative threshold is not on the integer grid for {motif_id}"
+                )
+            expected_candidate = default_score if informative_threshold is None \
+                else min(default_score, informative_threshold)
+            if (row["informative_source"] == ""
+                    or row["default_minimum_score"] != default_score
+                    or row["candidate_minimum_score"] != expected_candidate
+                    or row["density_minimum_spacing_bp"] != density_spacing
+                    or row["density_chrom"] != density_chrom):
+                raise ScanError(f"threshold policy fields are inconsistent for {motif_id}")
+            expected_maximum = math.floor(
+                row["valid_locus_starts"] / density_spacing
+            )
+            expected_final = max(
+                row["candidate_minimum_score"], row["density_threshold"]
+            )
+            if (row["density_maximum_loci"] != expected_maximum
+                    or row["final_minimum_score"] != expected_final
+                    or row["density_limited"]
+                        != (expected_final > row["candidate_minimum_score"])
+                    or min(
+                        row["valid_locus_starts"], row["skipped_locus_starts"],
+                        row["loci_at_candidate_threshold"],
+                        row["loci_at_final_threshold"],
+                    ) < 0
+                    or row["loci_at_final_threshold"] > expected_maximum
+                    or row["loci_at_final_threshold"]
+                        > row["loci_at_candidate_threshold"]):
+                raise ScanError(f"density decision is inconsistent for {motif_id}")
+            expected_spacing = (
+                None if row["loci_at_final_threshold"] == 0
+                else row["valid_locus_starts"] / row["loci_at_final_threshold"]
+            )
+            observed_spacing = row["mean_spacing_bp_at_final_threshold"]
+            if ((expected_spacing is None) != (observed_spacing is None)
+                    or (expected_spacing is not None
+                        and not math.isclose(
+                            expected_spacing, observed_spacing,
+                            rel_tol=1e-9, abs_tol=1e-9,
+                        ))):
+                raise ScanError(f"mean density spacing is inconsistent for {motif_id}")
+            digest = row["distribution_sha256"]
+            if (len(digest) != 64
+                    or any(character not in "0123456789abcdef" for character in digest)):
+                raise ScanError(f"distribution checksum is invalid for {motif_id}")
+            rows.append(row)
+    if seen != motif_ids:
+        raise ScanError(
+            "motif-threshold registry does not exactly cover the JASPAR motif set; "
+            f"missing={sorted(motif_ids - seen)[:10]}, extra={sorted(seen - motif_ids)[:10]}"
+        )
+    if metadata.get("motifs") != len(rows):
+        raise ScanError("motif-threshold metadata row count mismatch")
+    return rows, metadata
+
+
 def load_plan(run_root: Path) -> tuple[dict[str, Any], Path, str]:
     path = run_root / "plan" / "scan_plan.json"
     plan = json_read(path)
-    if plan.get("schema_version") != PLAN_SCHEMA_VERSION:
+    if plan.get("schema_version") not in SUPPORTED_PLAN_SCHEMA_VERSIONS:
         raise ScanError(f"unsupported scan-plan schema in {path}")
     return plan, path, sha256_file(path)
 
@@ -452,6 +656,7 @@ def prepare(arguments: argparse.Namespace) -> None:
         row["included_in_scan"] = row["chrom"] in selected_names
 
     motifs = parse_jaspar(jaspar)
+    jaspar_sha256 = sha256_file(jaspar)
     motif_by_id = {motif["motif_id"]: motif for motif in motifs}
     if arguments.special_motif not in motif_by_id:
         raise ScanError(f"special motif absent from JASPAR: {arguments.special_motif}")
@@ -464,7 +669,8 @@ def prepare(arguments: argparse.Namespace) -> None:
     motif_list_dir.mkdir(parents=True, exist_ok=False)
     batches: list[dict[str, Any]] = []
 
-    def add_batch(batch_id: str, policy_id: str, motif_ids: list[str]) -> None:
+    def add_batch(batch_id: str, policy_id: str, motif_ids: list[str],
+                  minimum_score: float) -> None:
         content = "".join(f"{motif_id}\n" for motif_id in motif_ids)
         relative = Path("plan") / "motif_lists" / f"{batch_id}.txt"
         path = run_root / relative
@@ -476,39 +682,153 @@ def prepare(arguments: argparse.Namespace) -> None:
                 "policy_id": policy_id,
                 "motif_ids": motif_ids,
                 "motif_count": len(motif_ids),
+                "minimum_score": minimum_score,
                 "motif_list": str(relative),
                 "motif_list_sha256": sha256_text(content),
             }
         )
 
-    add_batch("special-0000", "tp73_calibrated", [arguments.special_motif])
-    other_ids = sorted(set(motif_by_id) - {arguments.special_motif})
-    for offset in range(0, len(other_ids), arguments.motif_batch_size):
-        add_batch(
-            f"default-{offset // arguments.motif_batch_size:04d}",
-            "default_uncalibrated",
-            other_ids[offset : offset + arguments.motif_batch_size],
+    threshold_registry: dict[str, Any] | None = None
+    threshold_metadata: dict[str, Any] | None = None
+    motif_thresholds: list[dict[str, Any]] = []
+    if bool(arguments.motif_thresholds) != bool(arguments.motif_threshold_metadata):
+        raise ScanError(
+            "--motif-thresholds and --motif-threshold-metadata must be supplied together"
         )
-
-    policies = [
-        {
-            "policy_id": "tp73_calibrated",
-            "selector_type": "motif_id",
-            "motif_id": arguments.special_motif,
-            "minimum_score": arguments.special_minimum_score,
-            "precedence": 1,
-            "rationale": "TP73 chr1 CUT&RUN calibration; retain deeper anchors for derived floor sensitivity",
-        },
-        {
-            "policy_id": "default_uncalibrated",
-            "selector_type": "all_except",
-            "motif_id": arguments.special_motif,
-            "minimum_score": arguments.default_minimum_score,
-            "precedence": 2,
-            "rationale": "Conservative provisional floor for motifs without matched CUT&RUN calibration",
-        },
-    ]
-    policy_by_id = {policy["policy_id"]: policy for policy in policies}
+    if arguments.motif_thresholds:
+        threshold_path = absolute_file(arguments.motif_thresholds)
+        threshold_metadata_path = absolute_file(arguments.motif_threshold_metadata)
+        motif_thresholds, threshold_metadata = read_motif_threshold_registry(
+            threshold_path, threshold_metadata_path, set(motif_by_id), arguments,
+            fasta_sha256,
+            {row["chrom"]: row["sequence_sha256"] for row in fasta_regions},
+            jaspar_sha256,
+        )
+        threshold_registry = {
+            "source_file": str(threshold_path),
+            "source_sha256": sha256_file(threshold_path),
+            "source_bytes": threshold_path.stat().st_size,
+            "source_mtime_ns": threshold_path.stat().st_mtime_ns,
+            "metadata_file": str(threshold_metadata_path),
+            "metadata_sha256": sha256_file(threshold_metadata_path),
+            "metadata_bytes": threshold_metadata_path.stat().st_size,
+            "metadata_mtime_ns": threshold_metadata_path.stat().st_mtime_ns,
+            "threshold_set_id": threshold_metadata["threshold_set_id"],
+        }
+        policy_id = "per_motif_density_capped"
+        policies = [
+            {
+                "policy_id": policy_id,
+                "selector_type": "per_motif_registry",
+                "motif_id": None,
+                "minimum_score": None,
+                "precedence": 1,
+                "threshold_set_id": threshold_metadata["threshold_set_id"],
+                "threshold_registry_sha256": threshold_registry["source_sha256"],
+                "threshold_metadata_sha256": threshold_registry["metadata_sha256"],
+                "candidate_formula": threshold_metadata["candidate_formula"],
+                "final_formula": threshold_metadata["final_formula"],
+                "density_chrom": threshold_metadata["density_chrom"],
+                "density_minimum_spacing_bp": threshold_metadata[
+                    "density_minimum_spacing_bp"
+                ],
+                "orientation_aggregation": threshold_metadata[
+                    "orientation_aggregation"
+                ],
+                "distribution_bin_width": threshold_metadata[
+                    "distribution_bin_width"
+                ],
+                "informative_thresholds_sha256": threshold_metadata[
+                    "informative_thresholds_sha256"
+                ],
+                "negative_sensitivity_sha256": threshold_metadata.get(
+                    "negative_sensitivity_sha256"
+                ),
+                "override_thresholds_sha256": threshold_metadata.get(
+                    "override_thresholds_sha256"
+                ),
+                "distribution_manifest_sha256": threshold_metadata[
+                    "distribution_manifest_sha256"
+                ],
+                "rationale": (
+                    "Per-motif informative-or-minus-one floor raised only as "
+                    "needed to satisfy the chromosome-1 physical-locus density ceiling"
+                ),
+            }
+        ]
+        threshold_groups: dict[float, list[str]] = {}
+        for row in motif_thresholds:
+            threshold_groups.setdefault(row["final_minimum_score"], []).append(
+                row["motif_id"]
+            )
+        for threshold_value in sorted(threshold_groups):
+            motif_ids = sorted(threshold_groups[threshold_value])
+            label = f"{threshold_value:.12g}".replace("-", "m").replace(".", "p")
+            for offset in range(0, len(motif_ids), arguments.motif_batch_size):
+                add_batch(
+                    f"score-{label}-{offset // arguments.motif_batch_size:04d}",
+                    policy_id,
+                    motif_ids[offset : offset + arguments.motif_batch_size],
+                    threshold_value,
+                )
+    else:
+        add_batch(
+            "special-0000", "tp73_calibrated", [arguments.special_motif],
+            arguments.special_minimum_score,
+        )
+        other_ids = sorted(set(motif_by_id) - {arguments.special_motif})
+        for offset in range(0, len(other_ids), arguments.motif_batch_size):
+            add_batch(
+                f"default-{offset // arguments.motif_batch_size:04d}",
+                "default_uncalibrated",
+                other_ids[offset : offset + arguments.motif_batch_size],
+                arguments.default_minimum_score,
+            )
+        policies = [
+            {
+                "policy_id": "tp73_calibrated",
+                "selector_type": "motif_id",
+                "motif_id": arguments.special_motif,
+                "minimum_score": arguments.special_minimum_score,
+                "precedence": 1,
+                "rationale": "TP73 chr1 CUT&RUN calibration; retain deeper anchors for derived floor sensitivity",
+            },
+            {
+                "policy_id": "default_uncalibrated",
+                "selector_type": "all_except",
+                "motif_id": arguments.special_motif,
+                "minimum_score": arguments.default_minimum_score,
+                "precedence": 2,
+                "rationale": "Conservative provisional floor for motifs without matched CUT&RUN calibration",
+            },
+        ]
+        for motif_id in sorted(motif_by_id):
+            minimum_score = (
+                arguments.special_minimum_score
+                if motif_id == arguments.special_motif
+                else arguments.default_minimum_score
+            )
+            motif_thresholds.append(
+                {
+                    "motif_id": motif_id,
+                    "informative_threshold": None,
+                    "informative_source": "legacy_scan_policy",
+                    "default_minimum_score": arguments.default_minimum_score,
+                    "candidate_minimum_score": minimum_score,
+                    "density_minimum_spacing_bp": None,
+                    "density_maximum_loci": None,
+                    "density_threshold": None,
+                    "final_minimum_score": minimum_score,
+                    "density_limited": None,
+                    "density_chrom": None,
+                    "valid_locus_starts": None,
+                    "skipped_locus_starts": None,
+                    "loci_at_candidate_threshold": None,
+                    "loci_at_final_threshold": None,
+                    "mean_spacing_bp_at_final_threshold": None,
+                    "distribution_sha256": None,
+                }
+            )
     tasks: list[dict[str, Any]] = []
     selected_regions = [row for row in index_regions if row["included_in_scan"]]
     # Batch-major ordering distributes the first Slurm array wave across
@@ -532,7 +852,7 @@ def prepare(arguments: argparse.Namespace) -> None:
                     "motif_ids": batch["motif_ids"],
                     "motif_count": batch["motif_count"],
                     "policy_id": batch["policy_id"],
-                    "minimum_score": policy_by_id[batch["policy_id"]]["minimum_score"],
+                    "minimum_score": batch["minimum_score"],
                 }
             )
 
@@ -567,7 +887,7 @@ def prepare(arguments: argparse.Namespace) -> None:
             "jaspar_version": arguments.jaspar_version,
             "source_url": arguments.jaspar_url,
             "source_file": str(jaspar),
-            "source_sha256": sha256_file(jaspar),
+            "source_sha256": jaspar_sha256,
             "source_bytes": jaspar.stat().st_size,
             "source_mtime_ns": jaspar.stat().st_mtime_ns,
             "motif_count": len(motifs),
@@ -586,6 +906,9 @@ def prepare(arguments: argparse.Namespace) -> None:
             "strand": "both",
         },
         "threshold_policies": policies,
+        "threshold_registry": threshold_registry,
+        "threshold_metadata": threshold_metadata,
+        "motif_thresholds": motif_thresholds,
         "motif_batches": batches,
         "tasks": tasks,
     }
@@ -666,6 +989,14 @@ def validate_planned_inputs(plan: dict[str, Any]) -> None:
     jaspar = absolute_file(plan["motif_set"]["source_file"])
     if sha256_file(jaspar) != plan["motif_set"]["source_sha256"]:
         raise ScanError("JASPAR source checksum changed after planning")
+    threshold_registry = plan.get("threshold_registry")
+    if threshold_registry is not None:
+        threshold_file = absolute_file(threshold_registry["source_file"])
+        threshold_metadata = absolute_file(threshold_registry["metadata_file"])
+        if sha256_file(threshold_file) != threshold_registry["source_sha256"]:
+            raise ScanError("motif-threshold registry checksum changed after planning")
+        if sha256_file(threshold_metadata) != threshold_registry["metadata_sha256"]:
+            raise ScanError("motif-threshold metadata checksum changed after planning")
 
 
 def validate_task_outputs(
@@ -981,7 +1312,8 @@ def run_task(arguments: argparse.Namespace) -> None:
     plan, plan_path, plan_sha256 = load_plan(run_root)
     check_free_space(run_root, plan["minimum_free_gib"])
     task = task_for_arguments(plan, arguments)
-    validate_planned_inputs(plan)
+    if not getattr(arguments, "planned_inputs_verified", False):
+        validate_planned_inputs(plan)
     scanner = absolute_file(arguments.scanner)
     if shutil.which(arguments.duckdb) is None:
         raise ScanError(f"DuckDB executable not found: {arguments.duckdb}")
@@ -1024,6 +1356,14 @@ def run_task(arguments: argparse.Namespace) -> None:
             )
         elif not getattr(arguments, "staged_sequence_verified", False):
             validate_staged_input(plan, task, genome_input, fasta_index_input)
+    jaspar_override = getattr(arguments, "jaspar_override", None)
+    jaspar_input = absolute_file(
+        jaspar_override if jaspar_override is not None
+        else plan["motif_set"]["source_file"]
+    )
+    if (jaspar_override is not None
+            and sha256_file(jaspar_input) != plan["motif_set"]["source_sha256"]):
+        raise ScanError("staged JASPAR checksum differs from the scan plan")
 
     job_id = os.environ.get("SLURM_JOB_ID", "local")
     array_id = os.environ.get("SLURM_ARRAY_TASK_ID", str(task["task_index"]))
@@ -1048,7 +1388,7 @@ def run_task(arguments: argparse.Namespace) -> None:
         "--outdir", str(task_package),
         "--genome", str(genome_input),
         "--fasta-index", str(fasta_index_input),
-        "--pssm", plan["motif_set"]["source_file"],
+        "--pssm", str(jaspar_input),
         "--motif-list", str(motif_list),
         "--motif-set-id", plan["motif_set"]["motif_set_id"],
         "--genome-id", plan["genome"]["genome_id"],
@@ -1228,8 +1568,14 @@ def run_chromosome(arguments: argparse.Namespace) -> None:
     reporter.bytes_complete = region["length"]
     reporter.current_file_bytes = 0
     json_write_new(scratch / "staged_sequence.json", stage_result)
+    staged_jaspar = scratch / Path(plan["motif_set"]["source_file"]).name
+    copy_file_verified(
+        absolute_file(plan["motif_set"]["source_file"]), staged_jaspar,
+        plan["motif_set"]["source_sha256"],
+    )
     print(
-        f"I: Staged and verified chromosome {region['chrom']} at {staged_fasta}",
+        f"I: Staged and verified chromosome {region['chrom']} at {staged_fasta} "
+        f"and JASPAR at {staged_jaspar}",
         file=sys.stderr,
     )
 
@@ -1302,7 +1648,9 @@ def run_chromosome(arguments: argparse.Namespace) -> None:
                 "--duckdb-temp-directory", str(scratch / "duckdb" / task["task_id"]),
                 "--genome-override", str(staged_fasta),
                 "--fasta-index-override", str(stage_result["staged_fasta_index"]),
+                "--jaspar-override", str(staged_jaspar),
                 "--staged-input-metadata", str(scratch / "staged_sequence.json"),
+                "--planned-inputs-verified",
             ]
             if arguments.scratch_task_output:
                 command.extend(["--task-work-directory", str(scratch / "task-work")])
@@ -1408,6 +1756,24 @@ def build_catalog_database(duckdb: str, package: Path, database: Path,
     )
     if process.returncode != 0:
         raise ScanError(process.stderr.strip() or "could not build DuckDB query index")
+    threshold_table = (
+        package / "tables" / "jaspar2026" / "scan_motif_threshold" /
+        "part-000000.parquet"
+    )
+    if threshold_table.is_file():
+        query = (
+            "CREATE OR REPLACE TABLE scan_motif_threshold AS "
+            f"SELECT * FROM read_parquet({sql_string(threshold_table)});"
+        )
+        replacement = subprocess.run(
+            [duckdb, str(database), "-bail", "-c", query],
+            cwd=package, text=True, capture_output=True, check=False,
+        )
+        if replacement.returncode != 0:
+            raise ScanError(
+                replacement.stderr.strip()
+                or "could not install detailed motif-threshold table"
+            )
 
 
 def validate_existing_database(
@@ -1449,6 +1815,57 @@ SELECT
         "emitted_hits": expected_hits,
     }:
         raise ScanError(f"existing DuckDB index does not match the scan plan: {database}")
+    if plan.get("schema_version", 1) >= 2:
+        expected_threshold_set = (
+            (plan.get("threshold_metadata") or {}).get("threshold_set_id")
+            or f"legacy_{plan['run_id']}"
+        )
+        threshold_query = f"""
+WITH inventory_threshold AS (
+    SELECT motif_id, MIN(CAST(minimum_score AS DOUBLE)) AS minimum_score,
+           COUNT(DISTINCT CAST(minimum_score AS DOUBLE)) AS score_count
+    FROM scan_file_inventory
+    GROUP BY motif_id
+)
+SELECT
+    (SELECT COUNT(*) FROM scan_motif_threshold)::BIGINT AS threshold_rows,
+    (SELECT COUNT(DISTINCT motif_id)
+     FROM scan_motif_threshold)::BIGINT AS threshold_motifs,
+    (SELECT COUNT(*) FROM scan_motif_threshold
+     WHERE threshold_set_id <> {sql_string(expected_threshold_set)})::BIGINT
+        AS wrong_threshold_set,
+    (SELECT COUNT(*)
+     FROM scan_motif_threshold t
+     JOIN inventory_threshold i USING (motif_id)
+     WHERE i.score_count <> 1
+        OR t.final_minimum_score <> i.minimum_score)::BIGINT AS score_mismatches;
+"""
+        threshold_process = subprocess.run(
+            [duckdb, "-readonly", "-json", str(database), "-c", threshold_query],
+            cwd=package, text=True, capture_output=True, check=False,
+        )
+        if threshold_process.returncode != 0:
+            raise ScanError(
+                threshold_process.stderr.strip()
+                or f"existing threshold catalog is invalid: {database}"
+            )
+        try:
+            threshold_rows = json.loads(threshold_process.stdout or "[]")
+        except json.JSONDecodeError as error:
+            raise ScanError(
+                f"existing threshold catalog returned invalid JSON: {error}"
+            ) from error
+        expected_motifs = int(plan["motif_set"]["motif_count"])
+        expected = {
+            "threshold_rows": expected_motifs,
+            "threshold_motifs": expected_motifs,
+            "wrong_threshold_set": 0,
+            "score_mismatches": 0,
+        }
+        if len(threshold_rows) != 1 or threshold_rows[0] != expected:
+            raise ScanError(
+                f"existing motif-threshold catalog differs from the plan: {database}"
+            )
 
 
 def finalize(arguments: argparse.Namespace) -> None:
@@ -1556,6 +1973,55 @@ def finalize(arguments: argparse.Namespace) -> None:
     threshold_policies = [
         {"run_id": plan["run_id"], **row} for row in plan["threshold_policies"]
     ]
+    threshold_metadata = plan.get("threshold_metadata") or {}
+    threshold_registry = plan.get("threshold_registry") or {}
+    planned_motif_thresholds = plan.get("motif_thresholds")
+    if not planned_motif_thresholds:
+        threshold_by_motif: dict[str, float] = {}
+        for task in plan["tasks"]:
+            for motif_id in task["motif_ids"]:
+                observed = threshold_by_motif.setdefault(
+                    motif_id, float(task["minimum_score"])
+                )
+                if observed != float(task["minimum_score"]):
+                    raise ScanError(
+                        f"legacy plan uses multiple minimum scores for {motif_id}"
+                    )
+        planned_motif_thresholds = [
+            {
+                "motif_id": motif_id,
+                "informative_threshold": None,
+                "informative_source": "legacy_scan_policy",
+                "default_minimum_score": None,
+                "candidate_minimum_score": minimum_score,
+                "density_minimum_spacing_bp": None,
+                "density_maximum_loci": None,
+                "density_threshold": None,
+                "final_minimum_score": minimum_score,
+                "density_limited": None,
+                "density_chrom": None,
+                "valid_locus_starts": None,
+                "skipped_locus_starts": None,
+                "loci_at_candidate_threshold": None,
+                "loci_at_final_threshold": None,
+                "mean_spacing_bp_at_final_threshold": None,
+                "distribution_sha256": None,
+            }
+            for motif_id, minimum_score in sorted(threshold_by_motif.items())
+        ]
+    motif_thresholds = [
+        {
+            "run_id": plan["run_id"],
+            "genome_id": plan["genome"]["genome_id"],
+            "motif_set_id": plan["motif_set"]["motif_set_id"],
+            "threshold_set_id": threshold_metadata.get(
+                "threshold_set_id", f"legacy_{plan['run_id']}"
+            ),
+            "threshold_registry_sha256": threshold_registry.get("source_sha256"),
+            **row,
+        }
+        for row in planned_motif_thresholds
+    ]
     scan_tasks = []
     for result in task_results:
         task = result["task"]
@@ -1594,6 +2060,9 @@ def finalize(arguments: argparse.Namespace) -> None:
         "source_commit": plan["source_commit"],
         "genome_id": plan["genome"]["genome_id"],
         "motif_set_id": plan["motif_set"]["motif_set_id"],
+        "motif_threshold_set_id": threshold_metadata.get("threshold_set_id"),
+        "motif_threshold_registry_sha256": threshold_registry.get("source_sha256"),
+        "motif_threshold_metadata_sha256": threshold_registry.get("metadata_sha256"),
         "score_mode": plan["scanner"]["score_mode"],
         "pseudocount": plan["scanner"]["pseudocount"],
         "background_model_id": plan["scanner"]["background_model_id"],
@@ -1626,6 +2095,7 @@ def finalize(arguments: argparse.Namespace) -> None:
         "motif_metadata": motif_metadata,
         "scan_run": [scan_run],
         "scan_threshold_policy": threshold_policies,
+        "scan_motif_threshold": motif_thresholds,
         "scan_task": scan_tasks,
         "scan_file_inventory": inventory,
     }
@@ -1639,7 +2109,7 @@ def finalize(arguments: argparse.Namespace) -> None:
     build_catalog_database(arguments.duckdb, staging_package, database, reporter)
 
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "run_id": plan["run_id"],
         "state": "complete",
         "completed_at_utc": completed_at,
@@ -1647,6 +2117,9 @@ def finalize(arguments: argparse.Namespace) -> None:
         "source_commit": plan["source_commit"],
         "genome_id": plan["genome"]["genome_id"],
         "motif_set_id": plan["motif_set"]["motif_set_id"],
+        "motif_threshold_set_id": threshold_metadata.get("threshold_set_id"),
+        "motif_threshold_registry_sha256": threshold_registry.get("source_sha256"),
+        "motif_threshold_metadata_sha256": threshold_registry.get("metadata_sha256"),
         "task_count": len(scan_tasks),
         "file_count": len(inventory),
         "emitted_hit_count": scan_run["emitted_hit_count"],
@@ -2029,6 +2502,14 @@ def argument_parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--jaspar-version", type=positive_integer, default=2026)
     prepare_parser.add_argument("--chrom", action="append", default=[])
     prepare_parser.add_argument("--motif-batch-size", type=positive_integer, default=128)
+    prepare_parser.add_argument(
+        "--motif-thresholds", type=Path,
+        help="density-capped per-motif threshold TSV; requires its metadata JSON",
+    )
+    prepare_parser.add_argument(
+        "--motif-threshold-metadata", type=Path,
+        help="provenance JSON emitted beside --motif-thresholds",
+    )
     prepare_parser.add_argument("--special-motif", default="MA0861.2")
     prepare_parser.add_argument(
         "--special-minimum-score", type=finite_float, default=-5.0
@@ -2079,6 +2560,13 @@ def argument_parser() -> argparse.ArgumentParser:
     task_parser.add_argument(
         "--staged-input-metadata", type=Path,
         help="hash and stat record written by the chromosome staging step",
+    )
+    task_parser.add_argument(
+        "--jaspar-override", type=Path,
+        help="verified JASPAR source staged by run-chromosome",
+    )
+    task_parser.add_argument(
+        "--planned-inputs-verified", action="store_true", help=argparse.SUPPRESS,
     )
     task_parser.add_argument("--allow-local", action="store_true", help=argparse.SUPPRESS)
     task_parser.add_argument(

@@ -20,6 +20,13 @@ inventory catalog. It does not define downstream biological features.
 The completed GRCh38 v3 package remains valid under this contract. Maintenance
 does not rescan, rewrite, consolidate, or otherwise modify its hit payloads.
 
+For density calibration, `pssm_scan --score-distribution
+--collapse-orientations --strand both` records one value per physical genomic
+alignment span: the maximum of its two orientation scores. The appended
+`OrientationAggregation` column distinguishes this from ordinary
+orientation-record histograms. This mode is intentionally TSV-only and does
+not require Arrow.
+
 ## Why two FASTA indexes appear
 
 The index has no biological or scoring role. A `.fai` records byte offsets and
@@ -41,9 +48,12 @@ may have different line wrapping while the sequence identity remains exact.
 
 `run_genome_scan_slurm_chromosome.sh` maps one Slurm array element to one
 planned chromosome. It creates a unique node-local job directory, stages and
-verifies that chromosome once, and then runs all still-incomplete motif batches
-against the local copy. On requeue, scratch is staged again; already promoted
-batches are recognized from their exact task records and reused.
+verifies that chromosome and the small JASPAR source once, and then runs all
+still-incomplete motif batches against those local copies. The supervisor
+validates the immutable `/data` inputs before dispatch, so its child processes
+do not redundantly hash them. A direct standalone task retains full input
+validation. On requeue, scratch is staged again; already promoted batches are
+recognized from their exact task records and reused.
 
 The default writes scanner output to unique durable staging below the run root
 on `/data`. `--scratch-task-output` is optional: it writes and validates each
@@ -58,6 +68,16 @@ staged FASTA. Start with one. Benchmark two and four on representative large
 and small chromosomes before increasing production concurrency, and increase
 `--cpus-per-task` and memory correspondingly. The submission helper does the
 CPU adjustment automatically.
+
+The chromosome-1 density coordinator applies the same staging pattern to score
+histograms. It checkpoints each motif batch and writes an exact manifest rather
+than discovering durable output with a package-wide wildcard:
+
+```sh
+scripts/submit_motif_density_calibration_slurm.sh \
+  --run-root "$DENSITY_RUN" --scanner "$SOURCE/pssm_scan" \
+  --batch-workers 4 --memory 32G --time 0-08:00:00 --dry-run
+```
 
 ```sh
 scripts/submit_genome_scan_slurm.sh \
@@ -139,6 +159,13 @@ scripts/query_genome_scan.py summary --package "$RUN/package"
 scripts/query_genome_scan.py hits --package "$RUN/package" \
   --motif MA0861.2 --chrom 1 --minimum-score 0 --limit 20
 ```
+
+`scan_motif_threshold` records the informative threshold, permissive candidate,
+chromosome-1 density threshold, final production threshold, locus counts, and
+distribution checksum for each motif. Production batches contain only motifs
+with an identical `final_minimum_score`. Older packages expose a compatible
+fallback reconstructed from `scan_file_inventory`, with unavailable
+calibration fields left null.
 
 An alternative catalog can be constructed without opening or changing any hit
 file:

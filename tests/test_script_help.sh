@@ -14,6 +14,7 @@ scripts/analyze_cutandrun_containment.py
 scripts/analyze_dense_cutandrun_coverage.py
 scripts/bedtools_map_serial.sh
 scripts/benchmark_sparse_layout.py
+scripts/build_density_capped_thresholds.py
 scripts/build_fasta_index.py
 scripts/build_motif_context.py
 scripts/build_motif_score_thresholds.py
@@ -34,6 +35,7 @@ scripts/fix_missing_bidirect_gz.sh
 scripts/genelists.sh
 scripts/inspect_chr1_dense_dry_run.sh
 scripts/manage_genome_scan.py
+scripts/manage_motif_density_calibration.py
 scripts/manage_motif_threshold_calibration.py
 scripts/plot_informative_threshold_distribution.py
 scripts/plot_tp73_score_distributions.R
@@ -44,6 +46,8 @@ scripts/run_genome_scan_slurm_chromosome.sh
 scripts/run_genome_scan_slurm_finalize.sh
 scripts/run_genome_scan_slurm_task.sh
 scripts/run_motif_context_slurm_task.sh
+scripts/run_motif_density_calibration_finalize.sh
+scripts/run_motif_density_calibration_slurm.sh
 scripts/run_motif_threshold_anchor_setup.sh
 scripts/run_motif_threshold_calibration_finalize.sh
 scripts/run_motif_threshold_calibration_slurm_task.sh
@@ -55,6 +59,7 @@ scripts/stage_fasta_region.py
 scripts/stage_motif_context_inputs.py
 scripts/submit_genome_scan_slurm.sh
 scripts/submit_motif_context_slurm.sh
+scripts/submit_motif_density_calibration_slurm.sh
 scripts/submit_motif_threshold_calibration_slurm.sh
 scripts/submit_negative_threshold_sensitivity_slurm.sh
 scripts/summarize_tp73_cutandrun_threshold.R
