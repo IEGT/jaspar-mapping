@@ -163,6 +163,14 @@ compute nodes do not need Git. Blank optional metric fields from explicitly
 non-evaluable candidates are preserved as SQL `NULL`; malformed nonblank
 numeric values still fail finalization.
 
+The completed run finalized all 2,632 planned non-TP73 motifs. It produced
+2,615 positive-gain recommendations, 13 `no_positive_gain` rows, and 4
+`insufficient_class_support` rows, with no pending motifs. Populated thresholds
+range from 0 to 14 (median 4). The registry SHA-256 is
+`e4f448e3b554f642ee0cfc5d94c577850ee00c391dbaeb41749ef647f2ed508d`.
+Its two-column source-tree export and provenance sidecar are stored under
+[`thresholds/`](../thresholds/jaspar2026_grch38_chr1_tp73_context_v1.tsv).
+
 The local KLF14 reference sweep took 174 seconds before compact-output and
 class-support shortcuts. That makes several hours of wall time at 20-way
 parallelism a reasonable planning estimate, but motif density and filesystem

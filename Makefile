@@ -174,6 +174,7 @@ check: pssm_scan $(TEST_BINARIES)
 	bash tests/test_stage_fasta_region.sh
 	bash tests/test_submit_motif_context_slurm.sh
 	bash tests/test_cutandrun_containment.sh
+	bash tests/test_empirical_threshold_list.sh
 	bash tests/test_script_help.sh
 
 check-r:

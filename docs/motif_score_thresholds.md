@@ -124,6 +124,33 @@ unthresholded maximum alongside the threshold-qualified count.
 Consumers must not convert either null state to zero. A separate, explicitly
 named fallback policy may be used for display, but it is not calibration.
 
+## Checked-in empirical list
+
+The compact empirical export is
+[`thresholds/jaspar2026_grch38_chr1_tp73_context_v1.tsv`](../thresholds/jaspar2026_grch38_chr1_tp73_context_v1.tsv).
+It has only `motif_id` and `recommended_threshold`, with one row for each of the
+2,632 calibrated non-TP73 JASPAR motifs. The 17 motifs without a defensible
+recommendation remain present with an `NA` threshold. TP73 (`MA0861.2`) is
+absent because its anchor and tandem policies were calibrated separately.
+
+The adjacent JSON file pins the source registry and TSV checksums, run and
+threshold-set identities, scoring configuration, row counts, and the metric
+and finalization commits. The two-column export therefore stays convenient
+without discarding provenance or null semantics. A downstream screening policy
+may explicitly replace `NA` with the `-1` storage floor, but the empirical
+file itself does not make that substitution.
+
+The export is the following deterministic projection of the finalized Parquet
+registry, ordered by accession, with populated integer-grid thresholds rendered
+without a decimal suffix and the DuckDB CLI null value set to `NA`:
+
+```sql
+SELECT motif_id,
+       CAST(recommended_threshold AS INTEGER) AS recommended_threshold
+FROM read_parquet('part-000000.parquet')
+ORDER BY motif_id;
+```
+
 ## Initial chromosome-1 fill
 
 The first local set evaluates the strongest interval-defined score within 150
@@ -172,8 +199,9 @@ for one cofactor and returns one row per physical TP73 anchor.
 
 For a genome-wide all-JASPAR fill, process motif partitions independently and
 append rows to a new immutable threshold-set version. Never mutate the first
-chromosome-1 set when the candidate grid, context geometry, evidence labels, or
-validation design changes.
+chromosome-1 set or its checked-in compact export when the candidate grid,
+context geometry, evidence labels, or validation design changes; add a new
+version instead.
 
 The production chromosome-1 all-motif execution contract, reproducible
 CUT&RUN anchor reconstruction, Slurm layout, status reporting, and finalization

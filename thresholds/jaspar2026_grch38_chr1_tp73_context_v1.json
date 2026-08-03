@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "artifact": "jaspar2026_grch38_chr1_tp73_context_v1.tsv",
+  "columns": [
+    "motif_id",
+    "recommended_threshold"
+  ],
+  "rows": 2632,
+  "populated_recommendations": 2615,
+  "null_recommendations": 17,
+  "threshold_set_id": "tp73_chr1_cutrun_context_roc_auc_all_jaspar_v1",
+  "calibration_run_id": "jaspar2026_grch38_chr1_tp73_context_thresholds_v1",
+  "genome_id": "homo_sapiens_grch38_ensembl113_primary",
+  "motif_set_id": "jaspar2026_core_nonredundant",
+  "target_motif_id": "MA0861.2",
+  "target_motif_included": false,
+  "score_mode": "log2_relative_risk",
+  "pseudocount": 1,
+  "source_minimum_score": -1,
+  "source_registry_sha256": "e4f448e3b554f642ee0cfc5d94c577850ee00c391dbaeb41749ef647f2ed508d",
+  "threshold_tsv_sha256": "1c121a4ef80f68df11f9d2c4570d83e783fccf935f76ccd393acff0dbfdff799",
+  "metric_source_commit": "2f52c7754426fbb9589ec7e66c14ed3fc9e24179",
+  "finalization_source_commit": "a23d0ba2322d494ab23bca08080f2f9ef08ffffb",
+  "null_semantics": "NA means that this calibration produced no defensible recommendation; it must not be coerced to zero."
+}
