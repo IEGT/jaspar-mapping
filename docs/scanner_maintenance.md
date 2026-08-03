@@ -85,6 +85,14 @@ around indexed FASTA loading and Parquet closing. A chromosome supervisor sends
 one request to one active batch, preventing a single signal from producing a
 burst of competing lines.
 
+For score-floor sensitivity analyses, `--context-maxima OUTPUT.parquet` with
+`--regions ANCHORS.tsv` writes one maximum per anchor directly to Parquet. The
+mode requires one motif, BED coordinates, an explicit recoverable score floor,
+and an Arrow build. Its `--context-flank` uses signed interval-edge distance,
+so overlapping motif intervals have negative distance and abutting intervals
+have distance zero. SIGUSR1 reports anchor progress and the count of recoverable
+maxima without interrupting the scan.
+
 The finalizer and checksum auditor use their own one-line manager report with
 phase, files and bytes complete/total, throughput, elapsed time, ETA, task, and
 path. `status` also reports the most recently persisted checksum-audit state.

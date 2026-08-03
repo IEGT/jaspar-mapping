@@ -172,6 +172,39 @@ SELECT CASE WHEN NOT EXISTS (
 ) THEN error('negative-only motif did not receive an explicit unevaluable row') END;
 SQL
 
+"$repository_root/scripts/evaluate_tp73_cofactor_thresholds.R" \
+    --anchor-evidence "$temporary/anchors.parquet" \
+    --cofactor-maxima "$temporary/negative-maxima.parquet" \
+    --output-prefix "$temporary/result_source_floor" \
+    --thresholds auto-source-floor --folds 5 --chrom-size 100000 \
+    --spline-df 3 --minimum-class-fraction 0.01 --compact-output \
+    --duckdb "$duckdb" >/dev/null
+
+"$duckdb" -batch :memory: >/dev/null <<SQL
+CREATE VIEW source_floor_metrics AS
+SELECT * FROM read_csv_auto(
+    '$temporary/result_source_floor_threshold_metrics.tsv',
+    delim='\t', header=true, nullstr='NA');
+CREATE VIEW source_floor_config AS
+SELECT * FROM read_csv_auto(
+    '$temporary/result_source_floor_run_config.tsv',
+    delim='\t', header=true, nullstr='NA');
+
+SELECT CASE WHEN (SELECT list(threshold ORDER BY threshold)
+                  FROM source_floor_metrics) <> [-1.0, 0.0]
+    THEN error('source-floor grid did not include every integer threshold') END;
+SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM source_floor_metrics
+    WHERE evaluation_status <> 'constant_indicator'
+) THEN error('source-floor boundary rows did not retain their status') END;
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM source_floor_config
+    WHERE threshold_mode = 'source_floor_integer_grid'
+      AND threshold_specification = 'auto-source-floor'
+      AND source_score_floor = -1
+) THEN error('source-floor threshold provenance is incomplete') END;
+SQL
+
 [[ ! -e $temporary/result_negative_sample_fold_metrics.tsv &&
    ! -e $temporary/result_negative_threshold_sweep.png ]] || {
     echo "E: Compact threshold evaluation wrote detailed artifacts." >&2

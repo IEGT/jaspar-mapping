@@ -16,8 +16,10 @@ usage <- function(status = 0L) {
         "  --anchor-evidence FILE  TP73 anchor and CUT&RUN feature Parquet (required)",
         "  --cofactor-maxima FILE  Long v4 interval-maximum Parquet (required)",
         "  --output-prefix PATH    Basename for tables and plot (required)",
-        "  --thresholds LIST       Comma-separated score floors, or 'auto' for",
-        "                          every observed integer floor from 0 upward",
+        "  --thresholds LIST       Comma-separated score floors; 'auto' for every",
+        "                          observed integer floor from 0 upward; or",
+        "                          'auto-source-floor' for every integer from the",
+        "                          recorded source floor through 0",
         "                          (default: 0,2,4,5,6,8,10,12)",
         "  --folds N               Contiguous genomic folds (default: 5)",
         "  --chrom-size BP         Chromosome span; default derives from anchors",
@@ -106,18 +108,21 @@ if (!is.finite(values$minimum_class_fraction) ||
     values$minimum_class_fraction >= 0.5) {
     stop("--minimum-class-fraction must be in [0, 0.5)", call. = FALSE)
 }
-threshold_mode <- if (tolower(values$thresholds) == "auto") {
-    "observed_integer_grid"
-} else {
+threshold_specification <- tolower(values$thresholds)
+threshold_mode <- switch(
+    threshold_specification,
+    "auto" = "observed_integer_grid",
+    "auto-source-floor" = "source_floor_integer_grid",
     "explicit"
-}
+)
 if (threshold_mode == "explicit") {
     thresholds <- suppressWarnings(as.numeric(strsplit(
         values$thresholds, ",", fixed = TRUE
     )[[1L]]))
     if (length(thresholds) == 0L || any(!is.finite(thresholds))) {
         stop(
-            "--thresholds must be 'auto' or a non-empty list of finite numbers",
+            "--thresholds must be 'auto', 'auto-source-floor', or a non-empty ",
+            "list of finite numbers",
             call. = FALSE
         )
     }
@@ -478,13 +483,27 @@ for (motif_index in seq_len(nrow(motif_map))) {
     anchor_scores <- anchor_features[[score_column]]
     evidence_scores <- evidence[[score_column]]
     motif_thresholds <- thresholds
-    if (threshold_mode == "observed_integer_grid") {
+    if (threshold_mode != "explicit") {
         observed_maximum <- suppressWarnings(max(anchor_scores, na.rm = TRUE))
-        if (!is.finite(observed_maximum) || observed_maximum < 0) {
-            message("I: no non-negative observed threshold for ", motif_id)
-            motif_thresholds <- 0
+        grid_minimum <- if (threshold_mode == "source_floor_integer_grid") {
+            ceiling(source_floors[[1L]])
         } else {
-            motif_thresholds <- seq.int(0, floor(observed_maximum))
+            0
+        }
+        if (threshold_mode == "source_floor_integer_grid") {
+            if (grid_minimum > 0) {
+                stop(
+                    "auto-source-floor requires a source score floor at or below 0",
+                    call. = FALSE
+                )
+            }
+            motif_thresholds <- seq.int(grid_minimum, 0)
+        } else if (!is.finite(observed_maximum) || observed_maximum < grid_minimum) {
+            message("I: no observed threshold at or above ", grid_minimum,
+                    " for ", motif_id)
+            motif_thresholds <- grid_minimum
+        } else {
+            motif_thresholds <- seq.int(grid_minimum, floor(observed_maximum))
         }
     }
     for (threshold in motif_thresholds) {
@@ -495,7 +514,7 @@ for (motif_index in seq_len(nrow(motif_map))) {
         anchors_retained <- sum(!is.na(anchor_scores) & anchor_scores >= threshold)
         retained_fraction <- anchors_retained / nrow(anchor_features)
         if (anchors_retained == 0L || anchors_retained == nrow(anchor_features)) {
-            if (threshold_mode == "observed_integer_grid") {
+            if (threshold_mode != "explicit") {
                 message(
                     "I: skipping ", motif_id, " at ", threshold,
                     " because the anchor indicator is constant"
@@ -537,7 +556,7 @@ for (motif_index in seq_len(nrow(motif_map))) {
         for (held_out in seq_len(values$folds)) {
             training <- evidence[fold != held_out]
             if (training[, uniqueN(retained)] != 2L) {
-                if (threshold_mode == "observed_integer_grid") {
+                if (threshold_mode != "explicit") {
                     fold_coefficients <- NULL
                     fold_failure <- paste0(
                         "training fold ", held_out, " has a constant indicator"
@@ -570,7 +589,7 @@ for (motif_index in seq_len(nrow(motif_map))) {
             }
             if (is.null(fit) || !isTRUE(fit$converged) ||
                 !is.finite(retained_coefficient)) {
-                if (threshold_mode == "observed_integer_grid") {
+                if (threshold_mode != "explicit") {
                     fold_coefficients <- NULL
                     fold_failure <- paste0(
                         "model did not converge in fold ", held_out

@@ -584,6 +584,7 @@ PREPARE q15 AS
 SQL
     awk '
         /^-- Q15\./ { capture = 1; next }
+        /^-- Q16\./ { capture = 0 }
         capture { print }
     ' "$repository_root/sql/queries.sql"
     cat <<'SQL'

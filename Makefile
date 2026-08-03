@@ -191,6 +191,8 @@ check-duckdb: cutandrun_score_calibration pssm_scan_parquet
 	bash tests/test_motif_threshold_calibration_manager.sh
 	bash tests/test_stage_motif_context_inputs.sh
 	bash tests/test_sparse_context_maxima.sh
+	bash tests/test_context_maxima_parquet.sh
+	bash tests/test_negative_threshold_sensitivity.sh
 	bash tests/test_tp73_anchor_evidence.sh
 	bash tests/test_tp73_cofactor_thresholds.sh
 	bash tests/test_sparse_parquet.sh

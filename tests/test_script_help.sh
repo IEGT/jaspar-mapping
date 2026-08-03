@@ -46,6 +46,8 @@ scripts/run_motif_context_slurm_task.sh
 scripts/run_motif_threshold_anchor_setup.sh
 scripts/run_motif_threshold_calibration_finalize.sh
 scripts/run_motif_threshold_calibration_slurm_task.sh
+scripts/run_negative_threshold_sensitivity_finalize.sh
+scripts/run_negative_threshold_sensitivity_slurm_task.sh
 scripts/run_what_is_missing.sh
 scripts/shift_bed.awk
 scripts/stage_fasta_region.py
@@ -53,6 +55,7 @@ scripts/stage_motif_context_inputs.py
 scripts/submit_genome_scan_slurm.sh
 scripts/submit_motif_context_slurm.sh
 scripts/submit_motif_threshold_calibration_slurm.sh
+scripts/submit_negative_threshold_sensitivity_slurm.sh
 scripts/summarize_tp73_cutandrun_threshold.R
 scripts/summarize_tp73_patz1_cutandrun_threshold.R
 EOF

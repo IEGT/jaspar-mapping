@@ -65,6 +65,19 @@ struct ScoredWindow {
     bool sequenceValid = false;
 };
 
+struct ContextStartRange {
+    size_t first = 0;
+    size_t last = 0;
+    bool empty = true;
+};
+
+struct ContextMaximum {
+    double score = SENTINEL_SCORE;
+    bool available = false;
+    std::uint64_t validWindows = 0;
+    std::uint64_t skippedWindows = 0;
+};
+
 struct ScoreBin {
     double start;
     double end;
@@ -115,6 +128,22 @@ ScoredWindow scoreWindowAtGenomicStart(const std::vector<std::uint8_t>& codes,
                                        bool reverseComplementWindow,
                                        size_t genomicStart,
                                        const FlatPSSM& pssm);
+ContextStartRange anchorContextStartRange(size_t sequenceLength,
+                                         size_t anchorStart,
+                                         size_t anchorEnd,
+                                         size_t contextFlank,
+                                         size_t motifLength);
+ContextMaximum maximumScoreInAnchorContext(
+    const std::vector<std::uint8_t>& plusCodes,
+    const std::vector<std::uint8_t>& minusCodes,
+    size_t sequenceLength,
+    size_t anchorStart,
+    size_t anchorEnd,
+    size_t contextFlank,
+    const FlatPSSM& pssm,
+    bool scanPlus,
+    bool scanMinus,
+    double minimumScore);
 double calculateScoreAtGenomicStart(const std::vector<std::uint8_t>& codes, size_t sequenceLength,
                                     bool reverseComplementWindow, size_t genomicStart,
                                     const FlatPSSM& pssm);

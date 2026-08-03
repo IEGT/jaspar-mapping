@@ -245,6 +245,84 @@ ScoredWindow scoreWindowAtGenomicStart(
         codes, sequenceLength, reverseComplementWindow, genomicStart, pssm);
 }
 
+ContextStartRange anchorContextStartRange(
+    const size_t sequenceLength, const size_t anchorStart,
+    const size_t anchorEnd, const size_t contextFlank,
+    const size_t motifLength) {
+    ContextStartRange range;
+    if (anchorStart >= anchorEnd || anchorEnd > sequenceLength ||
+        motifLength == 0 || motifLength > sequenceLength) {
+        return range;
+    }
+
+    // For BED intervals A=[a,b) and M=[m,m+L), interval distance is
+    // max(a,m)-min(b,m+L). Retaining distance <= F gives these inclusive
+    // bounds on the motif start m.
+    const size_t leftReach = contextFlank >
+        std::numeric_limits<size_t>::max() - motifLength
+        ? std::numeric_limits<size_t>::max()
+        : contextFlank + motifLength;
+    range.first = anchorStart > leftReach ? anchorStart - leftReach : 0;
+
+    const size_t maximumStart = sequenceLength - motifLength;
+    const size_t rightReach = anchorEnd >
+        std::numeric_limits<size_t>::max() - contextFlank
+        ? std::numeric_limits<size_t>::max()
+        : anchorEnd + contextFlank;
+    range.last = std::min(maximumStart, rightReach);
+    range.empty = range.first > range.last;
+    return range;
+}
+
+ContextMaximum maximumScoreInAnchorContext(
+    const std::vector<std::uint8_t>& plusCodes,
+    const std::vector<std::uint8_t>& minusCodes,
+    const size_t sequenceLength, const size_t anchorStart,
+    const size_t anchorEnd, const size_t contextFlank,
+    const FlatPSSM& pssm, const bool scanPlus, const bool scanMinus,
+    const double minimumScore) {
+    ContextMaximum maximum;
+    const ContextStartRange range = anchorContextStartRange(
+        sequenceLength, anchorStart, anchorEnd, contextFlank,
+        pssm.motifLength);
+    if (range.empty) {
+        return maximum;
+    }
+
+    const auto inspectStrand = [&](const std::vector<std::uint8_t>& codes,
+                                   const bool reverseComplementWindow) {
+        if (codes.empty()) {
+            return;
+        }
+        for (size_t start = range.first;; ++start) {
+            const ScoredWindow scored = scoreWindowAtGenomicStart(
+                codes, sequenceLength, reverseComplementWindow, start, pssm);
+            if (!scored.sequenceValid) {
+                ++maximum.skippedWindows;
+            } else {
+                ++maximum.validWindows;
+                if (!isSkippedScore(scored.score) &&
+                    scored.score >= minimumScore &&
+                    (!maximum.available || scored.score > maximum.score)) {
+                    maximum.score = scored.score;
+                    maximum.available = true;
+                }
+            }
+            if (start == range.last) {
+                break;
+            }
+        }
+    };
+
+    if (scanPlus) {
+        inspectStrand(plusCodes, false);
+    }
+    if (scanMinus) {
+        inspectStrand(minusCodes, true);
+    }
+    return maximum;
+}
+
 double calculateScoreAtGenomicStart(const std::vector<std::uint8_t>& codes, size_t sequenceLength,
                                     bool reverseComplementWindow, size_t genomicStart,
                                     const FlatPSSM& pssm) {

@@ -554,6 +554,209 @@ private:
     std::unique_ptr<arrow::StringBuilder> matchedSequenceBuilder_;
 };
 
+class ContextMaximumParquetWriter {
+public:
+    explicit ContextMaximumParquetWriter(
+        const size_t rowsPerRecordBatch = DEFAULT_SCORE_BLOCK_SIZE)
+        : rowsPerRecordBatch_(std::max<size_t>(1, rowsPerRecordBatch)) {}
+
+    bool open(const std::filesystem::path& outputFilePath, std::string& error) {
+        schema_ = arrow::schema({
+            arrow::field("schema_version", arrow::int32(), false),
+            arrow::field("chrom", arrow::utf8(), false),
+            arrow::field("anchor_start", arrow::int64(), false),
+            arrow::field("anchor_end", arrow::int64(), false),
+            arrow::field("motif_id", arrow::utf8(), false),
+            arrow::field("context_score", arrow::float32(), true),
+            arrow::field("source_score_floor", arrow::float64(), false),
+            arrow::field("context_flank_bp", arrow::int64(), false),
+            arrow::field("capture_prefilter_center_bp", arrow::int64(), false),
+            arrow::field("observed_max_anchor_span_bp", arrow::int64(), false),
+            arrow::field("observed_max_context_span_bp", arrow::int64(), false),
+            arrow::field("context_distance_metric", arrow::utf8(), false)
+        });
+
+        auto outputResult = arrow::io::FileOutputStream::Open(
+            outputFilePath.string());
+        if (!outputResult.ok()) {
+            error = "opening context-maximum Parquet output: " +
+                outputResult.status().ToString();
+            return false;
+        }
+        outputStream_ = *outputResult;
+
+        parquet::WriterProperties::Builder writerPropertiesBuilder;
+        writerPropertiesBuilder.compression(parquet::Compression::ZSTD);
+        auto writerProperties = writerPropertiesBuilder.build();
+
+        parquet::ArrowWriterProperties::Builder arrowPropertiesBuilder;
+        arrowPropertiesBuilder.store_schema();
+        auto arrowProperties = arrowPropertiesBuilder.build();
+
+        auto writerResult = parquet::arrow::FileWriter::Open(
+            *schema_, arrow::default_memory_pool(), outputStream_,
+            writerProperties, arrowProperties);
+        if (!writerResult.ok()) {
+            error = "opening context-maximum Parquet writer: " +
+                writerResult.status().ToString();
+            return false;
+        }
+        writer_ = std::move(writerResult).ValueOrDie();
+        resetBuilders();
+        return true;
+    }
+
+    bool append(const std::string& chromosome, const std::int64_t anchorStart,
+                const std::int64_t anchorEnd, const std::string& motifID,
+                const ContextMaximum& maximum, const double sourceScoreFloor,
+                const std::int64_t contextFlank,
+                const std::int64_t capturePrefilterCenter,
+                const std::int64_t maximumAnchorSpan,
+                const std::int64_t motifLength, std::string& error) {
+        if (!writer_) {
+            error = "Context-maximum Parquet writer is not open.";
+            return false;
+        }
+
+        auto status = schemaVersionBuilder_->Append(1);
+        if (status.ok()) status = chromosomeBuilder_->Append(chromosome);
+        if (status.ok()) status = anchorStartBuilder_->Append(anchorStart);
+        if (status.ok()) status = anchorEndBuilder_->Append(anchorEnd);
+        if (status.ok()) status = motifIDBuilder_->Append(motifID);
+        if (status.ok()) {
+            status = maximum.available
+                ? contextScoreBuilder_->Append(static_cast<float>(maximum.score))
+                : contextScoreBuilder_->AppendNull();
+        }
+        if (status.ok()) status = sourceScoreFloorBuilder_->Append(sourceScoreFloor);
+        if (status.ok()) status = contextFlankBuilder_->Append(contextFlank);
+        if (status.ok()) {
+            status = capturePrefilterCenterBuilder_->Append(capturePrefilterCenter);
+        }
+        if (status.ok()) status = maximumAnchorSpanBuilder_->Append(maximumAnchorSpan);
+        if (status.ok()) status = motifLengthBuilder_->Append(motifLength);
+        if (status.ok()) {
+            status = distanceMetricBuilder_->Append(
+                "signed_interval_edge_distance");
+        }
+        if (!status.ok()) {
+            error = "appending context maximum: " + status.ToString();
+            return false;
+        }
+
+        ++pendingRows_;
+        ++rowsWritten_;
+        if (pendingRows_ >= rowsPerRecordBatch_) {
+            return flush(error);
+        }
+        return true;
+    }
+
+    bool close(std::string& error) {
+        if (writer_) {
+            if (!flush(error)) {
+                return false;
+            }
+            const auto status = writer_->Close();
+            if (!status.ok()) {
+                error = "closing context-maximum Parquet writer: " +
+                    status.ToString();
+                return false;
+            }
+            writer_.reset();
+        }
+        if (outputStream_) {
+            const auto status = outputStream_->Close();
+            if (!status.ok()) {
+                error = "closing context-maximum Parquet output: " +
+                    status.ToString();
+                return false;
+            }
+            outputStream_.reset();
+        }
+        return true;
+    }
+
+    std::uint64_t rowsWritten() const {
+        return rowsWritten_;
+    }
+
+private:
+    void resetBuilders() {
+        auto* pool = arrow::default_memory_pool();
+        schemaVersionBuilder_ = std::make_unique<arrow::Int32Builder>(pool);
+        chromosomeBuilder_ = std::make_unique<arrow::StringBuilder>(pool);
+        anchorStartBuilder_ = std::make_unique<arrow::Int64Builder>(pool);
+        anchorEndBuilder_ = std::make_unique<arrow::Int64Builder>(pool);
+        motifIDBuilder_ = std::make_unique<arrow::StringBuilder>(pool);
+        contextScoreBuilder_ = std::make_unique<arrow::FloatBuilder>(pool);
+        sourceScoreFloorBuilder_ = std::make_unique<arrow::DoubleBuilder>(pool);
+        contextFlankBuilder_ = std::make_unique<arrow::Int64Builder>(pool);
+        capturePrefilterCenterBuilder_ =
+            std::make_unique<arrow::Int64Builder>(pool);
+        maximumAnchorSpanBuilder_ = std::make_unique<arrow::Int64Builder>(pool);
+        motifLengthBuilder_ = std::make_unique<arrow::Int64Builder>(pool);
+        distanceMetricBuilder_ = std::make_unique<arrow::StringBuilder>(pool);
+        pendingRows_ = 0;
+    }
+
+    bool flush(std::string& error) {
+        if (pendingRows_ == 0) {
+            return true;
+        }
+
+        std::vector<std::shared_ptr<arrow::Array>> arrays(12);
+        auto status = schemaVersionBuilder_->Finish(&arrays[0]);
+        if (status.ok()) status = chromosomeBuilder_->Finish(&arrays[1]);
+        if (status.ok()) status = anchorStartBuilder_->Finish(&arrays[2]);
+        if (status.ok()) status = anchorEndBuilder_->Finish(&arrays[3]);
+        if (status.ok()) status = motifIDBuilder_->Finish(&arrays[4]);
+        if (status.ok()) status = contextScoreBuilder_->Finish(&arrays[5]);
+        if (status.ok()) status = sourceScoreFloorBuilder_->Finish(&arrays[6]);
+        if (status.ok()) status = contextFlankBuilder_->Finish(&arrays[7]);
+        if (status.ok()) {
+            status = capturePrefilterCenterBuilder_->Finish(&arrays[8]);
+        }
+        if (status.ok()) status = maximumAnchorSpanBuilder_->Finish(&arrays[9]);
+        if (status.ok()) status = motifLengthBuilder_->Finish(&arrays[10]);
+        if (status.ok()) status = distanceMetricBuilder_->Finish(&arrays[11]);
+        if (!status.ok()) {
+            error = "finishing context-maximum arrays: " + status.ToString();
+            return false;
+        }
+
+        const auto batch = arrow::RecordBatch::Make(
+            schema_, static_cast<std::int64_t>(pendingRows_), arrays);
+        status = writer_->WriteRecordBatch(*batch);
+        if (!status.ok()) {
+            error = "writing context-maximum Parquet record batch: " +
+                status.ToString();
+            return false;
+        }
+        resetBuilders();
+        return true;
+    }
+
+    size_t rowsPerRecordBatch_;
+    size_t pendingRows_ = 0;
+    std::uint64_t rowsWritten_ = 0;
+    std::shared_ptr<arrow::Schema> schema_;
+    std::shared_ptr<arrow::io::FileOutputStream> outputStream_;
+    std::unique_ptr<parquet::arrow::FileWriter> writer_;
+    std::unique_ptr<arrow::Int32Builder> schemaVersionBuilder_;
+    std::unique_ptr<arrow::StringBuilder> chromosomeBuilder_;
+    std::unique_ptr<arrow::Int64Builder> anchorStartBuilder_;
+    std::unique_ptr<arrow::Int64Builder> anchorEndBuilder_;
+    std::unique_ptr<arrow::StringBuilder> motifIDBuilder_;
+    std::unique_ptr<arrow::FloatBuilder> contextScoreBuilder_;
+    std::unique_ptr<arrow::DoubleBuilder> sourceScoreFloorBuilder_;
+    std::unique_ptr<arrow::Int64Builder> contextFlankBuilder_;
+    std::unique_ptr<arrow::Int64Builder> capturePrefilterCenterBuilder_;
+    std::unique_ptr<arrow::Int64Builder> maximumAnchorSpanBuilder_;
+    std::unique_ptr<arrow::Int64Builder> motifLengthBuilder_;
+    std::unique_ptr<arrow::StringBuilder> distanceMetricBuilder_;
+};
+
 class DenseScoreParquetWriter {
 public:
     explicit DenseScoreParquetWriter(const size_t blocksPerRecordBatch = 64)
@@ -928,6 +1131,34 @@ void maybePrintRequestedProgress(const char* operation, const PSSM& pssm,
     std::cerr << message.str() << std::endl;
 }
 
+void maybePrintRequestedContextProgress(
+    const PSSM& pssm, const std::string& chromosome,
+    const ProgressRunState& progressState, const size_t completedAnchors,
+    const size_t totalAnchors, const std::uint64_t validWindows,
+    const std::uint64_t skippedWindows) {
+    if (!consumeProgressStatusRequest()) {
+        return;
+    }
+
+    const double progress = totalAnchors == 0 ? 1.0 :
+        static_cast<double>(completedAnchors) /
+        static_cast<double>(totalAnchors);
+    std::ostringstream message;
+    message << "\nI: progress request"
+            << " phase=context_maxima_scan"
+            << " operation=context_maxima_scan";
+    appendRunProgressFields(message, progressState);
+    message << " motif_id=" << pssm.motifID
+            << " motif_name=" << pssm.motifName
+            << " chr=" << chromosome
+            << " anchors=" << completedAnchors << "/" << totalAnchors
+            << " valid_windows=" << validWindows
+            << " skipped_windows=" << skippedWindows
+            << " progress=" << std::fixed << std::setprecision(3)
+            << progress * 100.0 << "%";
+    std::cerr << message.str() << std::endl;
+}
+
 void writeSparseHitHeader(std::ostream& outFile, bool showSequence) {
     outFile << "Chromosome\tFrom\tTo\tName\tScore\tStrand";
     if (showSequence) {
@@ -1294,6 +1525,145 @@ int writeSparseHitParquet(
             return -1;
         }
     }
+    return 0;
+}
+
+int writeContextMaximumParquet(
+    const std::filesystem::path& outputFilePath,
+    const std::string& chromosome,
+    const EncodedChromosome& encodedChromosome,
+    const PSSM& pssm, const FlatPSSM& flatPssm,
+    const std::vector<Region>& regions, const size_t contextFlank,
+    const double sourceScoreFloor, const StrandMode strandMode,
+    ProgressRunState& progressState) {
+    std::error_code filesystemError;
+    const std::filesystem::path parent = outputFilePath.parent_path();
+    if (!parent.empty()) {
+        std::filesystem::create_directories(parent, filesystemError);
+    }
+    if (filesystemError) {
+        std::cerr << "E: Could not create context-maximum Parquet directory '"
+                  << parent.string() << "': " << filesystemError.message()
+                  << std::endl;
+        return -1;
+    }
+    if (std::filesystem::exists(outputFilePath)) {
+        std::cerr << "E: Refusing to replace existing context-maximum Parquet file '"
+                  << outputFilePath.string() << "'." << std::endl;
+        return -1;
+    }
+
+    std::filesystem::path stagingPath = outputFilePath;
+    stagingPath += ".tmp";
+    if (std::filesystem::exists(stagingPath)) {
+        std::cerr << "E: Context-maximum Parquet staging file already exists: '"
+                  << stagingPath.string() << "'." << std::endl;
+        return -1;
+    }
+
+    size_t totalAnchors = 0;
+    size_t maximumAnchorSpan = 0;
+    for (const Region& region : regions) {
+        if (region.chromosome != chromosome) {
+            continue;
+        }
+        ++totalAnchors;
+        maximumAnchorSpan = std::max(
+            maximumAnchorSpan, static_cast<size_t>(region.to - region.from));
+    }
+    if (totalAnchors == 0) {
+        std::cerr << "E: No context anchors found for chromosome " << chromosome
+                  << "." << std::endl;
+        return -1;
+    }
+    if (contextFlank > std::numeric_limits<size_t>::max() - maximumAnchorSpan ||
+        contextFlank + maximumAnchorSpan >
+            std::numeric_limits<size_t>::max() - flatPssm.motifLength) {
+        std::cerr << "E: Context geometry exceeds the supported coordinate range."
+                  << std::endl;
+        return -1;
+    }
+    const size_t capturePrefilterCenter = contextFlank + maximumAnchorSpan +
+        flatPssm.motifLength;
+
+    ContextMaximumParquetWriter writer;
+    std::string error;
+    if (!writer.open(stagingPath, error)) {
+        std::cerr << "E: " << error << std::endl;
+        return -1;
+    }
+
+    const bool scanPlus = strandMode == StrandMode::Plus ||
+        strandMode == StrandMode::Both;
+    const bool scanMinus = strandMode == StrandMode::Minus ||
+        strandMode == StrandMode::Both;
+    size_t completedAnchors = 0;
+    std::uint64_t validWindows = 0;
+    std::uint64_t skippedWindows = 0;
+    for (const Region& region : regions) {
+        if (region.chromosome != chromosome) {
+            continue;
+        }
+        const ContextMaximum maximum = maximumScoreInAnchorContext(
+            encodedChromosome.plusCodes, encodedChromosome.minusCodes,
+            encodedChromosome.sequence.size(), static_cast<size_t>(region.from),
+            static_cast<size_t>(region.to), contextFlank, flatPssm,
+            scanPlus, scanMinus, sourceScoreFloor);
+        validWindows += maximum.validWindows;
+        skippedWindows += maximum.skippedWindows;
+        if (maximum.available) {
+            ++progressState.emittedHits;
+        }
+        if (!writer.append(
+                chromosome, region.from, region.to, pssm.motifID, maximum,
+                sourceScoreFloor, static_cast<std::int64_t>(contextFlank),
+                static_cast<std::int64_t>(capturePrefilterCenter),
+                static_cast<std::int64_t>(maximumAnchorSpan),
+                static_cast<std::int64_t>(flatPssm.motifLength), error)) {
+            std::cerr << "E: " << error << std::endl;
+            return -1;
+        }
+        ++completedAnchors;
+        if ((completedAnchors & 0xffU) == 0U) {
+            maybePrintRequestedContextProgress(
+                pssm, chromosome, progressState, completedAnchors,
+                totalAnchors, validWindows, skippedWindows);
+        }
+    }
+    maybePrintRequestedContextProgress(
+        pssm, chromosome, progressState, completedAnchors, totalAnchors,
+        validWindows, skippedWindows);
+
+    const std::uint64_t rowsWritten = writer.rowsWritten();
+    maybePrintRequestedPhase("parquet_close_start", progressState, chromosome,
+                             &pssm, strandModeName(strandMode));
+    if (!writer.close(error)) {
+        maybePrintRequestedPhase("parquet_close_failed", progressState,
+                                 chromosome, &pssm,
+                                 strandModeName(strandMode));
+        std::cerr << "E: " << error << std::endl;
+        return -1;
+    }
+    maybePrintRequestedPhase("parquet_close_complete", progressState,
+                             chromosome, &pssm,
+                             strandModeName(strandMode));
+    if (rowsWritten != totalAnchors) {
+        std::cerr << "E: Context-maximum Parquet row count disagrees with "
+                     "the anchor count." << std::endl;
+        return -1;
+    }
+
+    std::filesystem::rename(stagingPath, outputFilePath, filesystemError);
+    if (filesystemError) {
+        std::cerr << "E: Could not publish context-maximum Parquet file '"
+                  << outputFilePath.string() << "': "
+                  << filesystemError.message() << std::endl;
+        return -1;
+    }
+    std::cout << "Context maxima saved to: " << outputFilePath.string()
+              << " (" << rowsWritten << " anchors, "
+              << progressState.emittedHits << " recoverable maxima)"
+              << std::endl;
     return 0;
 }
 #endif
@@ -1876,7 +2246,7 @@ struct PreparedMotif {
 };
 
 void printHelp(const std::string& programName, const std::string& genomeFile, const std::string& fastaIndexFile, const std::string& gzipIndexFile, const std::string& pssmFile, const std::string& targetMotifID, double threshold, double minPwmRelativeScore, double maxPwmRelativeScore, double pseudocount, const std::string& chromosome, long from, long to, const std::string& regions, const std::string& outdir, bool showSequence, const std::string& scoreMode, bool scoreDistribution, const std::string& distributionBinWidth, bool sparseParquet, bool denseScores, size_t denseBlockSize, StrandMode strandMode, CoordinateMode coordinateMode, const std::string& motifListFile, const std::string& motifSetID, const std::string& genomeID, const std::string& backgroundModelID, const std::string& pseudocountScheme, const std::string& scanFileStatsFile) {
-    std::cout << "Usage: " << programName << " [-v] [-c chromosome] [-t toBp] [-f fromBp] [-g genome_file] [-p pssm_file] [-m motif_id | --motif-list file] [--score-mode log2_relative_risk|log_odds] [--pseudocount value] [--strand +|-|both] [--coordinate-mode legacy|bed] [--score-distribution] [--distribution-bin-width adaptive|width] [--sparse-parquet] [--dense-scores] [--dense-block-size windows] [--skip-N | --neutral-N] [--skip-normalization]" << std::endl;
+    std::cout << "Usage: " << programName << " [-v] [-c chromosome] [-t toBp] [-f fromBp] [-g genome_file] [-p pssm_file] [-m motif_id | --motif-list file] [--score-mode log2_relative_risk|log_odds] [--pseudocount value] [--strand +|-|both] [--coordinate-mode legacy|bed] [--score-distribution] [--distribution-bin-width adaptive|width] [--sparse-parquet] [--dense-scores] [--dense-block-size windows] [--context-maxima output.parquet --regions anchors.tsv --context-flank bp] [--skip-N | --neutral-N] [--skip-normalization]" << std::endl;
     std::cout << " -v, --verbose        Allow verbose output (set to " << beVerbose << ")" << std::endl;
     std::cout << " -d, --debug          Allow debug output (set to " << showDebug << ")" << std::endl;
     std::cout << " -g, --genome         Path to genome FASTA file (set to '" << genomeFile  << "')" << std::endl;
@@ -1908,6 +2278,8 @@ void printHelp(const std::string& programName, const std::string& genomeFile, co
     std::cout << " --sparse-parquet     Write thresholded hits directly to partitioned Parquet (set to " << sparseParquet << "; requires Arrow build, explicit --threshold, and BED coordinates)" << std::endl;
     std::cout << " --dense-scores       Write dense " << denseScoreFormatName() << " score blocks for one motif and one chromosome (set to " << denseScores << ")" << std::endl;
     std::cout << " --dense-block-size   Dense alignment scores per output block (set to " << denseBlockSize << ")" << std::endl;
+    std::cout << " --context-maxima     Write one direct Parquet maximum per --regions anchor for a single motif (Arrow build only)" << std::endl;
+    std::cout << " --context-flank      Maximum signed interval-edge distance from each anchor (default 150 bp)" << std::endl;
     std::cout << " --skip-N             Skip windows containing 'N'" << std::endl;
     std::cout << " --neutral-N          Treat 'N' as neutral (contribute 0 to the score)" << std::endl;
     std::cout << " -N, --skip-normalization Skip log-normalisation, will affect scoring." << std::endl;
@@ -2010,6 +2382,8 @@ int main(int argc, char* argv[]) {
     std::string distributionBinWidth = "adaptive";
     bool sparseParquet = false;
     bool denseScores = false;
+    std::string contextMaximaFile;
+    long contextFlank = 150L;
     size_t denseBlockSize = DEFAULT_SCORE_BLOCK_SIZE;
     StrandMode strandMode = StrandMode::Both;
     bool strandModeSet = false;
@@ -2048,6 +2422,8 @@ int main(int argc, char* argv[]) {
         {"sparse-parquet", no_argument, 0, 0},
         {"dense-scores", no_argument, 0, 0},
         {"dense-block-size", required_argument, 0, 0},
+        {"context-maxima", required_argument, 0, 0},
+        {"context-flank", required_argument, 0, 0},
         {"skip-N", no_argument, 0, 0},
         {"neutral-N", no_argument, 0, 0},
         {"skip-normalization", no_argument, 0, 'N'},
@@ -2213,6 +2589,14 @@ int main(int argc, char* argv[]) {
                     } else {
                         denseBlockSize = static_cast<size_t>(parsedDenseBlockSize);
                     }
+                } else if (std::string(long_options[option_index].name) == "context-maxima") {
+                    contextMaximaFile = optarg;
+                } else if (std::string(long_options[option_index].name) == "context-flank") {
+                    if (!parseLongStrict(optarg, contextFlank) || contextFlank < 0L) {
+                        std::cerr << "E: --context-flank expects a non-negative integer, got '"
+                                  << optarg << "'." << std::endl;
+                        showHelp = 1;
+                    }
                 } else if (std::string(long_options[option_index].name) == "version") {
                     showVersion = true;
                 } else if (std::string(long_options[option_index].name) == "version-json") {
@@ -2272,10 +2656,14 @@ int main(int argc, char* argv[]) {
                   << "." << std::endl;
         return 1;
     }
+    const bool contextMaxima = !contextMaximaFile.empty();
     const unsigned int specialOutputModes = static_cast<unsigned int>(scoreDistribution) +
-        static_cast<unsigned int>(sparseParquet) + static_cast<unsigned int>(denseScores);
+        static_cast<unsigned int>(sparseParquet) + static_cast<unsigned int>(denseScores) +
+        static_cast<unsigned int>(contextMaxima);
     if (specialOutputModes > 1U) {
-        std::cerr << "E: --score-distribution, --sparse-parquet, and --dense-scores are separate output modes; choose one." << std::endl;
+        std::cerr << "E: --score-distribution, --sparse-parquet, --dense-scores, "
+                     "and --context-maxima are separate output modes; choose one."
+                  << std::endl;
         return 1;
     }
 
@@ -2343,6 +2731,40 @@ int main(int argc, char* argv[]) {
             return 1;
         }
     }
+    if (contextMaxima) {
+#ifndef PSSM_SCAN_WITH_PARQUET
+        std::cerr << "E: --context-maxima requires the Arrow build; run "
+                     "'make pssm_scan_parquet' and use ./pssm_scan_parquet."
+                  << std::endl;
+        return 1;
+#endif
+        if (targetMotifID.empty() || !motifListFile.empty()) {
+            std::cerr << "E: --context-maxima requires exactly one --motif."
+                      << std::endl;
+            return 1;
+        }
+        if (!thresholdSet) {
+            std::cerr << "E: --context-maxima requires an explicit --threshold "
+                         "as its recoverable source-score floor." << std::endl;
+            return 1;
+        }
+        if (coordinateMode != CoordinateMode::Bed) {
+            std::cerr << "E: --context-maxima requires --coordinate-mode bed."
+                      << std::endl;
+            return 1;
+        }
+        if (regionsFile.empty()) {
+            std::cerr << "E: --context-maxima requires a BED-like --regions "
+                         "anchor file." << std::endl;
+            return 1;
+        }
+        if (std::isfinite(minPwmRelativeScore) ||
+            std::isfinite(maxPwmRelativeScore) || showSequence) {
+            std::cerr << "E: --context-maxima does not accept PWM-relative "
+                         "filters or --show-sequence." << std::endl;
+            return 1;
+        }
+    }
     if ((sparseParquet || denseScores) &&
         (!isValidRunIdentifier(motifSetID) || !isValidRunIdentifier(genomeID))) {
         std::cerr << "E: Parquet output requires explicit --motif-set-id and "
@@ -2361,6 +2783,32 @@ int main(int argc, char* argv[]) {
         regions = Region::parseRegionsFile(regionsFile);
         if (regions.empty()) {
             std::cerr << "E: No valid regions found in regions file." << std::endl;
+            return 1;
+        }
+    }
+
+    if (contextMaxima) {
+        std::set<std::pair<std::string, std::pair<long, long>>> anchorKeys;
+        std::set<std::string> anchorChromosomes;
+        for (const Region& region : regions) {
+            if (region.from < 0L || region.to <= region.from) {
+                std::cerr << "E: --context-maxima requires non-empty BED "
+                             "anchors with non-negative coordinates; invalid "
+                             "anchor " << region.chromosome << ":"
+                          << region.from << "-" << region.to << "." << std::endl;
+                return 1;
+            }
+            if (!anchorKeys.insert({region.chromosome, {region.from, region.to}}).second) {
+                std::cerr << "E: Duplicate --context-maxima anchor "
+                          << region.chromosome << ":" << region.from << "-"
+                          << region.to << "." << std::endl;
+                return 1;
+            }
+            anchorChromosomes.insert(region.chromosome);
+        }
+        if (anchorChromosomes.size() != 1U) {
+            std::cerr << "E: --context-maxima currently requires anchors from "
+                         "exactly one chromosome." << std::endl;
             return 1;
         }
     }
@@ -2422,7 +2870,7 @@ int main(int argc, char* argv[]) {
         scanFileStatsStream = &scanFileStatsOutput;
     }
     std::filesystem::path sparseHitOutputDirectory;
-    if (!scoreDistribution && !sparseParquet && !denseScores) {
+    if (!scoreDistribution && !sparseParquet && !denseScores && !contextMaxima) {
         sparseHitOutputDirectory = hitOutputDirectory(outdir, hitOutputOptions);
         std::error_code directoryError;
         std::filesystem::create_directories(sparseHitOutputDirectory, directoryError);
@@ -2626,6 +3074,23 @@ int main(int argc, char* argv[]) {
             const FlatPSSM& flatPssm = preparedMotif.flatPssm;
             const ScoreRange& scoreRange = preparedMotif.scoreRange;
             const std::string& motifNameForFile = preparedMotif.motifNameForFile;
+
+            if (contextMaxima) {
+#ifdef PSSM_SCAN_WITH_PARQUET
+                if (writeContextMaximumParquet(
+                        contextMaximaFile, chromosome, encodedChromosome,
+                        preparedPssm, flatPssm, regions,
+                        static_cast<size_t>(contextFlank), threshold,
+                        strandMode, progressState) != 0) {
+                    return 1;
+                }
+                continue;
+#else
+                std::cerr << "E: Internal error: context-maximum mode lacks "
+                             "Arrow support." << std::endl;
+                return 1;
+#endif
+            }
 
             if (scoreDistribution) {
                 const std::string chromosomeLabel = targetChromosome.empty() ? "all" : targetChromosome;

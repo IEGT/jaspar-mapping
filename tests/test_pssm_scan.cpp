@@ -267,6 +267,66 @@ void testScoreRangeAndPWMRelativeScore() {
     expectNear(relativeScore, 0.5, 1e-12, "relative score uses reachable finite range");
 }
 
+void testAnchorContextMaximum() {
+    const ContextStartRange ordinary = anchorContextStartRange(
+        100, 20, 25, 2, 4);
+    expectTrue(!ordinary.empty, "ordinary anchor context is non-empty");
+    expectEqual(ordinary.first, static_cast<size_t>(14),
+                "context start includes upstream motif span");
+    expectEqual(ordinary.last, static_cast<size_t>(27),
+                "context start includes downstream flank");
+
+    const ContextStartRange leftEdge = anchorContextStartRange(20, 0, 3, 5, 4);
+    expectEqual(leftEdge.first, static_cast<size_t>(0),
+                "context start clips at chromosome start");
+    expectEqual(leftEdge.last, static_cast<size_t>(8),
+                "left-edge context preserves downstream reach");
+
+    const ContextStartRange rightEdge = anchorContextStartRange(20, 18, 20, 5, 4);
+    expectEqual(rightEdge.first, static_cast<size_t>(9),
+                "right-edge context preserves upstream reach");
+    expectEqual(rightEdge.last, static_cast<size_t>(16),
+                "context start clips at last complete motif window");
+    expectTrue(anchorContextStartRange(20, 5, 5, 2, 4).empty,
+               "empty anchor interval is rejected");
+
+    FlatPSSM flat;
+    flat.motifLength = 2;
+    flat.scores.assign(flat.motifLength * BASE_CODE_COUNT, -3.0);
+    flat.scores[0 * BASE_CODE_COUNT + BASE_T] = 5.0;
+    flat.scores[1 * BASE_CODE_COUNT + BASE_T] = 7.0;
+    flat.scores[0 * BASE_CODE_COUNT + BASE_N] = SENTINEL_SCORE;
+    flat.scores[1 * BASE_CODE_COUNT + BASE_N] = SENTINEL_SCORE;
+
+    const std::string sequence = "AAAATAAA";
+    std::vector<std::uint8_t> plusCodes;
+    plusCodes.reserve(sequence.size());
+    for (const char base : sequence) {
+        plusCodes.push_back(codeForBase(base));
+    }
+    std::vector<std::uint8_t> minusCodes(plusCodes.size());
+    for (size_t i = 0; i < plusCodes.size(); ++i) {
+        minusCodes[plusCodes.size() - 1 - i] = complementCode(plusCodes[i]);
+    }
+
+    const ContextMaximum maximum = maximumScoreInAnchorContext(
+        plusCodes, minusCodes, sequence.size(), 3, 5, 0, flat,
+        true, true, -20.0);
+    expectTrue(maximum.available, "both-strand context maximum is available");
+    expectNear(maximum.score, 12.0, 1e-12,
+               "both-strand context maximum uses genomic coordinates");
+    expectEqual(maximum.validWindows, static_cast<std::uint64_t>(10),
+                "all in-context windows on both strands are inspected");
+    expectEqual(maximum.skippedWindows, static_cast<std::uint64_t>(0),
+                "ordinary context has no skipped windows");
+
+    const ContextMaximum suppressed = maximumScoreInAnchorContext(
+        plusCodes, minusCodes, sequence.size(), 3, 5, 0, flat,
+        true, true, 13.0);
+    expectTrue(!suppressed.available,
+               "source floor suppresses lower context maxima");
+}
+
 void testCoordinateModeOffsets() {
     const size_t windowStart = 10;
     const size_t motifLength = 16;
@@ -391,6 +451,7 @@ int main() {
     testCalculateScoreAt();
     testGenomicScoreBlocks();
     testScoreRangeAndPWMRelativeScore();
+    testAnchorContextMaximum();
     testCoordinateModeOffsets();
     testOutputNaming();
     testScoreDistribution();

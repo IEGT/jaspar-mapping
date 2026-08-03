@@ -208,6 +208,12 @@ CUT&RUN anchor reconstruction, Slurm layout, status reporting, and finalization
 gate are specified in
 [`jaspar2026_chr1_all_motif_threshold_run.md`](jaspar2026_chr1_all_motif_threshold_run.md).
 
+Because that run's automatic candidate grid began at zero, the separate
+[`jaspar2026_chr1_negative_threshold_sensitivity.md`](jaspar2026_chr1_negative_threshold_sensitivity.md)
+run rescans only the 438 motifs recommended at zero and tests every integer
+threshold from -20 through zero. It is a left-censoring and filtering-bias
+audit; it does not mutate the v1 registry or its compact export.
+
 On Haumea, the scalable unit should be one neighboring motif against the fixed
 TP73 anchor/label table. Resolve its exact plus/minus chromosome files through
 `scan_file_inventory`, derive maxima and metric rows in a requeueable task, and

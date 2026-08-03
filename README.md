@@ -203,6 +203,15 @@ resumable checksums, portable catalogs, and exact-file queries is documented in
 v3 scale and original finalizer costs are recorded in
 [`docs/jaspar2026_grch38_sparse_v3_run_report.md`](docs/jaspar2026_grch38_sparse_v3_run_report.md).
 
+For a bounded context analysis that needs scores below the production storage
+floor, `--context-maxima OUTPUT.parquet --regions ANCHORS.tsv` evaluates one
+motif around BED-coordinate anchors and writes one maximum per anchor directly
+to Parquet. `--context-flank` is a signed interval-edge distance: overlap is
+negative and abutment is zero. This Arrow-only mode requires one motif, BED
+coordinates, and an explicit `--threshold` as the recoverable source floor.
+The chromosome-1 `-20..0` threshold audit is specified in
+[`docs/jaspar2026_chr1_negative_threshold_sensitivity.md`](docs/jaspar2026_chr1_negative_threshold_sensitivity.md).
+
 For production provenance, build from the clean commit named in the immutable
 plan and inspect `./pssm_scan_parquet --version-json`. The coordinator rejects a
 dirty or commit-mismatched scanner unless an explicit diagnostic override is
