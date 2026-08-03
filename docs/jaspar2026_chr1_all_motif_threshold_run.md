@@ -156,6 +156,11 @@ missing metric input; motifs that genuinely have no usable threshold instead
 receive `insufficient_class_support`, `no_finite_metric`, or
 `no_positive_gain`.
 
+Manifest schema 2 distinguishes the immutable metric-generation source commit
+from the commit used to consolidate and validate the registry. Blank optional
+metric fields from explicitly non-evaluable candidates are preserved as SQL
+`NULL`; malformed nonblank numeric values still fail finalization.
+
 The local KLF14 reference sweep took 174 seconds before compact-output and
 class-support shortcuts. That makes several hours of wall time at 20-way
 parallelism a reasonable planning estimate, but motif density and filesystem

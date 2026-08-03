@@ -326,6 +326,8 @@ def status(arguments: argparse.Namespace) -> None:
 def finalize(arguments: argparse.Namespace) -> None:
     run_root = arguments.run_root.expanduser().resolve()
     config = load_config(run_root)
+    source = Path(str(config["source"]))
+    finalization_commit, finalization_dirty = git_identity(source)
     rows = task_rows(run_root)
     metric_rows: list[dict[str, str]] = []
     metric_fields: list[str] | None = None
@@ -390,7 +392,6 @@ def finalize(arguments: argparse.Namespace) -> None:
         table = staging / "tables" / "jaspar2026" / "motif_score_threshold"
         table.mkdir(parents=True)
         registry = table / "part-000000.parquet"
-        source = Path(str(config["source"]))
         builder = source / "scripts" / "build_motif_score_thresholds.py"
         command = [
             sys.executable, str(builder),
@@ -444,7 +445,7 @@ def finalize(arguments: argparse.Namespace) -> None:
                 int(summary[0]["pending"]) != 0:
             raise CalibrationError(f"final registry validation failed: {summary}")
         final_manifest = {
-            "schema_version": 1,
+            "schema_version": 2,
             "run_id": config["run_id"],
             "threshold_set_id": config["threshold_set_id"],
             "motifs": len(rows),
@@ -453,6 +454,10 @@ def finalize(arguments: argparse.Namespace) -> None:
             "threshold_metrics_sha256": sha256(metrics_parquet),
             "threshold_registry_sha256": sha256(registry),
             "source_commit": config["source_commit"],
+            "metric_source_commit": config["source_commit"],
+            "metric_source_dirty": config["source_dirty"],
+            "finalization_source_commit": finalization_commit,
+            "finalization_source_dirty": finalization_dirty,
         }
         (staging / "manifest.json").write_text(
             json.dumps(final_manifest, indent=2, sort_keys=True) + "\n",

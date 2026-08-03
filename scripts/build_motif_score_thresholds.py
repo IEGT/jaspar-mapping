@@ -28,6 +28,11 @@ def sql_number(value: float) -> str:
     return format(value, ".17g")
 
 
+def nullable_metric_cast(column: str, sql_type: str) -> str:
+    """Cast an optional evaluator field while preserving malformed-value errors."""
+    return f"CAST(NULLIF(TRIM(CAST({column} AS VARCHAR)), '') AS {sql_type})"
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -128,17 +133,18 @@ metric_input AS (
         CAST(anchors_retained AS BIGINT) AS anchors_retained,
         CAST(retained_fraction AS DOUBLE) AS retained_fraction,
         CAST(discordant_observations AS BIGINT) AS discordant_observations,
-        CAST({baseline_metric} AS DOUBLE) AS baseline_metric_value,
-        CAST({augmented_metric} AS DOUBLE) AS augmented_metric_value,
-        CAST({metric} AS DOUBLE) AS metric_gain,
-        CAST(median_adjusted_odds_ratio AS DOUBLE) AS adjusted_odds_ratio,
-        CAST(samples_with_raw_odds_ratio_below_one AS BIGINT)
+        {nullable_metric_cast(baseline_metric, "DOUBLE")} AS baseline_metric_value,
+        {nullable_metric_cast(augmented_metric, "DOUBLE")} AS augmented_metric_value,
+        {nullable_metric_cast(metric, "DOUBLE")} AS metric_gain,
+        {nullable_metric_cast("median_adjusted_odds_ratio", "DOUBLE")}
+            AS adjusted_odds_ratio,
+        {nullable_metric_cast("samples_with_raw_odds_ratio_below_one", "BIGINT")}
             AS samples_with_raw_odds_ratio_below_one,
-        CAST(samples_total AS BIGINT) AS samples_total,
-        CAST(sample_fold_cells AS BIGINT) AS sample_fold_cells,
-        CAST(sample_fold_cells_with_roc_auc_gain AS BIGINT)
+        {nullable_metric_cast("samples_total", "BIGINT")} AS samples_total,
+        {nullable_metric_cast("sample_fold_cells", "BIGINT")} AS sample_fold_cells,
+        {nullable_metric_cast("sample_fold_cells_with_roc_auc_gain", "BIGINT")}
             AS sample_fold_cells_with_roc_auc_gain,
-        CAST(sample_fold_cells_with_log_loss_gain AS BIGINT)
+        {nullable_metric_cast("sample_fold_cells_with_log_loss_gain", "BIGINT")}
             AS sample_fold_cells_with_log_loss_gain
     FROM {metrics_sql(arguments.metrics)}
 ),

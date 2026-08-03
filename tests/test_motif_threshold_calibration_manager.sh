@@ -75,17 +75,79 @@ grep -q '^MA0001.1$' "$run/plan/motifs.txt"
 grep -q '^MA0002.1$' "$run/plan/motifs.txt"
 ! grep -q '^MA0861.2$' "$run/plan/motifs.txt"
 
-header=$'motif_id\tthreshold\tanchors_total\tanchors_retained\tretained_fraction\tdiscordant_observations\tbaseline_macro_roc_auc\taugmented_macro_roc_auc\tdelta_macro_roc_auc\tbaseline_macro_average_precision\taugmented_macro_average_precision\tdelta_macro_average_precision\tbaseline_macro_log_loss\taugmented_macro_log_loss\tdelta_macro_log_loss\tbaseline_macro_brier_score\taugmented_macro_brier_score\tdelta_macro_brier_score\tmedian_adjusted_odds_ratio\tminimum_adjusted_odds_ratio\tmaximum_adjusted_odds_ratio\tmedian_raw_sample_odds_ratio\tsamples_with_raw_odds_ratio_below_one\tsamples_total\tsample_fold_cells\tsample_fold_cells_with_roc_auc_gain\tsample_fold_cells_with_log_loss_gain\tevaluation_status\tevaluation_note'
-for task in 0 1; do
-    motif=$(awk -F '\t' -v task="$task" 'NR > 1 && $1 == task {print $2}' \
-        "$run/plan/calibration_tasks.tsv")
-    directory="$run/tasks/task-$(printf '%06d' "$task")-$motif"
-    mkdir -p "$directory"
-    printf '%s\n' "$header" > "$directory/threshold_metrics.tsv"
-    printf '%s\n' "$motif"$'\t0\t100\t50\t0.5\t120\t0.6\t0.7\t0.1\t0.6\t0.7\t0.1\t0.7\t0.6\t-0.1\t0.2\t0.18\t-0.02\t1.2\t1.1\t1.3\t1.2\t0\t6\t30\t25\t25\tevaluated\tNA' \
-        >> "$directory/threshold_metrics.tsv"
-    printf '{"motif_id":"%s"}\n' "$motif" > "$directory/complete.json"
-done
+python3 - "$run" <<'PY'
+import csv
+import json
+import pathlib
+import sys
+
+run = pathlib.Path(sys.argv[1])
+with (run / "plan" / "calibration_tasks.tsv").open(newline="") as handle:
+    tasks = list(csv.DictReader(handle, delimiter="\t"))
+
+fields = [
+    "motif_id", "threshold", "anchors_total", "anchors_retained",
+    "retained_fraction", "discordant_observations",
+    "baseline_macro_roc_auc", "augmented_macro_roc_auc",
+    "delta_macro_roc_auc", "baseline_macro_average_precision",
+    "augmented_macro_average_precision", "delta_macro_average_precision",
+    "baseline_macro_log_loss", "augmented_macro_log_loss",
+    "delta_macro_log_loss", "baseline_macro_brier_score",
+    "augmented_macro_brier_score", "delta_macro_brier_score",
+    "median_adjusted_odds_ratio", "minimum_adjusted_odds_ratio",
+    "maximum_adjusted_odds_ratio", "median_raw_sample_odds_ratio",
+    "samples_with_raw_odds_ratio_below_one", "samples_total",
+    "sample_fold_cells", "sample_fold_cells_with_roc_auc_gain",
+    "sample_fold_cells_with_log_loss_gain", "evaluation_status",
+    "evaluation_note",
+]
+for task in tasks:
+    index = int(task["task_index"])
+    motif = task["motif_id"]
+    directory = run / "tasks" / f"task-{index:06d}-{motif}"
+    directory.mkdir(parents=True)
+    row = dict.fromkeys(fields, "")
+    row.update({
+        "motif_id": motif, "threshold": 0, "anchors_total": 100,
+        "anchors_retained": 50, "retained_fraction": 0.5,
+        "discordant_observations": 120, "baseline_macro_roc_auc": 0.6,
+        "baseline_macro_average_precision": 0.6,
+        "baseline_macro_log_loss": 0.7, "baseline_macro_brier_score": 0.2,
+        "samples_with_raw_odds_ratio_below_one": 0, "samples_total": 6,
+        "sample_fold_cells": 30, "sample_fold_cells_with_roc_auc_gain": 0,
+        "sample_fold_cells_with_log_loss_gain": 0,
+    })
+    if index == 0:
+        row.update({
+            "augmented_macro_roc_auc": 0.7, "delta_macro_roc_auc": 0.1,
+            "augmented_macro_average_precision": 0.7,
+            "delta_macro_average_precision": 0.1,
+            "augmented_macro_log_loss": 0.6, "delta_macro_log_loss": -0.1,
+            "augmented_macro_brier_score": 0.18,
+            "delta_macro_brier_score": -0.02,
+            "median_adjusted_odds_ratio": 1.2,
+            "minimum_adjusted_odds_ratio": 1.1,
+            "maximum_adjusted_odds_ratio": 1.3,
+            "median_raw_sample_odds_ratio": 1.2,
+            "sample_fold_cells_with_roc_auc_gain": 25,
+            "sample_fold_cells_with_log_loss_gain": 25,
+            "evaluation_status": "evaluated",
+        })
+    else:
+        row.update({
+            "evaluation_status": "fit_failed",
+            "evaluation_note": "no finite held-out metric",
+        })
+    with (directory / "threshold_metrics.tsv").open("w", newline="") as handle:
+        writer = csv.DictWriter(
+            handle, fields, delimiter="\t", lineterminator="\n"
+        )
+        writer.writeheader()
+        writer.writerow(row)
+    (directory / "complete.json").write_text(
+        json.dumps({"motif_id": motif}) + "\n", encoding="utf-8"
+    )
+PY
 
 python3 "$repository_root/scripts/manage_motif_threshold_calibration.py" status \
     --run-root "$run" | grep -q $'^complete\t2$'
@@ -96,10 +158,32 @@ registry="$run/final/threshold_calibration/tables/jaspar2026/motif_score_thresho
 "$duckdb" -batch :memory: >/dev/null <<SQL
 SELECT CASE WHEN (SELECT count(*) FROM read_parquet('$registry')) <> 2
     THEN error('final threshold registry has the wrong motif count') END;
-SELECT CASE WHEN EXISTS (
+SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM read_parquet('$registry')
-    WHERE calibration_status <> 'exploratory_positive_gain'
+    WHERE motif_id = 'MA0001.1'
+      AND calibration_status = 'exploratory_positive_gain'
 ) THEN error('synthetic positive threshold was not selected') END;
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM read_parquet('$registry')
+    WHERE motif_id = 'MA0002.1'
+      AND recommended_threshold IS NULL
+      AND selected_metric_gain IS NULL
+      AND calibration_status = 'no_finite_metric'
+) THEN error('blank non-evaluable metrics did not retain null semantics') END;
 SQL
+
+python3 - "$run/final/threshold_calibration/manifest.json" <<'PY'
+import json
+import re
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    manifest = json.load(handle)
+assert manifest["schema_version"] == 2
+assert manifest["source_commit"] == manifest["metric_source_commit"]
+assert re.fullmatch(r"[0-9a-f]{40}", manifest["finalization_source_commit"])
+assert isinstance(manifest["metric_source_dirty"], bool)
+assert isinstance(manifest["finalization_source_dirty"], bool)
+PY
 
 echo "Motif threshold-calibration manager tests passed."
