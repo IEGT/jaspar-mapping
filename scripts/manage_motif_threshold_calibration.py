@@ -327,7 +327,10 @@ def finalize(arguments: argparse.Namespace) -> None:
     run_root = arguments.run_root.expanduser().resolve()
     config = load_config(run_root)
     source = Path(str(config["source"]))
-    finalization_commit, finalization_dirty = git_identity(source)
+    finalization_commit = arguments.finalization_source_commit
+    if re.fullmatch(r"[0-9a-f]{40}", finalization_commit) is None:
+        raise CalibrationError("finalization source commit must be a full Git object ID")
+    finalization_dirty = arguments.finalization_source_dirty
     rows = task_rows(run_root)
     metric_rows: list[dict[str, str]] = []
     metric_fields: list[str] | None = None
@@ -500,6 +503,10 @@ def parser() -> argparse.ArgumentParser:
     finalize_parser = subparsers.add_parser("finalize", help="build final registry")
     finalize_parser.add_argument("--run-root", type=Path, required=True)
     finalize_parser.add_argument("--duckdb", default="duckdb")
+    finalize_parser.add_argument("--finalization-source-commit", required=True)
+    finalize_parser.add_argument(
+        "--finalization-source-dirty", action="store_true"
+    )
     finalize_parser.set_defaults(function=finalize)
     return result
 

@@ -151,8 +151,15 @@ PY
 
 python3 "$repository_root/scripts/manage_motif_threshold_calibration.py" status \
     --run-root "$run" | grep -q $'^complete\t2$'
-python3 "$repository_root/scripts/manage_motif_threshold_calibration.py" finalize \
-    --run-root "$run" --duckdb "$duckdb"
+finalization_commit=$(git -C "$repository_root" rev-parse HEAD)
+python_executable=$(command -v python3)
+duckdb_executable=$(command -v "$duckdb")
+mkdir "$temporary/no-git-path"
+PATH="$temporary/no-git-path" \
+    "$python_executable" \
+    "$repository_root/scripts/manage_motif_threshold_calibration.py" finalize \
+    --run-root "$run" --duckdb "$duckdb_executable" \
+    --finalization-source-commit "$finalization_commit"
 
 registry="$run/final/threshold_calibration/tables/jaspar2026/motif_score_threshold/part-000000.parquet"
 "$duckdb" -batch :memory: >/dev/null <<SQL
@@ -172,16 +179,16 @@ SELECT CASE WHEN NOT EXISTS (
 ) THEN error('blank non-evaluable metrics did not retain null semantics') END;
 SQL
 
-python3 - "$run/final/threshold_calibration/manifest.json" <<'PY'
+python3 - "$run/final/threshold_calibration/manifest.json" \
+    "$finalization_commit" <<'PY'
 import json
-import re
 import sys
 
 with open(sys.argv[1], encoding="utf-8") as handle:
     manifest = json.load(handle)
 assert manifest["schema_version"] == 2
 assert manifest["source_commit"] == manifest["metric_source_commit"]
-assert re.fullmatch(r"[0-9a-f]{40}", manifest["finalization_source_commit"])
+assert manifest["finalization_source_commit"] == sys.argv[2]
 assert isinstance(manifest["metric_source_dirty"], bool)
 assert isinstance(manifest["finalization_source_dirty"], bool)
 PY

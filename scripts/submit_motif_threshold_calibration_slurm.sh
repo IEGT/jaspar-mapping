@@ -208,6 +208,17 @@ fi
     exit 1
 }
 execution_source_commit=$(git -C "$source" rev-parse HEAD)
+execution_source_dirty=0
+if ! git -C "$source" diff --quiet --ignore-submodules -- ||
+   ! git -C "$source" diff --cached --quiet --ignore-submodules --; then
+    execution_source_dirty=1
+fi
+finalization_provenance=(
+    --finalization-source-commit "$execution_source_commit"
+)
+if [[ $execution_source_dirty -eq 1 ]]; then
+    finalization_provenance+=(--finalization-source-dirty)
+fi
 submission_record="$run_root/plan/slurm_submission.tsv"
 if [[ -e $submission_record && $dry_run -eq 0 ]]; then
     echo "E: Run already has a Slurm submission record: $submission_record" >&2
@@ -287,6 +298,7 @@ final_submission=(
     --error="$run_root/logs/finalize-%j.err"
     "$source/scripts/run_motif_threshold_calibration_finalize.sh"
     --run-root "$run_root" --source "$source" --duckdb "$duckdb"
+    "${finalization_provenance[@]}"
 )
 if [[ $dry_run -eq 1 ]]; then
     printf '%q ' "${final_submission[@]}"; printf '\n'
