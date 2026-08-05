@@ -195,7 +195,11 @@ SQL
 
     {
         echo 'PREPARE q18 AS'
-        awk '/^-- Q18\./ { capture = 1 } capture { print }' \
+        awk '
+            /^-- Q18\./ { capture = 1 }
+            /^-- Q19\./ { capture = 0 }
+            capture { print }
+        ' \
             "$repository_root/sql/queries.sql"
         cat <<'SQL'
 EXECUTE q18(

@@ -493,3 +493,61 @@ WHERE threshold_set_id = $threshold_set_id
   AND pseudocount = $pseudocount
   AND calibration_stratum_id = $calibration_stratum_id
 ORDER BY anchor_start, anchor_end, anchor_locus_id;
+
+-- Q19. Nonzero per-band counts and the fully coupled strongest physical locus
+--      for every neighboring motif around one physical TP73 anchor. Pair fields
+--      describe the selected strongest locus, not an independently chosen hit.
+--      Params: $genome_id, $motif_set_id, $chrom, $anchor_start, $anchor_end,
+--      $score_mode, $pseudocount
+SELECT
+    anchor_locus_id,
+    chrom,
+    anchor_start,
+    anchor_end,
+    anchor_best_score,
+    anchor_orientation_state,
+    anchor_best_orientation_state,
+    neighbor_motif_id,
+    neighbor_motif_name,
+    interval_distance_band,
+    interval_distance_band_order,
+    qualifying_threshold,
+    n_neighbor_loci_above_threshold,
+    n_best_score_ties,
+    best_neighbor_start,
+    best_neighbor_end,
+    best_neighbor_score,
+    best_neighbor_pwm_relative_score,
+    best_neighbor_n_orientation_records,
+    best_neighbor_plus_score,
+    best_neighbor_minus_score,
+    best_interval_distance_bp,
+    best_genomic_center_distance_bp,
+    best_anchor_oriented_center_distance_bp,
+    best_genomic_side,
+    best_anchor_oriented_side,
+    best_neighbor_orientation_state,
+    best_relative_orientation_state,
+    best_hit_pair_architecture_assessed,
+    best_hit_has_same_motif_partner,
+    best_hit_n_same_motif_partner_loci,
+    best_hit_n_codirectional_plus_pairs,
+    best_hit_n_codirectional_minus_pairs,
+    best_hit_n_convergent_pairs,
+    best_hit_n_divergent_pairs,
+    best_hit_n_ambiguous_pairs,
+    best_hit_nearest_partner_locus_id,
+    best_hit_nearest_pair_member_distance_bp,
+    best_hit_nearest_pair_arrangement,
+    best_hit_nearest_partner_score,
+    best_hit_best_pair_min_score,
+    best_hit_best_pair_sum_score
+FROM anchor_motif_band_feature
+WHERE genome_id = $genome_id
+  AND motif_set_id = $motif_set_id
+  AND chrom = $chrom
+  AND anchor_start = $anchor_start
+  AND anchor_end = $anchor_end
+  AND score_mode = $score_mode
+  AND pseudocount = $pseudocount
+ORDER BY neighbor_motif_id, interval_distance_band_order;

@@ -108,7 +108,7 @@ if [[ -e $output ]]; then
         "$duckdb" -readonly -csv -noheader context.duckdb -c "
 SELECT count(*)
 FROM motif_context_run_config
-WHERE schema_version = 4
+WHERE schema_version = 5
   AND genome_id = 'homo_sapiens_grch38_ensembl113_primary'
   AND motif_set_id = 'jaspar2026_core_nonredundant'
   AND anchor_motif_id = 'MA0861.2'

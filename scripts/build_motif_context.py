@@ -136,6 +136,13 @@ def argument_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--default-neighbor-minimum-score", type=finite_float, default=0.0,
+        help=(
+            "inclusive neighbor-locus threshold used when motif-hit input "
+            "does not expose its minimum_score field (default: 0)"
+        ),
+    )
+    parser.add_argument(
         "--anchor-selection-mode",
         choices=("threshold", "local_peak"),
         default="threshold",
@@ -512,6 +519,12 @@ def build_sql(arguments: argparse.Namespace, motif_glob: str,
         "COALESCE(NULLIF(motif_name::VARCHAR, ''), motif_id::VARCHAR)"
         if "motif_name" in source_columns else "motif_id::VARCHAR"
     )
+    qualifying_threshold = (
+        "COALESCE(TRY_CAST(minimum_score AS DOUBLE), "
+        f"{sql_number(arguments.default_neighbor_minimum_score)})"
+        if "minimum_score" in source_columns
+        else f"{sql_number(arguments.default_neighbor_minimum_score)}::DOUBLE"
+    )
     genome_id = (
         "genome_id::VARCHAR" if "genome_id" in source_columns
         else f"{sql_string(arguments.genome_id)}::VARCHAR"
@@ -626,6 +639,7 @@ FROM (
         score_mode::VARCHAR AS score_mode,
         pseudocount::DOUBLE AS pseudocount,
         pwm_relative_score::DOUBLE AS pwm_relative_score,
+        {qualifying_threshold} AS qualifying_threshold,
         ROW_NUMBER() OVER (
             PARTITION BY CAST(chrom AS VARCHAR), start, "end", motif_id, strand,
                          score_mode, pseudocount
@@ -642,6 +656,13 @@ WHERE duplicate_rank = 1;
 SELECT CASE WHEN EXISTS (
     SELECT 1 FROM configured_hit WHERE strand NOT IN ('+', '-')
 ) THEN error('motif-hit strand must be +/-, plus/minus') END;
+
+SELECT CASE WHEN EXISTS (
+    SELECT motif_id
+    FROM configured_hit
+    GROUP BY motif_id
+    HAVING COUNT(DISTINCT qualifying_threshold) <> 1
+) THEN error('each motif must expose one neighbor qualifying threshold') END;
 
 -- Collapse strand alternatives before local-maximum selection. In local-peak
 -- mode, an orientation can represent a retained anchor only when it is the
@@ -758,7 +779,7 @@ FROM widths;
 
 CREATE TEMP TABLE context_run_config AS
 SELECT
-    4::INTEGER AS schema_version,
+    5::INTEGER AS schema_version,
     {sql_string(arguments.genome_id)}::VARCHAR AS genome_id,
     {sql_string(arguments.motif_set_id)}::VARCHAR AS motif_set_id,
     {sql_string(arguments.anchor_motif)}::VARCHAR AS anchor_motif_id,
@@ -768,6 +789,10 @@ SELECT
     {sql_string(arguments.pseudocount_scheme)}::VARCHAR AS pseudocount_scheme,
     {sql_number(arguments.anchor_minimum_score)}::DOUBLE AS anchor_minimum_score,
     {sql_number(arguments.partner_minimum_score)}::DOUBLE AS partner_minimum_score,
+    {sql_number(arguments.default_neighbor_minimum_score)}::DOUBLE
+        AS default_neighbor_minimum_score,
+    'source_minimum_score_else_default_inclusive'::VARCHAR
+        AS neighbor_qualifying_threshold_rule,
     {sql_string(arguments.anchor_selection_mode)}::VARCHAR
         AS anchor_selection_mode,
     {arguments.anchor_local_peak_flank}::INTEGER AS anchor_local_peak_flank_bp,
@@ -802,6 +827,12 @@ SELECT
     'tp73_context_loci_plus_their_pair_partners'::VARCHAR
         AS cofactor_motif_locus_scope,
     'tp73_context_loci_only'::VARCHAR AS cofactor_locus_pair_feature_scope,
+    'physical_anchor_locus_neighbor_motif_interval_distance_band'::VARCHAR
+        AS anchor_motif_band_feature_grain,
+    'highest_score_then_nearest_center_then_coordinates'::VARCHAR
+        AS anchor_motif_band_winner_rule,
+    'both_locus_best_scores_at_or_above_neighbor_qualifying_threshold'::VARCHAR
+        AS cofactor_pair_score_rule,
     {sql_string(motif_glob)}::VARCHAR AS motif_hit_source,
     {gtf_source}::VARCHAR AS gtf_source
 FROM capture_parameter p;
@@ -842,6 +873,7 @@ WITH candidate_geometry AS (
         n.strand AS neighbor_strand,
         n.score AS neighbor_score,
         n.pwm_relative_score AS neighbor_pwm_relative_score,
+        n.qualifying_threshold AS neighbor_qualifying_threshold,
         (
             GREATEST(a.start, n.start) - LEAST(a."end", n."end")
         )::BIGINT AS anchor_neighbor_interval_distance_bp
@@ -858,6 +890,7 @@ WITH candidate_geometry AS (
 )
 SELECT
     a.anchor_hit_id,
+    a.anchor_locus_id,
     a.genome_id,
     a.motif_set_id,
     a.chrom,
@@ -876,6 +909,7 @@ SELECT
     a.neighbor_strand,
     a.neighbor_score,
     a.neighbor_pwm_relative_score,
+    a.neighbor_qualifying_threshold,
     a.neighbor_center_bp - a.center_bp AS genomic_center_distance_bp,
     CASE WHEN a.strand = '-' THEN a.center_bp - a.neighbor_center_bp
          ELSE a.neighbor_center_bp - a.center_bp END
@@ -988,7 +1022,6 @@ WITH collapsed AS (
         MAX(pwm_relative_score) FILTER (WHERE strand = '-')
             AS minus_pwm_relative_score,
         MAX(score) AS best_score,
-        MAX(pwm_relative_score) AS best_pwm_relative_score,
         MAX(anchor_locus_best_score) AS anchor_locus_best_score,
         MAX(best_other_anchor_locus_score) AS best_other_anchor_locus_score,
         MAX(anchor_locus_score_prominence) AS anchor_locus_score_prominence,
@@ -1005,6 +1038,19 @@ SELECT
     CASE WHEN has_plus_orientation AND has_minus_orientation THEN 'ambiguous'
          WHEN has_plus_orientation THEN 'plus'
          ELSE 'minus' END AS orientation_state,
+    CASE
+        WHEN plus_score IS NULL THEN 'minus'
+        WHEN minus_score IS NULL THEN 'plus'
+        WHEN plus_score > minus_score THEN 'plus'
+        WHEN minus_score > plus_score THEN 'minus'
+        ELSE 'ambiguous'
+    END AS best_orientation_state,
+    CASE
+        WHEN plus_score IS NULL THEN minus_pwm_relative_score
+        WHEN minus_score IS NULL THEN plus_pwm_relative_score
+        WHEN plus_score >= minus_score THEN plus_pwm_relative_score
+        ELSE minus_pwm_relative_score
+    END AS best_pwm_relative_score,
     {sql_number(arguments.anchor_minimum_score)}::DOUBLE AS anchor_minimum_score,
     {arguments.anchor_local_peak_flank}::INTEGER AS anchor_local_peak_flank_bp,
     {sql_string(arguments.background_model_id)}::VARCHAR AS background_model_id,
@@ -1014,14 +1060,13 @@ FROM collapsed;
 COPY tp73_anchor_locus TO 'tables/jaspar2026/tp73_anchor_locus'
     (FORMAT PARQUET, PARTITION_BY (genome_id, chrom), COMPRESSION ZSTD);
 
-DROP TABLE tp73_anchor_locus;
-
 -- Collapse neighbor strand alternatives at the same span before counting
 -- context loci. The orientation state remains relative to this TP73 record.
 CREATE TEMP TABLE context_neighbor_locus AS
 WITH orientation_records AS (
     SELECT
         anchor_hit_id,
+        anchor_locus_id,
         genome_id,
         motif_set_id,
         chrom,
@@ -1033,8 +1078,15 @@ WITH orientation_records AS (
         BOOL_OR(relative_orientation = 'same') AS has_same_orientation,
         BOOL_OR(relative_orientation = 'opposite') AS has_opposite_orientation,
         COUNT(*)::BIGINT AS n_orientation_records,
+        MAX(neighbor_score) FILTER (WHERE neighbor_strand = '+')
+            AS neighbor_plus_score,
+        MAX(neighbor_score) FILTER (WHERE neighbor_strand = '-')
+            AS neighbor_minus_score,
+        MAX(neighbor_pwm_relative_score) FILTER (WHERE neighbor_strand = '+')
+            AS neighbor_plus_pwm_relative_score,
+        MAX(neighbor_pwm_relative_score) FILTER (WHERE neighbor_strand = '-')
+            AS neighbor_minus_pwm_relative_score,
         MAX(neighbor_score) AS neighbor_score,
-        MAX(neighbor_pwm_relative_score) AS neighbor_pwm_relative_score,
         MAX(genomic_center_distance_bp) AS genomic_center_distance_bp,
         MAX(anchor_oriented_center_distance_bp)
             AS anchor_oriented_center_distance_bp,
@@ -1047,13 +1099,14 @@ WITH orientation_records AS (
         MAX(inter_motif_gap_bp)::BIGINT AS inter_motif_gap_bp,
         MAX(interval_relation) AS interval_relation,
         MAX(interval_distance_band) AS interval_distance_band,
+        MAX(neighbor_qualifying_threshold) AS neighbor_qualifying_threshold,
         MAX(score_mode) AS score_mode,
         MAX(pseudocount) AS pseudocount,
         MAX(background_model_id) AS background_model_id,
         MAX(pseudocount_scheme) AS pseudocount_scheme
     FROM motif_context_pair
     WHERE within_context_flank AND NOT same_anchor_motif_span
-    GROUP BY anchor_hit_id, genome_id, motif_set_id, chrom, neighbor_start,
+    GROUP BY anchor_hit_id, anchor_locus_id, genome_id, motif_set_id, chrom, neighbor_start,
              neighbor_end, neighbor_center_bp, neighbor_motif_id
 )
 SELECT
@@ -1063,7 +1116,23 @@ SELECT
     *,
     CASE WHEN has_same_orientation AND has_opposite_orientation THEN 'ambiguous'
          WHEN has_same_orientation THEN 'same'
-         ELSE 'opposite' END AS relative_orientation_state
+         ELSE 'opposite' END AS relative_orientation_state,
+    CASE
+        WHEN neighbor_plus_score IS NULL THEN 'minus'
+        WHEN neighbor_minus_score IS NULL THEN 'plus'
+        WHEN neighbor_plus_score > neighbor_minus_score THEN 'plus'
+        WHEN neighbor_minus_score > neighbor_plus_score THEN 'minus'
+        ELSE 'ambiguous'
+    END AS strongest_neighbor_orientation_state,
+    CASE
+        WHEN neighbor_plus_score IS NULL
+            THEN neighbor_minus_pwm_relative_score
+        WHEN neighbor_minus_score IS NULL
+            THEN neighbor_plus_pwm_relative_score
+        WHEN neighbor_plus_score >= neighbor_minus_score
+            THEN neighbor_plus_pwm_relative_score
+        ELSE neighbor_minus_pwm_relative_score
+    END AS neighbor_pwm_relative_score
 FROM orientation_records;
 
 CREATE TEMP TABLE tp73_motif_context_summary AS
@@ -1124,8 +1193,12 @@ WITH collapsed AS (
         COUNT(*)::BIGINT AS n_orientation_records,
         MAX(score) FILTER (WHERE strand = '+') AS plus_score,
         MAX(score) FILTER (WHERE strand = '-') AS minus_score,
+        MAX(pwm_relative_score) FILTER (WHERE strand = '+')
+            AS plus_pwm_relative_score,
+        MAX(pwm_relative_score) FILTER (WHERE strand = '-')
+            AS minus_pwm_relative_score,
         MAX(score) AS best_score,
-        MAX(pwm_relative_score) AS best_pwm_relative_score,
+        MAX(qualifying_threshold) AS qualifying_threshold,
         MAX(score_mode) AS score_mode,
         MAX(pseudocount) AS pseudocount
     FROM configured_hit
@@ -1138,6 +1211,12 @@ SELECT
     CASE WHEN has_plus_orientation AND has_minus_orientation THEN 'ambiguous'
          WHEN has_plus_orientation THEN 'plus'
          ELSE 'minus' END AS orientation_state,
+    CASE
+        WHEN plus_score IS NULL THEN minus_pwm_relative_score
+        WHEN minus_score IS NULL THEN plus_pwm_relative_score
+        WHEN plus_score >= minus_score THEN plus_pwm_relative_score
+        ELSE minus_pwm_relative_score
+    END AS best_pwm_relative_score,
     {sql_string(arguments.background_model_id)}::VARCHAR AS background_model_id,
     {sql_string(arguments.pseudocount_scheme)}::VARCHAR AS pseudocount_scheme
 FROM collapsed;
@@ -1241,6 +1320,7 @@ WITH candidate_pair AS (
         r.orientation_state AS right_orientation_state,
         r.best_score AS right_score,
         r.best_pwm_relative_score AS right_pwm_relative_score,
+        r.qualifying_threshold AS right_qualifying_threshold,
         (
             GREATEST(l.start, r.start) - LEAST(l."end", r."end")
         )::BIGINT AS pair_member_interval_distance_bp
@@ -1272,6 +1352,7 @@ SELECT
     right_orientation_state,
     right_score,
     right_pwm_relative_score,
+    qualifying_threshold,
     pair_member_interval_distance_bp,
     GREATEST(0, -pair_member_interval_distance_bp)::BIGINT
         AS pair_member_overlap_bp,
@@ -1322,7 +1403,9 @@ SELECT
     pseudocount_scheme,
     {arguments.cofactor_pair_flank}::INTEGER AS cofactor_pair_flank_bp
 FROM candidate_geometry
-WHERE pair_member_interval_distance_bp <= {arguments.cofactor_pair_flank};
+WHERE pair_member_interval_distance_bp <= {arguments.cofactor_pair_flank}
+  AND best_score >= qualifying_threshold
+  AND right_score >= right_qualifying_threshold;
 
 CREATE TEMP TABLE relevant_cofactor_locus_id AS
 SELECT cofactor_locus_id FROM context_cofactor_locus_id
@@ -1427,6 +1510,232 @@ LEFT JOIN ranked n
 
 {cofactor_locus_feature_copy_sql}
 
+-- The ML-facing context feature stays at physical TP73-locus grain. Collapse
+-- TP73 orientation alternatives before selecting a neighboring locus, then
+-- keep score, geometry, orientation, and pair state from one ranked winner.
+CREATE TEMP TABLE physical_context_neighbor_locus AS
+WITH collapsed AS (
+    SELECT
+        anchor_locus_id,
+        genome_id,
+        motif_set_id,
+        chrom,
+        neighbor_locus_id,
+        neighbor_start,
+        neighbor_end,
+        neighbor_center_bp,
+        neighbor_motif_id,
+        MAX(neighbor_motif_name) AS neighbor_motif_name,
+        MAX(neighbor_plus_score) AS neighbor_plus_score,
+        MAX(neighbor_minus_score) AS neighbor_minus_score,
+        MAX(neighbor_score) AS neighbor_score,
+        MAX(neighbor_pwm_relative_score) AS neighbor_pwm_relative_score,
+        MAX(n_orientation_records)::BIGINT AS n_orientation_records,
+        MAX(genomic_center_distance_bp) AS genomic_center_distance_bp,
+        MAX(absolute_center_distance_bp) AS absolute_center_distance_bp,
+        MAX(genomic_side) AS genomic_side,
+        MAX(anchor_neighbor_interval_distance_bp)::BIGINT
+            AS anchor_neighbor_interval_distance_bp,
+        MAX(interval_overlap_bp)::BIGINT AS interval_overlap_bp,
+        MAX(inter_motif_gap_bp)::BIGINT AS inter_motif_gap_bp,
+        MAX(interval_relation) AS interval_relation,
+        MAX(interval_distance_band) AS interval_distance_band,
+        MAX(neighbor_qualifying_threshold)::DOUBLE AS qualifying_threshold,
+        MAX(score_mode) AS score_mode,
+        MAX(pseudocount)::DOUBLE AS pseudocount,
+        MAX(background_model_id) AS background_model_id,
+        MAX(pseudocount_scheme) AS pseudocount_scheme
+    FROM context_neighbor_locus
+    GROUP BY anchor_locus_id, genome_id, motif_set_id, chrom,
+             neighbor_locus_id, neighbor_start, neighbor_end,
+             neighbor_center_bp, neighbor_motif_id
+), oriented AS (
+    SELECT
+        c.*,
+        a.start AS anchor_start,
+        a."end" AS anchor_end,
+        a.center_bp AS anchor_center_bp,
+        a.motif_id AS anchor_motif_id,
+        a.best_score AS anchor_best_score,
+        a.best_pwm_relative_score AS anchor_best_pwm_relative_score,
+        a.orientation_state AS anchor_orientation_state,
+        a.best_orientation_state AS anchor_best_orientation_state,
+        CASE
+            WHEN c.neighbor_plus_score IS NULL THEN 'minus'
+            WHEN c.neighbor_minus_score IS NULL THEN 'plus'
+            WHEN c.neighbor_plus_score > c.neighbor_minus_score THEN 'plus'
+            WHEN c.neighbor_minus_score > c.neighbor_plus_score THEN 'minus'
+            ELSE 'ambiguous'
+        END AS strongest_neighbor_orientation_state
+    FROM collapsed c
+    JOIN tp73_anchor_locus a USING (
+        anchor_locus_id, genome_id, motif_set_id, chrom
+    )
+)
+SELECT
+    *,
+    CASE
+        WHEN anchor_best_orientation_state = 'plus'
+            THEN genomic_center_distance_bp
+        WHEN anchor_best_orientation_state = 'minus'
+            THEN -genomic_center_distance_bp
+        ELSE NULL::DOUBLE
+    END AS anchor_oriented_center_distance_bp,
+    CASE
+        WHEN anchor_best_orientation_state = 'ambiguous' THEN NULL::VARCHAR
+        WHEN anchor_best_orientation_state = 'plus'
+         AND genomic_center_distance_bp < 0
+            THEN 'upstream'
+        WHEN anchor_best_orientation_state = 'plus'
+         AND genomic_center_distance_bp > 0
+            THEN 'downstream'
+        WHEN anchor_best_orientation_state = 'minus'
+         AND genomic_center_distance_bp > 0
+            THEN 'upstream'
+        WHEN anchor_best_orientation_state = 'minus'
+         AND genomic_center_distance_bp < 0
+            THEN 'downstream'
+        ELSE 'coincident_center'
+    END AS anchor_oriented_side,
+    CASE
+        WHEN anchor_best_orientation_state = 'ambiguous'
+          OR strongest_neighbor_orientation_state = 'ambiguous'
+            THEN 'ambiguous'
+        WHEN anchor_best_orientation_state = strongest_neighbor_orientation_state
+            THEN 'same'
+        ELSE 'opposite'
+    END AS strongest_relative_orientation_state
+FROM oriented;
+
+CREATE TEMP TABLE anchor_motif_band_feature AS
+WITH qualifying AS (
+    SELECT *
+    FROM physical_context_neighbor_locus
+    WHERE neighbor_score >= qualifying_threshold
+), ranked AS (
+    SELECT
+        *,
+        ROW_NUMBER() OVER (
+            PARTITION BY anchor_locus_id, genome_id, motif_set_id,
+                         neighbor_motif_id, interval_distance_band
+            ORDER BY neighbor_score DESC,
+                     absolute_center_distance_bp,
+                     neighbor_start,
+                     neighbor_end,
+                     neighbor_locus_id
+        ) AS best_rank
+    FROM qualifying
+), group_stat AS (
+    SELECT
+        anchor_locus_id,
+        genome_id,
+        motif_set_id,
+        neighbor_motif_id,
+        interval_distance_band,
+        COUNT(*)::BIGINT AS n_neighbor_loci_above_threshold,
+        COUNT(*) FILTER (
+            WHERE neighbor_score = group_best_score
+        )::BIGINT AS n_best_score_ties
+    FROM (
+        SELECT
+            *,
+            MAX(neighbor_score) OVER (
+                PARTITION BY anchor_locus_id, genome_id, motif_set_id,
+                             neighbor_motif_id, interval_distance_band
+            ) AS group_best_score
+        FROM qualifying
+    ) counted
+    GROUP BY anchor_locus_id, genome_id, motif_set_id,
+             neighbor_motif_id, interval_distance_band
+)
+SELECT
+    5::INTEGER AS schema_version,
+    r.anchor_locus_id,
+    r.genome_id,
+    r.motif_set_id,
+    r.chrom,
+    r.anchor_start,
+    r.anchor_end,
+    r.anchor_center_bp,
+    r.anchor_motif_id,
+    r.anchor_best_score,
+    r.anchor_best_pwm_relative_score,
+    r.anchor_orientation_state,
+    r.anchor_best_orientation_state,
+    r.neighbor_motif_id,
+    r.neighbor_motif_name,
+    r.interval_distance_band,
+    CASE r.interval_distance_band
+        WHEN 'overlap' THEN 0
+        WHEN 'adjacent_0_5' THEN 1
+        WHEN 'gap_6_20' THEN 2
+        WHEN 'gap_21_50' THEN 3
+        WHEN 'gap_51_100' THEN 4
+        WHEN 'gap_101_150' THEN 5
+        ELSE 6
+    END::INTEGER AS interval_distance_band_order,
+    r.qualifying_threshold,
+    TRUE AS threshold_inclusive,
+    s.n_neighbor_loci_above_threshold,
+    s.n_best_score_ties,
+    r.neighbor_locus_id AS best_neighbor_locus_id,
+    r.neighbor_start AS best_neighbor_start,
+    r.neighbor_end AS best_neighbor_end,
+    r.neighbor_score AS best_neighbor_score,
+    r.neighbor_pwm_relative_score AS best_neighbor_pwm_relative_score,
+    r.n_orientation_records AS best_neighbor_n_orientation_records,
+    r.neighbor_plus_score AS best_neighbor_plus_score,
+    r.neighbor_minus_score AS best_neighbor_minus_score,
+    r.anchor_neighbor_interval_distance_bp AS best_interval_distance_bp,
+    r.interval_overlap_bp AS best_interval_overlap_bp,
+    r.inter_motif_gap_bp AS best_inter_motif_gap_bp,
+    r.interval_relation AS best_interval_relation,
+    r.genomic_center_distance_bp AS best_genomic_center_distance_bp,
+    r.anchor_oriented_center_distance_bp
+        AS best_anchor_oriented_center_distance_bp,
+    r.genomic_side AS best_genomic_side,
+    r.anchor_oriented_side AS best_anchor_oriented_side,
+    r.strongest_neighbor_orientation_state
+        AS best_neighbor_orientation_state,
+    r.strongest_relative_orientation_state
+        AS best_relative_orientation_state,
+    p.cofactor_locus_id IS NOT NULL AS best_hit_pair_architecture_assessed,
+    p.has_same_motif_partner AS best_hit_has_same_motif_partner,
+    p.n_same_motif_partner_loci AS best_hit_n_same_motif_partner_loci,
+    p.n_codirectional_plus_pairs AS best_hit_n_codirectional_plus_pairs,
+    p.n_codirectional_minus_pairs AS best_hit_n_codirectional_minus_pairs,
+    p.n_convergent_pairs AS best_hit_n_convergent_pairs,
+    p.n_divergent_pairs AS best_hit_n_divergent_pairs,
+    p.n_ambiguous_pairs AS best_hit_n_ambiguous_pairs,
+    p.nearest_partner_locus_id AS best_hit_nearest_partner_locus_id,
+    p.nearest_pair_member_distance_bp
+        AS best_hit_nearest_pair_member_distance_bp,
+    p.nearest_pair_arrangement AS best_hit_nearest_pair_arrangement,
+    p.nearest_partner_score AS best_hit_nearest_partner_score,
+    p.best_pair_min_score AS best_hit_best_pair_min_score,
+    p.best_pair_sum_score AS best_hit_best_pair_sum_score,
+    r.score_mode,
+    r.pseudocount,
+    r.background_model_id,
+    r.pseudocount_scheme,
+    {arguments.context_flank}::INTEGER AS context_flank_bp
+FROM ranked r
+JOIN group_stat s USING (
+    anchor_locus_id, genome_id, motif_set_id,
+    neighbor_motif_id, interval_distance_band
+)
+LEFT JOIN cofactor_locus_pair_feature p
+  ON r.neighbor_locus_id = p.cofactor_locus_id
+WHERE r.best_rank = 1;
+
+COPY anchor_motif_band_feature
+TO 'tables/jaspar2026/anchor_motif_band_feature'
+    (FORMAT PARQUET,
+     PARTITION_BY (genome_id, chrom, neighbor_motif_id), COMPRESSION ZSTD);
+
+DROP TABLE anchor_motif_band_feature;
+DROP TABLE physical_context_neighbor_locus;
+DROP TABLE tp73_anchor_locus;
 DROP TABLE cofactor_locus_pair_feature;
 DROP TABLE cofactor_motif_locus;
 DROP TABLE context_cofactor_locus_id;
@@ -1864,6 +2173,16 @@ SELECT * REPLACE (
 )
 FROM read_parquet(
     'tables/jaspar2026/tp73_motif_context_summary/**/*.parquet',
+    hive_partitioning=1
+);
+CREATE VIEW anchor_motif_band_feature AS
+SELECT * REPLACE (
+    CAST(genome_id AS VARCHAR) AS genome_id,
+    CAST(chrom AS VARCHAR) AS chrom,
+    CAST(neighbor_motif_id AS VARCHAR) AS neighbor_motif_id
+)
+FROM read_parquet(
+    'tables/jaspar2026/anchor_motif_band_feature/**/*.parquet',
     hive_partitioning=1
 );
 CREATE VIEW cofactor_motif_locus AS

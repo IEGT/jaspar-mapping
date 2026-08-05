@@ -13,9 +13,12 @@ trap 'rm -rf "$temporary"' EXIT HUP INT TERM
 
 cat > "$temporary/hits.sql" <<'SQL'
 COPY (
-    SELECT * FROM (VALUES
+    SELECT t.*,
+           CASE WHEN motif_id = 'MTHRESH.1' THEN 3.0 ELSE 0.0 END
+               AS minimum_score
+    FROM (VALUES
         ('1', 140::BIGINT, 156::BIGINT, 'MA0861.2', 'TP73', '+', 10.0, 'log2_relative_risk', 1.0, 0.95),
-        ('1', 140::BIGINT, 156::BIGINT, 'MA0861.2', 'TP73', '-', 9.5,  'log2_relative_risk', 1.0, 0.94),
+        ('1', 140::BIGINT, 156::BIGINT, 'MA0861.2', 'TP73', '-', 9.5,  'log2_relative_risk', 1.0, 0.99),
         ('1', 145::BIGINT, 161::BIGINT, 'MA0861.2', 'TP73', '+', 6.5,  'log2_relative_risk', 1.0, 0.86),
         ('1', 158::BIGINT, 174::BIGINT, 'MA0861.2', 'TP73', '+', 8.0,  'log2_relative_risk', 1.0, 0.90),
         ('1', 200::BIGINT, 216::BIGINT, 'MA0861.2', 'TP73', '+', 7.0,  'log2_relative_risk', 1.0, 0.88),
@@ -37,6 +40,15 @@ COPY (
         ('1', 318::BIGINT, 324::BIGINT, 'MPAIR.1', 'PAIR', '-', 5.0, 'log2_relative_risk', 1.0, 0.85),
         ('1', 1166::BIGINT, 1176::BIGINT, 'MBOUND.1', 'BOUND', '+', 3.0, 'log2_relative_risk', 1.0, 0.75),
         ('1', 1177::BIGINT, 1187::BIGINT, 'MBOUND.1', 'BOUND', '-', 4.0, 'log2_relative_risk', 1.0, 0.80),
+        ('1', 422::BIGINT, 428::BIGINT, 'MBEST.1', 'BEST', '+', 2.0, 'log2_relative_risk', 1.0, 0.60),
+        ('1', 430::BIGINT, 436::BIGINT, 'MBEST.1', 'BEST', '-', 5.0, 'log2_relative_risk', 1.0, 0.85),
+        ('1', 436::BIGINT, 442::BIGINT, 'MBEST.1', 'BEST', '+', 1.0, 'log2_relative_risk', 1.0, 0.55),
+        ('1', 440::BIGINT, 446::BIGINT, 'MTIE.1', 'TIE', '+', 3.0, 'log2_relative_risk', 1.0, 0.70),
+        ('1', 440::BIGINT, 446::BIGINT, 'MTIE.1', 'TIE', '-', 3.0, 'log2_relative_risk', 1.0, 0.70),
+        ('1', 464::BIGINT, 470::BIGINT, 'MTIE.1', 'TIE', '+', 3.0, 'log2_relative_risk', 1.0, 0.70),
+        ('1', 448::BIGINT, 454::BIGINT, 'MTHRESH.1', 'THRESH', '+', 2.0, 'log2_relative_risk', 1.0, 0.60),
+        ('1', 456::BIGINT, 462::BIGINT, 'MTHRESH.1', 'THRESH', '+', 4.0, 'log2_relative_risk', 1.0, 0.80),
+        ('1', 456::BIGINT, 462::BIGINT, 'MTHRESH.1', 'THRESH', '-', 3.5, 'log2_relative_risk', 1.0, 0.99),
         ('1', 2000::BIGINT, 2006::BIGINT, 'MFAR.1', 'FAR', '+', 3.0, 'log2_relative_risk', 1.0, 0.75),
         ('1', 2006::BIGINT, 2012::BIGINT, 'MFAR.1', 'FAR', '-', 4.0, 'log2_relative_risk', 1.0, 0.80)
     ) AS t(chrom, start, "end", motif_id, motif_name, strand, score,
@@ -130,6 +142,8 @@ EOF
             THEN error('summary tier retained raw pair attribution') END;
         SELECT CASE WHEN (SELECT COUNT(*) FROM tp73_motif_context_summary) = 0
             THEN error('summary tier dropped compact motif features') END;
+        SELECT CASE WHEN (SELECT COUNT(*) FROM anchor_motif_band_feature) = 0
+            THEN error('summary tier dropped strongest-hit band features') END;
         SELECT CASE WHEN (SELECT COUNT(*) FROM tp73_cofactor_pair_summary) = 0
             THEN error('summary tier dropped compact cofactor-pair features') END;" \
         >/dev/null
@@ -339,6 +353,119 @@ SELECT CASE WHEN NOT EXISTS (
       AND n_neighbor_loci = 1 AND n_orientation_records = 2
 ) THEN error('compact motif-context summary did not collapse strand alternatives') END;
 
+-- The strongest score and every descriptor below must come from one physical
+-- neighboring locus. A nearer but weaker locus must not donate its distance.
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM anchor_motif_band_feature
+    WHERE anchor_start = 400 AND anchor_end = 416
+      AND neighbor_motif_id = 'MBEST.1'
+      AND interval_distance_band = 'gap_6_20'
+      AND interval_distance_band_order = 2
+      AND qualifying_threshold = 0 AND threshold_inclusive
+      AND n_neighbor_loci_above_threshold = 3
+      AND n_best_score_ties = 1
+      AND best_neighbor_start = 430 AND best_neighbor_end = 436
+      AND best_neighbor_score = 5.0
+      AND best_neighbor_pwm_relative_score = 0.85
+      AND best_interval_distance_bp = 14
+      AND best_interval_overlap_bp = 0
+      AND best_inter_motif_gap_bp = 14
+      AND best_interval_relation = 'disjoint'
+      AND best_genomic_center_distance_bp = 25
+      AND best_anchor_oriented_center_distance_bp = 25
+      AND best_genomic_side = 'right'
+      AND best_anchor_oriented_side = 'downstream'
+      AND anchor_orientation_state = 'plus'
+      AND anchor_best_orientation_state = 'plus'
+      AND best_neighbor_orientation_state = 'minus'
+      AND best_relative_orientation_state = 'opposite'
+      AND best_hit_pair_architecture_assessed
+      AND best_hit_has_same_motif_partner
+      AND best_hit_n_same_motif_partner_loci = 2
+      AND best_hit_n_convergent_pairs = 1
+      AND best_hit_n_divergent_pairs = 1
+      AND best_hit_nearest_pair_member_distance_bp = 0
+      AND best_hit_nearest_pair_arrangement = 'divergent'
+      AND best_hit_nearest_partner_score = 1.0
+      AND best_hit_best_pair_min_score = 2.0
+      AND best_hit_best_pair_sum_score = 7.0
+) THEN error('strongest per-band locus fields were uncoupled or incomplete') END;
+
+-- Same-span strand alternatives count once. A score tie between two physical
+-- loci is reported and resolved deterministically by distance for the winner.
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM anchor_motif_band_feature
+    WHERE anchor_start = 400 AND anchor_end = 416
+      AND neighbor_motif_id = 'MTIE.1'
+      AND interval_distance_band = 'gap_21_50'
+      AND n_neighbor_loci_above_threshold = 2
+      AND n_best_score_ties = 2
+      AND best_neighbor_start = 440 AND best_neighbor_end = 446
+      AND best_neighbor_score = 3.0
+      AND best_neighbor_n_orientation_records = 2
+      AND best_neighbor_orientation_state = 'ambiguous'
+      AND best_relative_orientation_state = 'ambiguous'
+) THEN error('physical-locus counting or strongest-score tie handling failed') END;
+
+-- The input's per-motif minimum_score is inclusive. The score-2 locus is not
+-- counted and cannot make the qualifying score-4 locus appear paired.
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM anchor_motif_band_feature
+    WHERE anchor_start = 400 AND anchor_end = 416
+      AND neighbor_motif_id = 'MTHRESH.1'
+      AND interval_distance_band = 'gap_21_50'
+      AND qualifying_threshold = 3.0
+      AND n_neighbor_loci_above_threshold = 1
+      AND best_neighbor_start = 456 AND best_neighbor_end = 462
+      AND best_neighbor_score = 4.0
+      AND best_neighbor_pwm_relative_score = 0.80
+      AND best_neighbor_n_orientation_records = 2
+      AND best_neighbor_plus_score = 4.0
+      AND best_neighbor_minus_score = 3.5
+      AND best_neighbor_orientation_state = 'plus'
+      AND best_hit_pair_architecture_assessed
+      AND NOT best_hit_has_same_motif_partner
+      AND best_hit_n_same_motif_partner_loci = 0
+) THEN error('per-motif qualifying threshold was not applied consistently') END;
+
+-- TP73 neighbors remain useful context observations, but their tandem state is
+-- represented by tp73_pair_feature rather than the generic cofactor pair layer.
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM anchor_motif_band_feature
+    WHERE anchor_start = 140 AND anchor_end = 156
+      AND neighbor_motif_id = 'MA0861.2'
+      AND interval_distance_band = 'overlap'
+      AND NOT best_hit_pair_architecture_assessed
+      AND best_hit_has_same_motif_partner IS NULL
+      AND best_hit_n_same_motif_partner_loci IS NULL
+) THEN error('unassessed anchor-motif pair architecture was encoded as absent') END;
+
+-- Physical TP73 anchors are not duplicated by orientation alternatives. Keep
+-- both their raw ambiguity and the orientation selected by the stronger score.
+SELECT CASE WHEN (SELECT COUNT(*) FROM anchor_motif_band_feature
+                  WHERE anchor_start = 140 AND anchor_end = 156
+                    AND neighbor_motif_id = 'MA0079.5'
+                    AND interval_distance_band = 'adjacent_0_5') <> 1
+    OR NOT EXISTS (
+        SELECT 1 FROM anchor_motif_band_feature
+        WHERE anchor_start = 140 AND anchor_end = 156
+          AND neighbor_motif_id = 'MA0079.5'
+          AND interval_distance_band = 'adjacent_0_5'
+          AND anchor_orientation_state = 'ambiguous'
+          AND anchor_best_orientation_state = 'plus'
+          AND anchor_best_score = 10.0
+          AND anchor_best_pwm_relative_score = 0.95
+    )
+    THEN error('physical anchor grain or anchor orientation state is incorrect') END;
+
+SELECT CASE WHEN EXISTS (
+    SELECT anchor_locus_id, genome_id, motif_set_id, neighbor_motif_id,
+           interval_distance_band
+    FROM anchor_motif_band_feature
+    GROUP BY ALL
+    HAVING COUNT(*) <> 1
+) THEN error('anchor/motif/distance-band feature key is not unique') END;
+
 SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM legacy_tp73_context_100
     WHERE anchor_start = 400 AND neighbor_start = 499
@@ -413,7 +540,7 @@ SELECT CASE WHEN NOT EXISTS (
 
 SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM motif_context_run_config
-    WHERE schema_version = 4
+    WHERE schema_version = 5
       AND genome_id = 'synthetic_grch38_v1'
       AND motif_set_id = 'synthetic_jaspar2026'
       AND anchor_minimum_score = 0 AND partner_minimum_score = 0
@@ -438,6 +565,15 @@ SELECT CASE WHEN NOT EXISTS (
       AND cofactor_pair_scope = 'at_least_one_member_is_a_tp73_context_locus'
       AND cofactor_motif_locus_scope = 'tp73_context_loci_plus_their_pair_partners'
       AND cofactor_locus_pair_feature_scope = 'tp73_context_loci_only'
+      AND default_neighbor_minimum_score = 0
+      AND neighbor_qualifying_threshold_rule =
+          'source_minimum_score_else_default_inclusive'
+      AND anchor_motif_band_feature_grain =
+          'physical_anchor_locus_neighbor_motif_interval_distance_band'
+      AND anchor_motif_band_winner_rule =
+          'highest_score_then_nearest_center_then_coordinates'
+      AND cofactor_pair_score_rule =
+          'both_locus_best_scores_at_or_above_neighbor_qualifying_threshold'
 ) THEN error('context run provenance is incomplete') END;
 
 SELECT CASE WHEN
@@ -454,6 +590,7 @@ SELECT CASE WHEN
        (SELECT TYPEOF(chrom) FROM motif_context_pair LIMIT 1) <> 'VARCHAR'
     OR (SELECT TYPEOF(chrom) FROM tp73_anchor_locus LIMIT 1) <> 'VARCHAR'
     OR (SELECT TYPEOF(chrom) FROM tp73_motif_context_summary LIMIT 1) <> 'VARCHAR'
+    OR (SELECT TYPEOF(chrom) FROM anchor_motif_band_feature LIMIT 1) <> 'VARCHAR'
     OR (SELECT TYPEOF(chrom) FROM tp73_pair_feature LIMIT 1) <> 'VARCHAR'
     OR (SELECT TYPEOF(chrom) FROM tp73_context_anchor LIMIT 1) <> 'VARCHAR'
     THEN error('partitioned context views did not preserve chromosome text') END;
@@ -592,6 +729,18 @@ EXECUTE q15(
     genome_id := 'synthetic_grch38_v1', motif_set_id := 'synthetic_jaspar2026',
     chrom := '1', start := 400, strand := '+',
     neighbor_motif_id := 'MPAIR.1',
+    score_mode := 'log2_relative_risk', pseudocount := 1.0
+);
+PREPARE q19 AS
+SQL
+    awk '
+        /^-- Q19\./ { capture = 1 }
+        capture { print }
+    ' "$repository_root/sql/queries.sql"
+    cat <<'SQL'
+EXECUTE q19(
+    genome_id := 'synthetic_grch38_v1', motif_set_id := 'synthetic_jaspar2026',
+    chrom := '1', anchor_start := 400, anchor_end := 416,
     score_mode := 'log2_relative_risk', pseudocount := 1.0
 );
 SQL

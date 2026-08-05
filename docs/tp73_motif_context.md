@@ -20,6 +20,9 @@ additive and pair-by-cofactor predictors.
 The first production-shaped schema-v4 package and its resource/cardinality
 measurements are recorded in
 [`tp73_patz1_context_v4_chr1_20260720.md`](tp73_patz1_context_v4_chr1_20260720.md).
+Schema version 5 adds the physical-anchor, per-motif, per-distance-band feature
+surface described below; the schema-v4 report remains the benchmark for the
+unchanged interval geometry and pair construction.
 
 The evaluator offers `--fold-mode interleaved` for cyclic genomic blocks and
 `--fold-mode contiguous` for equal-width contiguous spans within each
@@ -151,6 +154,67 @@ every raw neighboring-motif record. This chromosome-wide view is the direct
 input for pair-stratified CUT&RUN predictors; promoter aggregation is an
 additional downstream view, not a prerequisite.
 
+## Per-band counts and strongest loci
+
+`anchor_motif_band_feature` is the compact surface for the historical context
+question and its distance-stratified extension. Its logical grain is one
+physical TP73 anchor locus, neighboring motif accession, and mutually exclusive
+interval-distance band. It contains a row only when at least one neighboring
+physical locus reaches the motif's qualifying score. Absence of a row therefore
+means a zero count when this sparse table is expanded against the anchor and
+motif dimensions; the approximately four-million-anchor by 2,600-motif matrix
+should be pivoted at an analysis boundary, not stored as a wide table.
+
+The inclusive qualifying score is read from each scan row's `minimum_score`.
+The finalized production scan embeds the motif-specific informative-or-`-1`,
+density-capped score floor in that field. For older or synthetic Parquet that
+does not expose `minimum_score`, `--default-neighbor-minimum-score` supplies the
+fallback and defaults to the historical value `0`. Each motif must have exactly
+one qualifying score within a context build; mixed-threshold input fails rather
+than being silently combined.
+
+This is the scan's retained-score floor, even when that floor was selected from
+the informative/density calibration. It does not replace the separately named
+`motif_score_threshold` registry. Use `tp73_motif_threshold_count` when a later
+analysis threshold differs from the source floor or when explicit zero rows are
+required; use `anchor_motif_band_feature` for distance-stratified counts and
+coupled strongest-locus geometry from the finalized production atlas.
+
+Opposite-strand reports at the same neighboring alignment span count as one
+physical locus. The strongest locus within each band is ranked by score, then
+absolute center distance, genomic start, genomic end, and stable locus ID.
+`n_best_score_ties` counts physical loci sharing the maximum score before that
+deterministic tie-break. Score, PWM-relative score, interval and center
+distances, side, and orientation in the `best_*` columns all come from that one
+ranked locus. This coupling is intentional: a closer weak hit cannot donate its
+distance to a stronger, farther hit.
+
+The physical TP73 anchor retains both `anchor_orientation_state`, which is
+ambiguous when both strand reports exist, and `anchor_best_orientation_state`,
+which uses the higher-scoring report and remains ambiguous on an exact tie.
+Anchor-oriented best-hit distance and relative orientation use the latter and
+are `NULL` or `ambiguous` when the best anchor orientation is unresolved.
+
+The best neighboring locus also carries its same-motif pair counts, nearest
+pair arrangement, and pair scores. Both members must reach the same inclusive
+motif threshold before the pair contributes. These fields describe the pair
+architecture of the selected best locus; the canonical pair tables remain the
+source when every pair must be inspected. Generic cofactor pairing excludes the
+anchor motif itself. A TP73-neighbor row therefore has
+`best_hit_pair_architecture_assessed = false` and null generic pair fields;
+TP73 tandem architecture comes from `tp73_pair_feature` instead. For other
+motifs, an assessed false `best_hit_has_same_motif_partner` means that no
+qualifying partner was found.
+
+For a direct comparison with the published 100 bp context, combine `overlap`,
+`adjacent_0_5`, `gap_6_20`, `gap_21_50`, and `gap_51_100`. Sum their qualifying
+locus counts, then rank the five stored best loci again by the same winner rule
+to retain coupled geometry for the overall strongest hit. Do not take a maximum
+score and an independently aggregated minimum distance from
+`tp73_motif_context_summary`; that older summary deliberately stratifies by
+anchor-oriented side and relative orientation and its aggregate extrema need
+not describe the same locus.
+
 The 150 bp value is not frozen. It is also the default range used by SpaMo, a
 method that independently formalized strand-separated motif-spacing tests, but
 that precedent is not evidence that 150 bp is optimal for TP73
@@ -240,7 +304,7 @@ selection or an existing output:
 
 ```sh
 scripts/submit_motif_context_slurm.sh \
-  --run-root /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_context_v4 \
+  --run-root /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_context_v5 \
   --scan-package /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_sparse_v3/package \
   --gtf /data/sm718/resources/ensembl/113/Homo_sapiens.GRCh38.113.gtf.gz \
   --motif MA1961.2 --chrom 1 \
@@ -271,9 +335,9 @@ scripts/build_motif_context.py \
 
 `--output-tier selected` retains inspectable raw TP73-neighbor, cofactor-pair,
 and pair-attribution rows. `--output-tier summary` writes schema-stable empty
-raw surfaces while retaining `tp73_motif_context_summary` and
-`tp73_cofactor_pair_summary`; use that mode for motif-at-a-time all-JASPAR
-production.
+raw surfaces while retaining `anchor_motif_band_feature`,
+`tp73_motif_context_summary`, and `tp73_cofactor_pair_summary`; use that mode
+for motif-at-a-time all-JASPAR production.
 
 The package contains:
 
@@ -282,6 +346,9 @@ The package contains:
   TP73 alignment span with explicit orientation state;
 - `tables/jaspar2026/tp73_motif_context_summary/`: nonempty motif-, band-,
   side-, and orientation-stratified groups partitioned by neighboring motif;
+- `tables/jaspar2026/anchor_motif_band_feature/`: sparse physical-anchor x
+  motif x distance-band counts with one fully coupled strongest locus and its
+  same-motif pair architecture;
 - `tables/jaspar2026/tp73_motif_threshold_count/`: optional zero-complete
   physical-anchor x motif counts materialized from one explicitly named
   convenient-threshold set;
@@ -302,11 +369,12 @@ The package contains:
   semantics; and
 - `context.duckdb`: small read-only views over those Parquet files.
 
+Physical-anchor per-band counts, coupled strongest-locus fields, and
+threshold-qualified cofactor pair features are context schema version 5.
 Signed interval capture, TP73 locus grain, distance bands, conservative
 regional-peak anchor selection, symmetric tandem score eligibility, and generic
-cofactor pair architecture are context schema version 4. Explicit
-genome/motif-set identity and independent anchor/partner score floors appeared
-in version 3;
+cofactor pair architecture appeared in version 4. Explicit genome/motif-set
+identity and independent anchor/partner score floors appeared in version 3;
 the TP73 pair-class contract appeared in version 2. Older context packages can
 be rebuilt from their motif-hit Parquet files; no genome rescan is required.
 
@@ -340,6 +408,14 @@ duckdb context.duckdb -c \
   "SELECT pair_class, count(*) AS n_anchors, \
           sum(n_tandem_tp73_partner_loci) AS n_partner_loci \
    FROM tp73_pair_feature GROUP BY pair_class ORDER BY pair_class"
+
+duckdb context.duckdb -c \
+  "SELECT neighbor_motif_id, interval_distance_band, \
+          n_neighbor_loci_above_threshold, best_neighbor_score, \
+          best_interval_distance_bp, best_relative_orientation_state \
+   FROM anchor_motif_band_feature \
+   WHERE chrom = '1' AND anchor_start = 400 AND anchor_end = 416 \
+   ORDER BY neighbor_motif_id, interval_distance_band_order"
 ```
 
 ## Assessing the 150 bp boundary

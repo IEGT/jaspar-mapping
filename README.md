@@ -315,8 +315,9 @@ PATZ1, and POU2F2 panel is documented in
 [`docs/chr1_2026_motif_panel.md`](docs/chr1_2026_motif_panel.md).
 The de novo TP73 motif-pair layer, provisional 150 bp context radius, 20 bp
 non-overlapping tandem-gap definition, orientation-collapsed singleton/tandem
-feature classes, pair-stratified promoter predictors, and transcript/intron
-features are documented in
+feature classes, per-distance-band occurrence counts with coupled strongest-hit
+geometry, pair-stratified promoter predictors, and transcript/intron features
+are documented in
 [`docs/tp73_motif_context.md`](docs/tp73_motif_context.md).
 The separate, versioned registry of evidence-derived convenient score
 thresholds, including explicit pending/no-gain states and the distinction from

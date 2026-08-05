@@ -445,6 +445,22 @@ FROM read_parquet(
     hive_partitioning = 1
 );
 
+-- Sparse ML-facing features at physical TP73-locus x neighboring motif x
+-- mutually exclusive interval-distance-band grain. Counts use the source
+-- motif's inclusive minimum_score (or the builder's recorded fallback). Every
+-- best_* value is copied from one deterministically ranked physical neighbor;
+-- geometry and orientation therefore cannot drift away from the best score.
+CREATE OR REPLACE VIEW anchor_motif_band_feature AS
+SELECT * REPLACE (
+    CAST(genome_id AS VARCHAR) AS genome_id,
+    CAST(chrom AS VARCHAR) AS chrom,
+    CAST(neighbor_motif_id AS VARCHAR) AS neighbor_motif_id
+)
+FROM read_parquet(
+    'tables/jaspar2026/anchor_motif_band_feature/**/*.parquet',
+    hive_partitioning = 1
+);
+
 -- Zero-complete threshold-derived occurrence counts at physical TP73-locus x
 -- neighboring-motif grain. Opposite-strand reports with the same neighboring
 -- alignment span are one locus. The threshold identity and calibrated interval
