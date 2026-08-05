@@ -84,10 +84,30 @@ task_row=$(awk -F '\t' -v task="$global_task_index" \
     echo "E: No task row for global task index $global_task_index." >&2
     exit 1
 }
-IFS=$'\t' read -r task_index chromosome cofactor_motif_ids output_tier <<< "$task_row"
+IFS=$'\t' read -r task_index chromosome cofactor_motif_ids output_tier \
+    builder_source_commit <<< "$task_row"
 [[ $task_index == "$global_task_index" ]]
 [[ $chromosome =~ ^[A-Za-z0-9._-]+$ ]]
 [[ $output_tier == selected || $output_tier == summary || $output_tier == band ]]
+[[ $builder_source_commit =~ ^[A-Za-z0-9._-]+$ ]] || {
+    echo "E: Task $task_index has an unsafe or absent builder source commit." >&2
+    exit 2
+}
+if [[ $builder_source_commit != unknown ]]; then
+    current_source_commit=$(git -C "$source" rev-parse --verify HEAD 2>/dev/null) || {
+        echo "E: Cannot resolve the worker source commit below $source." >&2
+        exit 1
+    }
+    [[ $current_source_commit == "$builder_source_commit" ]] || {
+        echo "E: Worker source is $current_source_commit; task plan pins $builder_source_commit." >&2
+        exit 1
+    }
+    if ! git -C "$source" diff --quiet -- \
+       || ! git -C "$source" diff --cached --quiet --; then
+        echo "E: Worker source has tracked changes: $source" >&2
+        exit 1
+    fi
+fi
 IFS=',' read -ra cofactor_motifs <<< "$cofactor_motif_ids"
 [[ ${#cofactor_motifs[@]} -gt 0 ]]
 for motif in "${cofactor_motifs[@]}"; do
@@ -131,6 +151,7 @@ validate_output() {
 SELECT count(*)
 FROM motif_context_run_config
 WHERE schema_version = 5
+  AND builder_source_commit = '$builder_source_commit'
   AND genome_id = 'homo_sapiens_grch38_ensembl113_primary'
   AND motif_set_id = 'jaspar2026_core_nonredundant'
   AND anchor_motif_id = 'MA0861.2'
@@ -202,6 +223,7 @@ build_arguments=(
     --motif-hit-source-label "$input/**/*.parquet"
     --output "$attempt"
     --anchor-motif MA0861.2
+    --source-commit "$builder_source_commit"
     --motif-set-id jaspar2026_core_nonredundant
     --genome-id homo_sapiens_grch38_ensembl113_primary
     --anchor-minimum-score -1 --tandem-minimum-score 0

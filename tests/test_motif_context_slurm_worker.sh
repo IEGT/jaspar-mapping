@@ -41,9 +41,9 @@ esac
 EOF
 chmod +x "$temporary/duckdb"
 
-printf 'task_index\tchrom\tcofactor_motif_ids\toutput_tier\n' \
+printf 'task_index\tchrom\tcofactor_motif_ids\toutput_tier\tbuilder_source_commit\n' \
     > "$run_root/plan/context_tasks.tsv"
-printf '107\tX\tMA0001.1,MA0002.1\tband\n' \
+printf '107\tX\tMA0001.1,MA0002.1\tband\tunknown\n' \
     >> "$run_root/plan/context_tasks.tsv"
 touch "$run_root/packages/chrom-X/task-107/context.duckdb"
 printf '{"motifs":["MA0861.2","MA0001.1","MA0002.1"],"chromosomes":["X"]}\n' \

@@ -63,6 +63,10 @@ grep -Fq -- 'JASPAR_CONTEXT_TASK_OFFSET=4' <<< "$batched"
 grep -Fq -- 'afterany:DRY_RUN_CHUNK_0' <<< "$batched"
 grep -Fq $'0\t1\tMA0001.1,MA0002.1\tband' \
     "$temporary/batched/plan/context_tasks.tsv"
+grep -Fq $'1\tX\tMA0001.1,MA0002.1\tband' \
+    "$temporary/batched/plan/context_tasks.tsv"
+grep -Fq $'2\t1\tMA0003.1,MA0004.1\tband' \
+    "$temporary/batched/plan/context_tasks.tsv"
 grep -Fq $'5\tX\tMA0005.1\tband' \
     "$temporary/batched/plan/context_tasks.tsv"
 

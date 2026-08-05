@@ -594,6 +594,7 @@ SELECT CASE WHEN NOT EXISTS (
 SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM motif_context_run_config
     WHERE schema_version = 5
+      AND builder_source_commit = 'unknown'
       AND genome_id = 'synthetic_grch38_v1'
       AND motif_set_id = 'synthetic_jaspar2026'
       AND anchor_minimum_score = 0 AND partner_minimum_score = 0

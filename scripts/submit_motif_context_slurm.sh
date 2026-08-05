@@ -181,6 +181,17 @@ mkdir -p "$run_root/plan" "$run_root/logs" "$run_root/inputs" \
 run_root=$(cd "$run_root" && pwd)
 scan_package=$(cd "$scan_package" && pwd)
 source=$(cd "$source" && pwd)
+source_commit=$(git -C "$source" rev-parse --verify HEAD 2>/dev/null) || {
+    echo "E: Source tree has no resolvable Git commit: $source" >&2
+    exit 1
+}
+if [[ $dry_run -eq 0 ]] && {
+       ! git -C "$source" diff --quiet -- \
+       || ! git -C "$source" diff --cached --quiet --;
+}; then
+    echo "E: Refusing production submission from a source tree with tracked changes." >&2
+    exit 1
+fi
 if [[ -n $gtf ]]; then
     gtf_directory=$(cd "$(dirname "$gtf")" && pwd)
     gtf="$gtf_directory/$(basename "$gtf")"
@@ -189,22 +200,24 @@ fi
 task_file="$run_root/plan/context_tasks.tsv"
 candidate=$(mktemp "$run_root/plan/.context_tasks.XXXXXX")
 trap 'rm -f "$candidate"' EXIT HUP INT TERM
-printf 'task_index\tchrom\tcofactor_motif_ids\toutput_tier\n' > "$candidate"
+printf 'task_index\tchrom\tcofactor_motif_ids\toutput_tier\tbuilder_source_commit\n' \
+    > "$candidate"
 task_index=0
-for chromosome in "${chromosomes[@]}"; do
-    motif_offset=0
-    while (( motif_offset < ${#motifs[@]} )); do
-        batch=("${motifs[@]:motif_offset:motifs_per_task}")
-        joined=""
-        for motif in "${batch[@]}"; do
-            if [[ -n $joined ]]; then joined+=","; fi
-            joined+=$motif
-        done
-        printf '%d\t%s\t%s\t%s\n' \
-            "$task_index" "$chromosome" "$joined" "$output_tier" >> "$candidate"
-        task_index=$((task_index + 1))
-        motif_offset=$((motif_offset + motifs_per_task))
+motif_offset=0
+while (( motif_offset < ${#motifs[@]} )); do
+    batch=("${motifs[@]:motif_offset:motifs_per_task}")
+    joined=""
+    for motif in "${batch[@]}"; do
+        if [[ -n $joined ]]; then joined+=","; fi
+        joined+=$motif
     done
+    for chromosome in "${chromosomes[@]}"; do
+        printf '%d\t%s\t%s\t%s\t%s\n' \
+            "$task_index" "$chromosome" "$joined" "$output_tier" \
+            "$source_commit" >> "$candidate"
+        task_index=$((task_index + 1))
+    done
+    motif_offset=$((motif_offset + motifs_per_task))
 done
 if [[ -f $task_file ]]; then
     cmp -s "$candidate" "$task_file" || {

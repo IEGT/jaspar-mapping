@@ -112,6 +112,11 @@ def argument_parser() -> argparse.ArgumentParser:
         help="explicit motif-set identity carried into every derived table",
     )
     parser.add_argument(
+        "--source-commit",
+        default="unknown",
+        help="builder source commit recorded in package provenance",
+    )
+    parser.add_argument(
         "--genome-id",
         required=True,
         help="explicit reference-genome identity carried into every derived table",
@@ -858,6 +863,7 @@ FROM widths;
 CREATE TEMP TABLE context_run_config AS
 SELECT
     5::INTEGER AS schema_version,
+    {sql_string(arguments.source_commit)}::VARCHAR AS builder_source_commit,
     {sql_string(arguments.genome_id)}::VARCHAR AS genome_id,
     {sql_string(arguments.motif_set_id)}::VARCHAR AS motif_set_id,
     {sql_string(arguments.anchor_motif)}::VARCHAR AS anchor_motif_id,
@@ -2388,6 +2394,7 @@ def build_package(arguments: argparse.Namespace) -> None:
         ("--genome-id", arguments.genome_id),
         ("--background-model-id", arguments.background_model_id),
         ("--pseudocount-scheme", arguments.pseudocount_scheme),
+        ("--source-commit", arguments.source_commit),
     ):
         if not identifier_pattern.fullmatch(value):
             raise ContextBuildError(
