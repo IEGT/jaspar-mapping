@@ -152,6 +152,7 @@ EOF
 "$repository_root/scripts/build_motif_context.py" \
     --motif-hits "$temporary/motif_hit.parquet" \
     --motif-hit-source-label durable/context/input/**/*.parquet \
+    --input-uniqueness validated_scan_inventory \
     --output "$temporary/context_band" --output-tier band \
     --anchor-motif MA0861.2 \
     --motif-set-id synthetic_jaspar2026 --genome-id synthetic_grch38_v1 \
@@ -168,6 +169,9 @@ EOF
         SELECT CASE WHEN (SELECT motif_hit_source FROM context_run_config)
                 <> 'durable/context/input/**/*.parquet'
             THEN error('durable motif-hit provenance label was not recorded') END;
+        SELECT CASE WHEN (SELECT input_uniqueness FROM context_run_config)
+                <> 'validated_scan_inventory'
+            THEN error('input uniqueness provenance was not recorded') END;
         SELECT CASE WHEN (SELECT COUNT(*) FROM anchor_motif_band_feature) = 0
             THEN error('band tier dropped per-band features') END;
         SELECT CASE WHEN EXISTS (
@@ -595,6 +599,7 @@ SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM motif_context_run_config
     WHERE schema_version = 5
       AND builder_source_commit = 'unknown'
+      AND input_uniqueness = 'deduplicate'
       AND genome_id = 'synthetic_grch38_v1'
       AND motif_set_id = 'synthetic_jaspar2026'
       AND anchor_minimum_score = 0 AND partner_minimum_score = 0

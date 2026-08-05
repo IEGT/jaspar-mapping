@@ -100,6 +100,15 @@ def argument_parser() -> argparse.ArgumentParser:
             "glob, useful when files are copied to node-local scratch"
         ),
     )
+    parser.add_argument(
+        "--input-uniqueness",
+        choices=("deduplicate", "validated_scan_inventory"),
+        default="deduplicate",
+        help=(
+            "deduplicate arbitrary input rows, or trust exact files selected "
+            "from a finalized scan inventory (default: deduplicate)"
+        ),
+    )
     parser.add_argument("--output", required=True, type=Path,
                         help="new output package directory")
     parser.add_argument("--gtf", type=Path,
@@ -565,6 +574,15 @@ def build_sql(arguments: argparse.Namespace, motif_glob: str,
             "\n      AND pseudocount_scheme = "
             f"{sql_string(arguments.pseudocount_scheme)}"
         )
+    if arguments.input_uniqueness == "deduplicate":
+        duplicate_rank_sql = """
+        ROW_NUMBER() OVER (
+            PARTITION BY CAST(chrom AS VARCHAR), start, "end", motif_id, strand,
+                         score_mode, pseudocount
+            ORDER BY score DESC NULLS LAST, pwm_relative_score DESC NULLS LAST
+        )"""
+    else:
+        duplicate_rank_sql = "1::BIGINT"
     if arguments.output_tier == "selected":
         motif_context_copy_sql = """
 COPY motif_context_pair TO 'tables/jaspar2026/motif_context_pair'
@@ -694,8 +712,9 @@ SET temp_directory={sql_string(temp_directory)};
 SET max_temp_directory_size={sql_string(arguments.max_temp_size)};
 PRAGMA enable_progress_bar;
 
--- A dense scan may be assembled from overlapping/retried Parquet parts. Keep
--- one deterministic row per scored orientation and model span before joining.
+-- Arbitrary input may contain overlapping/retried Parquet parts. Deduplicate
+-- those rows by default; finalized inventory selections explicitly bypass the
+-- global window sort because their orientation/model-span identity is unique.
 CREATE TEMP TABLE configured_hit AS
 SELECT * EXCLUDE (duplicate_rank)
 FROM (
@@ -723,11 +742,7 @@ FROM (
         pseudocount::DOUBLE AS pseudocount,
         pwm_relative_score::DOUBLE AS pwm_relative_score,
         {qualifying_threshold} AS qualifying_threshold,
-        ROW_NUMBER() OVER (
-            PARTITION BY CAST(chrom AS VARCHAR), start, "end", motif_id, strand,
-                         score_mode, pseudocount
-            ORDER BY score DESC NULLS LAST, pwm_relative_score DESC NULLS LAST
-        ) AS duplicate_rank
+        {duplicate_rank_sql} AS duplicate_rank
     FROM read_parquet({sql_string(motif_glob)}, hive_partitioning=1)
     WHERE score_mode = {sql_string(arguments.score_mode)}
       AND pseudocount = {sql_number(arguments.pseudocount)}
@@ -864,6 +879,7 @@ CREATE TEMP TABLE context_run_config AS
 SELECT
     5::INTEGER AS schema_version,
     {sql_string(arguments.source_commit)}::VARCHAR AS builder_source_commit,
+    {sql_string(arguments.input_uniqueness)}::VARCHAR AS input_uniqueness,
     {sql_string(arguments.genome_id)}::VARCHAR AS genome_id,
     {sql_string(arguments.motif_set_id)}::VARCHAR AS motif_set_id,
     {sql_string(arguments.anchor_motif)}::VARCHAR AS anchor_motif_id,
@@ -2369,7 +2385,7 @@ JOIN motif_transcript_context t USING (anchor_hit_id);
 
 def run_duckdb(executable: str, staging: Path, sql: str) -> None:
     process = subprocess.run(
-        [executable, "context.duckdb"],
+        [executable, "-bail", "context.duckdb"],
         input=sql,
         text=True,
         cwd=staging,

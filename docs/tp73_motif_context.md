@@ -313,8 +313,8 @@ scripts/submit_motif_context_slurm.sh \
   --chrom-file /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_context_band_v5/plan/chromosomes.txt \
   --motifs-per-task 20 --array-chunk-size 1000 --output-tier band \
   --account cluster --partition requeue \
-  --max-concurrent 20 --cpus 4 --memory 32G --time 0-08:00:00 \
-  --memory-limit 24GB --max-temp-size 100GB --dry-run
+  --max-concurrent 20 --cpus 4 --memory 48G --time 0-02:00:00 \
+  --memory-limit 24GB --max-temp-size 200GB --dry-run
 ```
 
 Inspect every rendered command before removing `--dry-run`. Plans larger than
@@ -354,6 +354,13 @@ separate downstream layer rather than repeated across the all-JASPAR packages.
 Each batch package also carries the stager's `input_manifest.json`, which pins
 the expected motifs (including zero-hit inputs), chromosome, inventory paths,
 file sizes, checksums, and source package-manifest checksum.
+
+The worker uses `--input-uniqueness validated_scan_inventory` because those
+exact finalized files have one row per scored orientation and model span. This
+avoids an otherwise very large global sort before context formation. Direct or
+ad hoc builder use keeps the default `deduplicate` mode; the selected mode is
+recorded in `context_run_config` and must not be changed merely for speed when
+input uniqueness has not been established.
 
 The package contains:
 

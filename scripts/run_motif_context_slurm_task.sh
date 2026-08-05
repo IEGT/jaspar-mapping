@@ -152,6 +152,7 @@ SELECT count(*)
 FROM motif_context_run_config
 WHERE schema_version = 5
   AND builder_source_commit = '$builder_source_commit'
+  AND input_uniqueness = 'validated_scan_inventory'
   AND genome_id = 'homo_sapiens_grch38_ensembl113_primary'
   AND motif_set_id = 'jaspar2026_core_nonredundant'
   AND anchor_motif_id = 'MA0861.2'
@@ -221,6 +222,7 @@ build_arguments=(
     "$source/scripts/build_motif_context.py"
     --motif-hits "$scratch_input/**/*.parquet"
     --motif-hit-source-label "$input/**/*.parquet"
+    --input-uniqueness validated_scan_inventory
     --output "$attempt"
     --anchor-motif MA0861.2
     --source-commit "$builder_source_commit"
