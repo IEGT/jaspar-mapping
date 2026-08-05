@@ -192,6 +192,27 @@ if [[ $dry_run -eq 0 ]] && {
     echo "E: Refusing production submission from a source tree with tracked changes." >&2
     exit 1
 fi
+source_snapshot="$run_root/source"
+mkdir -p "$source_snapshot/scripts"
+for relative in scripts/build_motif_context.py scripts/stage_motif_context_inputs.py; do
+    snapshot_target="$source_snapshot/$relative"
+    if [[ -e $snapshot_target ]]; then
+        cmp -s "$source/$relative" "$snapshot_target" || {
+            echo "E: Existing immutable source snapshot differs: $snapshot_target" >&2
+            exit 1
+        }
+    else
+        cp -p "$source/$relative" "$snapshot_target"
+    fi
+done
+if [[ -e $source_snapshot/source_commit.txt ]]; then
+    [[ $(tr -d '\r\n' < "$source_snapshot/source_commit.txt") == "$source_commit" ]] || {
+        echo "E: Existing source snapshot pins a different commit." >&2
+        exit 1
+    }
+else
+    printf '%s\n' "$source_commit" > "$source_snapshot/source_commit.txt"
+fi
 if [[ -n $gtf ]]; then
     gtf_directory=$(cd "$(dirname "$gtf")" && pwd)
     gtf="$gtf_directory/$(basename "$gtf")"
@@ -231,7 +252,7 @@ fi
 worker_arguments=(
     "$source/scripts/run_motif_context_slurm_task.sh"
     --run-root "$run_root" --scan-package "$scan_package"
-    --task-file "$task_file" --source "$source" --duckdb "$duckdb"
+    --task-file "$task_file" --source "$source_snapshot" --duckdb "$duckdb"
     --threads "$cpus" --memory-limit "$memory_limit"
     --max-temp-size "$max_temp_size"
 )

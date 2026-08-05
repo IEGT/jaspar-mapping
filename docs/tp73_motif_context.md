@@ -323,9 +323,11 @@ array-size limit; the task offset maps local array indices back to the immutable
 global plan. With 2,632 cofactors, 25 chromosomes, and 20 cofactors per task,
 the plan has 3,300 tasks. A changed selection or batching policy fails rather
 than silently mixing packages. Every task row also pins the builder Git commit;
-submission rejects tracked changes, and a worker refuses to mix a different or
-modified checkout into the run. Motif batches are ordered before chromosomes
-so each array chunk contains a mixture of long and short sequence regions.
+submission rejects tracked changes and copies the two required Python programs
+into an immutable source snapshot below the run root. Compute workers verify the
+snapshot's plain-text commit marker and do not need Git. Motif batches are
+ordered before chromosomes so each array chunk contains a mixture of long and
+short sequence regions.
 
 ```sh
 scripts/build_motif_context.py \

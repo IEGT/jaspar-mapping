@@ -94,19 +94,15 @@ IFS=$'\t' read -r task_index chromosome cofactor_motif_ids output_tier \
     exit 2
 }
 if [[ $builder_source_commit != unknown ]]; then
-    current_source_commit=$(git -C "$source" rev-parse --verify HEAD 2>/dev/null) || {
-        echo "E: Cannot resolve the worker source commit below $source." >&2
+    [[ -f $source/source_commit.txt ]] || {
+        echo "E: Worker source snapshot lacks source_commit.txt: $source" >&2
         exit 1
     }
-    [[ $current_source_commit == "$builder_source_commit" ]] || {
-        echo "E: Worker source is $current_source_commit; task plan pins $builder_source_commit." >&2
+    snapshot_source_commit=$(tr -d '\r\n' < "$source/source_commit.txt")
+    [[ $snapshot_source_commit == "$builder_source_commit" ]] || {
+        echo "E: Worker snapshot is $snapshot_source_commit; task plan pins $builder_source_commit." >&2
         exit 1
     }
-    if ! git -C "$source" diff --quiet -- \
-       || ! git -C "$source" diff --cached --quiet --; then
-        echo "E: Worker source has tracked changes: $source" >&2
-        exit 1
-    fi
 fi
 IFS=',' read -ra cofactor_motifs <<< "$cofactor_motif_ids"
 [[ ${#cofactor_motifs[@]} -gt 0 ]]

@@ -23,6 +23,14 @@ grep -Fq -- '--mem=20G' <<< "$rendered"
 grep -Fq -- '--memory-limit 14GB' <<< "$rendered"
 grep -Fq -- '--max-temp-size 80GB' <<< "$rendered"
 [[ $(wc -l < "$temporary/run/plan/context_tasks.tsv") -eq 5 ]]
+cmp -s "$repository_root/scripts/build_motif_context.py" \
+    "$temporary/run/source/scripts/build_motif_context.py"
+cmp -s "$repository_root/scripts/stage_motif_context_inputs.py" \
+    "$temporary/run/source/scripts/stage_motif_context_inputs.py"
+[[ $(tr -d '\r\n' < "$temporary/run/source/source_commit.txt") == \
+   "$(git -C "$repository_root" rev-parse HEAD)" ]]
+snapshot=$(cd "$temporary/run/source" && pwd)
+grep -Fq -- "--source $snapshot" <<< "$rendered"
 
 # An identical dry run reuses the plan; changing it is rejected.
 "$repository_root/scripts/submit_motif_context_slurm.sh" \
