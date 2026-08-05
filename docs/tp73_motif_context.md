@@ -297,26 +297,32 @@ Use neutral names for its parent directories rather than Hive labels such as
 so an outer label would override the genuine identity in the linked scan paths.
 The stager rejects such conflicting wrappers.
 
-On Slurm, submit one cofactor/chromosome package per array task. The worker
-uses exact inventory hard links on `/data`, a unique DuckDB spill directory on
-node-local `/scratch`, and refuses to overwrite either an incompatible input
-selection or an existing output:
+On Slurm, group a modest number of cofactors for one chromosome in each array
+task. The worker resolves exact files from the inventory, copies that bounded
+payload from `/data` to node-local `/scratch` once, and uses a separate scratch
+directory for DuckDB spill. Output is built below a unique durable staging name,
+validated, and moved into its final neutral (non-Hive) path. A requeued task
+therefore reuses a completed package and never treats a partial attempt as
+complete.
 
 ```sh
 scripts/submit_motif_context_slurm.sh \
-  --run-root /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_context_v5 \
+  --run-root /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_context_band_v5 \
   --scan-package /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_sparse_v3/package \
-  --gtf /data/sm718/resources/ensembl/113/Homo_sapiens.GRCh38.113.gtf.gz \
-  --motif MA1961.2 --chrom 1 \
+  --motif-file /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_context_band_v5/plan/cofactor_motifs.txt \
+  --chrom-file /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_context_band_v5/plan/chromosomes.txt \
+  --motifs-per-task 20 --array-chunk-size 1000 --output-tier band \
   --account cluster --partition requeue \
-  --max-concurrent 1 --cpus 4 --memory 32G \
+  --max-concurrent 20 --cpus 4 --memory 32G --time 0-08:00:00 \
   --memory-limit 24GB --max-temp-size 100GB --dry-run
 ```
 
-Inspect the rendered command before removing `--dry-run`. For a selected
-panel, repeat `--motif`; for genome-wide summary production, use
-`--output-tier summary` and repeat or comma-separate chromosomes. The immutable
-task plan makes a changed selection fail rather than silently mix packages.
+Inspect every rendered command before removing `--dry-run`. Plans larger than
+1,000 tasks are split into sequential `afterany` arrays, each below Haumea's
+array-size limit; the task offset maps local array indices back to the immutable
+global plan. With 2,632 cofactors, 25 chromosomes, and 20 cofactors per task,
+the plan has 3,300 tasks. A changed selection or batching policy fails rather
+than silently mixing packages.
 
 ```sh
 scripts/build_motif_context.py \
@@ -336,8 +342,15 @@ scripts/build_motif_context.py \
 `--output-tier selected` retains inspectable raw TP73-neighbor, cofactor-pair,
 and pair-attribution rows. `--output-tier summary` writes schema-stable empty
 raw surfaces while retaining `anchor_motif_band_feature`,
-`tp73_motif_context_summary`, and `tp73_cofactor_pair_summary`; use that mode
-for motif-at-a-time all-JASPAR production.
+`tp73_motif_context_summary`, and `tp73_cofactor_pair_summary`. The production
+`--output-tier band` retains only non-TP73 `anchor_motif_band_feature` rows and
+writes schema-stable empty shared/compatibility surfaces. This prevents the
+same TP73 anchor and tandem tables from being stored once per cofactor batch.
+Gene/transcript annotation and the shared TP73-only tables are built once in a
+separate downstream layer rather than repeated across the all-JASPAR packages.
+Each batch package also carries the stager's `input_manifest.json`, which pins
+the expected motifs (including zero-hit inputs), chromosome, inventory paths,
+file sizes, checksums, and source package-manifest checksum.
 
 The package contains:
 

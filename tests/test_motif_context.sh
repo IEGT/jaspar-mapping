@@ -149,6 +149,59 @@ EOF
         >/dev/null
 )
 
+"$repository_root/scripts/build_motif_context.py" \
+    --motif-hits "$temporary/motif_hit.parquet" \
+    --motif-hit-source-label durable/context/input/**/*.parquet \
+    --output "$temporary/context_band" --output-tier band \
+    --anchor-motif MA0861.2 \
+    --motif-set-id synthetic_jaspar2026 --genome-id synthetic_grch38_v1 \
+    --anchor-minimum-score 0 --partner-minimum-score 0 \
+    --score-mode log2_relative_risk --pseudocount 1 \
+    --chrom 1 --capture-flank 150 --context-flank 150 --tandem-flank 20 \
+    --memory-limit 1GB --max-temp-size 1GB >/dev/null
+
+(
+    cd "$temporary/context_band"
+    duckdb context.duckdb -bail -c "
+        SELECT CASE WHEN (SELECT output_tier FROM context_run_config) <> 'band'
+            THEN error('band output tier was not recorded') END;
+        SELECT CASE WHEN (SELECT motif_hit_source FROM context_run_config)
+                <> 'durable/context/input/**/*.parquet'
+            THEN error('durable motif-hit provenance label was not recorded') END;
+        SELECT CASE WHEN (SELECT COUNT(*) FROM anchor_motif_band_feature) = 0
+            THEN error('band tier dropped per-band features') END;
+        SELECT CASE WHEN EXISTS (
+            SELECT 1 FROM anchor_motif_band_feature
+            WHERE neighbor_motif_id = 'MA0861.2'
+        ) THEN error('band tier duplicated the TP73 anchor motif') END;
+        SELECT CASE WHEN
+               (SELECT COUNT(*) FROM motif_context_pair) <> 0
+            OR (SELECT COUNT(*) FROM tp73_anchor_locus) <> 0
+            OR (SELECT COUNT(*) FROM tp73_motif_context_summary) <> 0
+            OR (SELECT COUNT(*) FROM tp73_cofactor_pair_summary) <> 0
+            OR (SELECT COUNT(*) FROM tp73_pair_feature) <> 0
+            OR (SELECT COUNT(*) FROM tp73_context_anchor) <> 0
+            THEN error('band tier retained a shared or compatibility surface') END;" \
+        >/dev/null
+)
+
+"$repository_root/scripts/build_motif_context.py" \
+    --motif-hits "$temporary/direct_sparse.parquet" \
+    --output "$temporary/context_band_empty" --output-tier band \
+    --anchor-motif MA0861.2 \
+    --motif-set-id synthetic_jaspar2026 --genome-id synthetic_grch38_v1 \
+    --anchor-minimum-score 0 --partner-minimum-score 0 \
+    --score-mode log2_relative_risk --pseudocount 1 \
+    --chrom 1 --capture-flank 150 --context-flank 150 --tandem-flank 20 \
+    --memory-limit 1GB --max-temp-size 1GB >/dev/null
+(
+    cd "$temporary/context_band_empty"
+    duckdb context.duckdb -bail -c "
+        SELECT CASE WHEN (SELECT COUNT(*) FROM anchor_motif_band_feature) <> 0
+            THEN error('empty band package retained a below-threshold row') END;" \
+        >/dev/null
+)
+
 cat > "$temporary/assertions.sql" <<'SQL'
 SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM motif_context_pair

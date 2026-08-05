@@ -5,16 +5,16 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage: run_motif_context_slurm_task.sh --run-root DIR --scan-package DIR
-       --gtf FILE --task-file FILE [OPTIONS]
+       --task-file FILE [OPTIONS]
 
-Run one motif/chromosome context task selected by SLURM_ARRAY_TASK_ID. Exact
-scan payloads are staged as hard links on durable storage; DuckDB spill uses a
-unique node-local scratch directory. Completed matching outputs are reused.
+Run one chromosome/motif-batch selected by SLURM_ARRAY_TASK_ID plus the optional
+JASPAR_CONTEXT_TASK_OFFSET. Exact inventory payloads are staged on /data, copied
+once to node-local scratch, and promoted atomically after validation.
 
 Options:
   --run-root DIR          Dedicated context-run tree on durable storage
   --scan-package DIR      Finalized sparse genome-scan package
-  --gtf FILE              Ensembl-compatible GTF or GTF.gz
+  --gtf FILE              GTF/GTF.gz (required for selected/summary tiers)
   --task-file FILE        TSV written by submit_motif_context_slurm.sh
   --source DIR            Repository root (default: parent of this script)
   --duckdb FILE           DuckDB executable (default: duckdb)
@@ -50,20 +50,22 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -n $run_root && -n $scan_package && -n $gtf && -n $task_file ]] || {
-    usage >&2
-    exit 2
-}
+[[ -n $run_root && -n $scan_package && -n $task_file ]] || { usage >&2; exit 2; }
 [[ ${SLURM_ARRAY_TASK_ID:-} =~ ^[0-9]+$ ]] || {
     echo "E: SLURM_ARRAY_TASK_ID is required." >&2
+    exit 2
+}
+task_offset=${JASPAR_CONTEXT_TASK_OFFSET:-0}
+[[ $task_offset =~ ^[0-9]+$ ]] || {
+    echo "E: JASPAR_CONTEXT_TASK_OFFSET must be a nonnegative integer." >&2
     exit 2
 }
 [[ $threads =~ ^[1-9][0-9]*$ ]] || {
     echo "E: --threads must be a positive integer." >&2
     exit 2
 }
-[[ -d $run_root && -d $scan_package && -f $gtf && -f $task_file ]] || {
-    echo "E: Run root, scan package, GTF, or task file is missing." >&2
+[[ -d $run_root && -d $scan_package && -f $task_file ]] || {
+    echo "E: Run root, scan package, or task file is missing." >&2
     exit 1
 }
 [[ -x $source/scripts/build_motif_context.py ]] || {
@@ -75,37 +77,57 @@ done
     exit 1
 }
 
-task_row=$(awk -F '\t' -v task="$SLURM_ARRAY_TASK_ID" \
+global_task_index=$((task_offset + SLURM_ARRAY_TASK_ID))
+task_row=$(awk -F '\t' -v task="$global_task_index" \
     'NR > 1 && $1 == task { print; found = 1; exit } END { if (!found) exit 1 }' \
     "$task_file") || {
-    echo "E: No task row for array index $SLURM_ARRAY_TASK_ID." >&2
+    echo "E: No task row for global task index $global_task_index." >&2
     exit 1
 }
-IFS=$'\t' read -r task_index chromosome cofactor_motif output_tier <<< "$task_row"
-[[ $task_index == "$SLURM_ARRAY_TASK_ID" ]]
-[[ $chromosome =~ ^[A-Za-z0-9._-]+$ && $cofactor_motif =~ ^[A-Za-z0-9._-]+$ ]]
-[[ $output_tier == selected || $output_tier == summary ]]
-
-# This wrapper must not look like a Hive partition. DuckDB scans partition
-# labels from every path component; an outer motif_id=... would silently
-# replace the genuine TP73/cofactor labels carried by the linked source paths.
-input="$run_root/inputs/task-$task_index-cofactor-$cofactor_motif-chrom-$chromosome"
-output="$run_root/packages/motif_id=$cofactor_motif/chrom=$chromosome"
-mkdir -p "$(dirname "$input")" "$(dirname "$output")"
-
-"$source/scripts/stage_motif_context_inputs.py" \
-    --package "$scan_package" --output "$input" \
-    --motif MA0861.2 --motif "$cofactor_motif" --chrom "$chromosome" \
-    --duckdb "$duckdb"
-
-if [[ -e $output ]]; then
-    [[ -f $output/context.duckdb ]] || {
-        echo "E: Existing context output is incomplete: $output" >&2
+IFS=$'\t' read -r task_index chromosome cofactor_motif_ids output_tier <<< "$task_row"
+[[ $task_index == "$global_task_index" ]]
+[[ $chromosome =~ ^[A-Za-z0-9._-]+$ ]]
+[[ $output_tier == selected || $output_tier == summary || $output_tier == band ]]
+IFS=',' read -ra cofactor_motifs <<< "$cofactor_motif_ids"
+[[ ${#cofactor_motifs[@]} -gt 0 ]]
+for motif in "${cofactor_motifs[@]}"; do
+    [[ $motif =~ ^[A-Za-z0-9._-]+$ && $motif != MA0861.2 ]] || {
+        echo "E: Unsafe or anchor motif in task $task_index: $motif" >&2
+        exit 2
+    }
+done
+if [[ $output_tier != band ]]; then
+    [[ -n $gtf && -f $gtf ]] || {
+        echo "E: Task tier $output_tier requires --gtf." >&2
         exit 1
     }
+fi
+
+input="$run_root/inputs/task-$task_index-chrom-$chromosome"
+output="$run_root/packages/chrom-$chromosome/task-$task_index"
+mkdir -p "$(dirname "$input")" "$(dirname "$output")" "$run_root/staging/task-$task_index"
+
+stage_arguments=(
+    "$source/scripts/stage_motif_context_inputs.py"
+    --package "$scan_package" --output "$input"
+    --motif MA0861.2 --chrom "$chromosome" --duckdb "$duckdb"
+)
+for motif in "${cofactor_motifs[@]}"; do stage_arguments+=(--motif "$motif"); done
+"${stage_arguments[@]}"
+
+sql_motif_list=""
+for motif in "${cofactor_motifs[@]}"; do
+    if [[ -n $sql_motif_list ]]; then sql_motif_list+=","; fi
+    sql_motif_list+="'$motif'"
+done
+
+validate_output() {
+    local package=$1 valid unexpected
+    [[ -f $package/context.duckdb && -f $package/input_manifest.json ]] || return 1
+    cmp -s "$input/input_manifest.json" "$package/input_manifest.json" || return 1
     valid=$(
-        cd "$output"
-        "$duckdb" -readonly -csv -noheader context.duckdb -c "
+        cd "$package"
+        "$duckdb" -light-mode -readonly -csv -noheader context.duckdb -c "
 SELECT count(*)
 FROM motif_context_run_config
 WHERE schema_version = 5
@@ -119,9 +141,20 @@ WHERE schema_version = 5
   AND cofactor_pair_scope = 'at_least_one_member_is_a_tp73_context_locus'
   AND cofactor_motif_locus_scope = 'tp73_context_loci_plus_their_pair_partners'
   AND cofactor_locus_pair_feature_scope = 'tp73_context_loci_only';"
-    )
-    [[ $valid == 1 ]] || {
-        echo "E: Existing context output has incompatible provenance: $output" >&2
+    ) || return 1
+    [[ $valid == 1 ]] || return 1
+    unexpected=$(
+        cd "$package"
+        "$duckdb" -light-mode -readonly -csv -noheader context.duckdb -c "
+SELECT count(*) FROM anchor_motif_band_feature
+WHERE neighbor_motif_id NOT IN ($sql_motif_list);"
+    ) || return 1
+    [[ $unexpected == 0 ]]
+}
+
+if [[ -e $output ]]; then
+    validate_output "$output" || {
+        echo "E: Existing context output is incomplete or incompatible: $output" >&2
         exit 1
     }
     echo "I: Reusing completed context task $task_index: $output" >&2
@@ -129,29 +162,78 @@ WHERE schema_version = 5
 fi
 
 scratch_base=${SLURM_TMPDIR:-/scratch/${USER:-sm718}}
-scratch="$scratch_base/jaspar-context-${SLURM_JOB_ID:-manual}-${SLURM_ARRAY_TASK_ID}-restart-${SLURM_RESTART_COUNT:-0}-pid-$$"
+scratch="$scratch_base/jaspar-context-${SLURM_JOB_ID:-manual}-${SLURM_ARRAY_TASK_ID}-global-$task_index-restart-${SLURM_RESTART_COUNT:-0}-pid-$$"
+scratch_input="$scratch/input"
 spill="$scratch/duckdb-spill"
-mkdir -p "$spill"
+mkdir -p "$scratch_input" "$spill"
 
-echo "I: Task $task_index: chromosome $chromosome, cofactor $cofactor_motif, tier $output_tier" >&2
-echo "I: Durable output: $output" >&2
-echo "I: Node-local spill: $spill" >&2
-"$source/scripts/build_motif_context.py" \
-    --motif-hits "$input/**/*.parquet" \
-    --gtf "$gtf" --output "$output" \
-    --anchor-motif MA0861.2 \
-    --motif-set-id jaspar2026_core_nonredundant \
-    --genome-id homo_sapiens_grch38_ensembl113_primary \
-    --anchor-minimum-score -1 --tandem-minimum-score 0 \
-    --anchor-selection-mode local_peak --anchor-local-peak-flank 150 \
-    --score-mode log2_relative_risk --pseudocount 1 \
-    --background-model-id uniform_acgt_v1 \
-    --pseudocount-scheme additive_per_base \
-    --chrom "$chromosome" \
-    --capture-flank 150 --context-flank 150 --tandem-flank 20 \
-    --cofactor-pair-flank 150 --output-tier "$output_tier" \
-    --threads "$threads" --memory-limit "$memory_limit" \
-    --max-temp-size "$max_temp_size" --temp-directory "$spill" \
+input_kib=$(du -sk "$input" | awk '{print $1}')
+available_kib=$(df -Pk "$scratch_base" | awk 'NR == 2 {print $4}')
+case $max_temp_size in
+    *KB) temp_number=${max_temp_size%KB}; temp_multiplier=1 ;;
+    *MB) temp_number=${max_temp_size%MB}; temp_multiplier=1024 ;;
+    *GB) temp_number=${max_temp_size%GB}; temp_multiplier=$((1024 * 1024)) ;;
+    *TB) temp_number=${max_temp_size%TB}; temp_multiplier=$((1024 * 1024 * 1024)) ;;
+    *)
+        echo "E: --max-temp-size must use an integer KB, MB, GB, or TB suffix." >&2
+        exit 2
+        ;;
+esac
+[[ $temp_number =~ ^[0-9]+$ ]] || {
+    echo "E: --max-temp-size must use an integer KB, MB, GB, or TB suffix." >&2
+    exit 2
+}
+temp_kib=$((temp_number * temp_multiplier))
+minimum_kib=$((input_kib + temp_kib + 10 * 1024 * 1024))
+echo "I: Task $task_index: chromosome $chromosome, ${#cofactor_motifs[@]} cofactors, tier $output_tier" >&2
+echo "I: Input size: $input_kib KiB; scratch available: $available_kib KiB" >&2
+if (( available_kib < minimum_kib )); then
+    echo "E: Scratch preflight failed; need at least $minimum_kib KiB before copying input." >&2
+    exit 1
+fi
+
+echo "I: Copying exact chromosome/motif payloads from /data to $scratch_input" >&2
+cp -R "$input/." "$scratch_input/"
+
+attempt="$run_root/staging/task-$task_index/job-${SLURM_JOB_ID:-manual}-restart-${SLURM_RESTART_COUNT:-0}-pid-$$"
+build_arguments=(
+    "$source/scripts/build_motif_context.py"
+    --motif-hits "$scratch_input/**/*.parquet"
+    --motif-hit-source-label "$input/**/*.parquet"
+    --output "$attempt"
+    --anchor-motif MA0861.2
+    --motif-set-id jaspar2026_core_nonredundant
+    --genome-id homo_sapiens_grch38_ensembl113_primary
+    --anchor-minimum-score -1 --tandem-minimum-score 0
+    --anchor-selection-mode local_peak --anchor-local-peak-flank 150
+    --score-mode log2_relative_risk --pseudocount 1
+    --background-model-id uniform_acgt_v1
+    --pseudocount-scheme additive_per_base
+    --chrom "$chromosome"
+    --capture-flank 150 --context-flank 150 --tandem-flank 20
+    --cofactor-pair-flank 150 --output-tier "$output_tier"
+    --threads "$threads" --memory-limit "$memory_limit"
+    --max-temp-size "$max_temp_size" --temp-directory "$spill"
     --duckdb "$duckdb"
+)
+if [[ $output_tier != band ]]; then build_arguments+=(--gtf "$gtf"); fi
 
+echo "I: Durable output after validation: $output" >&2
+echo "I: Node-local DuckDB spill: $spill" >&2
+"${build_arguments[@]}"
+cp "$input/input_manifest.json" "$attempt/input_manifest.json"
+
+validate_output "$attempt" || {
+    echo "E: Newly built context package failed validation: $attempt" >&2
+    exit 1
+}
+if [[ -e $output ]]; then
+    validate_output "$output" || {
+        echo "E: Output appeared concurrently but is incompatible: $output" >&2
+        exit 1
+    }
+    echo "I: Another retry completed task $task_index first; retaining validated output." >&2
+    exit 0
+fi
+mv "$attempt" "$output"
 echo "I: Completed context task $task_index: $output" >&2

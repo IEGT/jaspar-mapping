@@ -13,6 +13,7 @@ rendered=$("$repository_root/scripts/submit_motif_context_slurm.sh" \
     --run-root "$temporary/run" --scan-package "$temporary/scan" \
     --gtf "$temporary/annotation.gtf" \
     --motif MA1961.2 --motif MA0024.3 --chrom 1 --chrom X \
+    --motifs-per-task 1 \
     --max-concurrent 3 --cpus 2 --memory 20G \
     --memory-limit 14GB --max-temp-size 80GB --dry-run)
 
@@ -27,7 +28,8 @@ grep -Fq -- '--max-temp-size 80GB' <<< "$rendered"
 "$repository_root/scripts/submit_motif_context_slurm.sh" \
     --run-root "$temporary/run" --scan-package "$temporary/scan" \
     --gtf "$temporary/annotation.gtf" \
-    --motif MA1961.2 --motif MA0024.3 --chrom 1 --chrom X --dry-run >/dev/null
+    --motif MA1961.2 --motif MA0024.3 --chrom 1 --chrom X \
+    --motifs-per-task 1 --dry-run >/dev/null
 if "$repository_root/scripts/submit_motif_context_slurm.sh" \
     --run-root "$temporary/run" --scan-package "$temporary/scan" \
     --gtf "$temporary/annotation.gtf" \
@@ -35,5 +37,33 @@ if "$repository_root/scripts/submit_motif_context_slurm.sh" \
     echo "E: changed context task plan was accepted" >&2
     exit 1
 fi
+
+cat > "$temporary/motifs.txt" <<'EOF'
+# Five synthetic cofactor accessions.
+MA0001.1
+MA0002.1
+MA0003.1
+MA0004.1
+MA0005.1
+EOF
+printf '1\nX\n' > "$temporary/chromosomes.txt"
+batched=$("$repository_root/scripts/submit_motif_context_slurm.sh" \
+    --run-root "$temporary/batched" --scan-package "$temporary/scan" \
+    --motif-file "$temporary/motifs.txt" \
+    --chrom-file "$temporary/chromosomes.txt" \
+    --motifs-per-task 2 --array-chunk-size 4 --output-tier band \
+    --max-concurrent 3 --dry-run)
+
+[[ $(wc -l < "$temporary/batched/plan/context_tasks.tsv") -eq 7 ]]
+[[ $(wc -l <<< "$batched") -eq 2 ]]
+grep -Fq -- '--array=0-3%3' <<< "$batched"
+grep -Fq -- '--array=0-1%3' <<< "$batched"
+grep -Fq -- 'JASPAR_CONTEXT_TASK_OFFSET=0' <<< "$batched"
+grep -Fq -- 'JASPAR_CONTEXT_TASK_OFFSET=4' <<< "$batched"
+grep -Fq -- 'afterany:DRY_RUN_CHUNK_0' <<< "$batched"
+grep -Fq $'0\t1\tMA0001.1,MA0002.1\tband' \
+    "$temporary/batched/plan/context_tasks.tsv"
+grep -Fq $'5\tX\tMA0005.1\tband' \
+    "$temporary/batched/plan/context_tasks.tsv"
 
 echo "Motif-context Slurm submission tests passed."

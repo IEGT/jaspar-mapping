@@ -93,6 +93,13 @@ def argument_parser() -> argparse.ArgumentParser:
         required=True,
         help="motif-hit Parquet file, directory, or glob",
     )
+    parser.add_argument(
+        "--motif-hit-source-label",
+        help=(
+            "durable provenance label recorded instead of the physical input "
+            "glob, useful when files are copied to node-local scratch"
+        ),
+    )
     parser.add_argument("--output", required=True, type=Path,
                         help="new output package directory")
     parser.add_argument("--gtf", type=Path,
@@ -194,11 +201,12 @@ def argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--output-tier",
-        choices=("selected", "summary"),
+        choices=("selected", "summary", "band"),
         default="selected",
         help=(
             "selected retains raw TP73/cofactor relationships; summary "
-            "persists compact all-motif features only (default: selected)"
+            "persists compact all-motif and shared TP73 features; band "
+            "persists only non-TP73 per-band features (default: selected)"
         ),
     )
     parser.add_argument("--threads", type=positive_integer, default=1)
@@ -603,6 +611,76 @@ COPY (SELECT * FROM tp73_cofactor_pair_context WHERE false)
 TO 'tables/jaspar2026/tp73_cofactor_pair_context.parquet'
     (FORMAT PARQUET, COMPRESSION ZSTD);
 """
+    # All-JASPAR production runs motifs in batches. Keep the one batch-specific
+    # feature table and emit typed empty files for shared TP73 surfaces so every
+    # package remains queryable without multiplying those rows across batches.
+    if arguments.output_tier == "band":
+        anchor_locus_copy_sql = """
+COPY (SELECT * FROM tp73_anchor_locus WHERE false)
+TO 'tables/jaspar2026/tp73_anchor_locus/empty.parquet'
+    (FORMAT PARQUET, COMPRESSION ZSTD);
+"""
+        motif_summary_copy_sql = """
+COPY (SELECT * FROM tp73_motif_context_summary WHERE false)
+TO 'tables/jaspar2026/tp73_motif_context_summary/empty.parquet'
+    (FORMAT PARQUET, COMPRESSION ZSTD);
+"""
+        band_qualifying_filter_sql = (
+            "\n      AND neighbor_motif_id <> "
+            + sql_string(arguments.anchor_motif)
+        )
+        band_feature_copy_sql = """
+COPY anchor_motif_band_feature
+TO 'tables/jaspar2026/anchor_motif_band_feature/data.parquet'
+    (FORMAT PARQUET, COMPRESSION ZSTD);
+"""
+        cofactor_pair_summary_copy_sql = """
+COPY (SELECT * FROM tp73_cofactor_pair_summary WHERE false)
+TO 'tables/jaspar2026/tp73_cofactor_pair_summary.parquet'
+    (FORMAT PARQUET, COMPRESSION ZSTD);
+"""
+        pair_feature_copy_sql = """
+COPY (SELECT * FROM tp73_pair_feature WHERE false)
+TO 'tables/jaspar2026/tp73_pair_feature/empty.parquet'
+    (FORMAT PARQUET, COMPRESSION ZSTD);
+"""
+        context_anchor_copy_sql = """
+COPY (SELECT * FROM tp73_context_anchor WHERE false)
+TO 'tables/jaspar2026/tp73_context_anchor/empty.parquet'
+    (FORMAT PARQUET, COMPRESSION ZSTD);
+"""
+    else:
+        anchor_locus_copy_sql = """
+COPY tp73_anchor_locus TO 'tables/jaspar2026/tp73_anchor_locus'
+    (FORMAT PARQUET, PARTITION_BY (genome_id, chrom), COMPRESSION ZSTD);
+"""
+        motif_summary_copy_sql = """
+COPY tp73_motif_context_summary
+TO 'tables/jaspar2026/tp73_motif_context_summary'
+    (FORMAT PARQUET,
+     PARTITION_BY (genome_id, chrom, neighbor_motif_id), COMPRESSION ZSTD);
+"""
+        band_qualifying_filter_sql = ""
+        band_feature_copy_sql = """
+COPY anchor_motif_band_feature
+TO 'tables/jaspar2026/anchor_motif_band_feature'
+    (FORMAT PARQUET,
+     PARTITION_BY (genome_id, chrom, neighbor_motif_id), COMPRESSION ZSTD);
+"""
+        cofactor_pair_summary_copy_sql = """
+COPY tp73_cofactor_pair_summary
+TO 'tables/jaspar2026/tp73_cofactor_pair_summary.parquet'
+    (FORMAT PARQUET, COMPRESSION ZSTD);
+"""
+        pair_feature_copy_sql = """
+COPY tp73_pair_feature TO 'tables/jaspar2026/tp73_pair_feature'
+    (FORMAT PARQUET, PARTITION_BY (genome_id, chrom), COMPRESSION ZSTD);
+"""
+        context_anchor_copy_sql = """
+COPY tp73_context_anchor TO 'tables/jaspar2026/tp73_context_anchor'
+    (FORMAT PARQUET, PARTITION_BY (genome_id, chrom), COMPRESSION ZSTD);
+"""
+    motif_hit_source = arguments.motif_hit_source_label or motif_glob
     return f"""
 SET threads={arguments.threads};
 SET memory_limit={sql_string(arguments.memory_limit)};
@@ -833,7 +911,7 @@ SELECT
         AS anchor_motif_band_winner_rule,
     'both_locus_best_scores_at_or_above_neighbor_qualifying_threshold'::VARCHAR
         AS cofactor_pair_score_rule,
-    {sql_string(motif_glob)}::VARCHAR AS motif_hit_source,
+    {sql_string(motif_hit_source)}::VARCHAR AS motif_hit_source,
     {gtf_source}::VARCHAR AS gtf_source
 FROM capture_parameter p;
 
@@ -1057,8 +1135,7 @@ SELECT
     {sql_string(arguments.pseudocount_scheme)}::VARCHAR AS pseudocount_scheme
 FROM collapsed;
 
-COPY tp73_anchor_locus TO 'tables/jaspar2026/tp73_anchor_locus'
-    (FORMAT PARQUET, PARTITION_BY (genome_id, chrom), COMPRESSION ZSTD);
+{anchor_locus_copy_sql}
 
 -- Collapse neighbor strand alternatives at the same span before counting
 -- context loci. The orientation state remains relative to this TP73 record.
@@ -1164,10 +1241,7 @@ GROUP BY anchor_hit_id, genome_id, motif_set_id, chrom, neighbor_motif_id,
          interval_distance_band, anchor_oriented_side,
          relative_orientation_state;
 
-COPY tp73_motif_context_summary
-TO 'tables/jaspar2026/tp73_motif_context_summary'
-    (FORMAT PARQUET,
-     PARTITION_BY (genome_id, chrom, neighbor_motif_id), COMPRESSION ZSTD);
+{motif_summary_copy_sql}
 
 DROP TABLE tp73_motif_context_summary;
 
@@ -1611,7 +1685,7 @@ CREATE TEMP TABLE anchor_motif_band_feature AS
 WITH qualifying AS (
     SELECT *
     FROM physical_context_neighbor_locus
-    WHERE neighbor_score >= qualifying_threshold
+    WHERE neighbor_score >= qualifying_threshold{band_qualifying_filter_sql}
 ), ranked AS (
     SELECT
         *,
@@ -1728,10 +1802,7 @@ LEFT JOIN cofactor_locus_pair_feature p
   ON r.neighbor_locus_id = p.cofactor_locus_id
 WHERE r.best_rank = 1;
 
-COPY anchor_motif_band_feature
-TO 'tables/jaspar2026/anchor_motif_band_feature'
-    (FORMAT PARQUET,
-     PARTITION_BY (genome_id, chrom, neighbor_motif_id), COMPRESSION ZSTD);
+{band_feature_copy_sql}
 
 DROP TABLE anchor_motif_band_feature;
 DROP TABLE physical_context_neighbor_locus;
@@ -1882,9 +1953,7 @@ GROUP BY anchor_hit_id, genome_id, motif_set_id, chrom, cofactor_motif_id,
          nearest_member_anchor_oriented_side,
          nearest_member_relative_orientation;
 
-COPY tp73_cofactor_pair_summary
-TO 'tables/jaspar2026/tp73_cofactor_pair_summary.parquet'
-    (FORMAT PARQUET, COMPRESSION ZSTD);
+{cofactor_pair_summary_copy_sql}
 
 DROP TABLE tp73_cofactor_pair_context;
 DROP TABLE tp73_cofactor_pair_summary;
@@ -2026,8 +2095,7 @@ SELECT
 FROM anchor_hit a
 LEFT JOIN tandem_partner_summary s USING (anchor_hit_id);
 
-COPY tp73_pair_feature TO 'tables/jaspar2026/tp73_pair_feature'
-    (FORMAT PARQUET, PARTITION_BY (genome_id, chrom), COMPRESSION ZSTD);
+{pair_feature_copy_sql}
 
 CREATE TEMP TABLE pair_summary AS
 SELECT
@@ -2134,8 +2202,7 @@ LEFT JOIN nearest_tandem t USING (anchor_hit_id)
 JOIN tp73_pair_feature f USING (anchor_hit_id)
 JOIN anchor_gene_context g USING (anchor_hit_id);
 
-COPY tp73_context_anchor TO 'tables/jaspar2026/tp73_context_anchor'
-    (FORMAT PARQUET, PARTITION_BY (genome_id, chrom), COMPRESSION ZSTD);
+{context_anchor_copy_sql}
 
 DROP TABLE context_run_config;
 DROP TABLE motif_context_pair;
@@ -2352,8 +2419,17 @@ def build_package(arguments: argparse.Namespace) -> None:
     staging = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=output.parent))
     try:
         (staging / "tables" / "jaspar2026").mkdir(parents=True)
-        if arguments.output_tier == "summary":
+        if arguments.output_tier != "selected":
             (staging / "tables" / "jaspar2026" / "motif_context_pair").mkdir()
+        if arguments.output_tier == "band":
+            for table in (
+                "tp73_anchor_locus",
+                "tp73_motif_context_summary",
+                "anchor_motif_band_feature",
+                "tp73_pair_feature",
+                "tp73_context_anchor",
+            ):
+                (staging / "tables" / "jaspar2026" / table).mkdir()
 
         external_temp_directory = arguments.temp_directory is not None
         if external_temp_directory:
