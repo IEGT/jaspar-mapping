@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import csv
 import glob
+import hashlib
 import math
 import os
 import re
@@ -113,6 +114,18 @@ def argument_parser() -> argparse.ArgumentParser:
                         help="new output package directory")
     parser.add_argument("--gtf", type=Path,
                         help="optional Ensembl-compatible GTF or GTF.gz for TSS/introns")
+    parser.add_argument(
+        "--gtf-sha256",
+        help=(
+            "expected SHA-256 of the GTF bytes; verified before building and "
+            "recorded in package provenance"
+        ),
+    )
+    parser.add_argument(
+        "--gtf-size-bytes",
+        type=nonnegative_integer,
+        help="expected GTF byte size; verified before building",
+    )
     parser.add_argument("--anchor-motif", default="MA0861.2",
                         help="anchor motif accession (default: MA0861.2)")
     parser.add_argument(
@@ -246,6 +259,14 @@ def sql_string(value: str | Path) -> str:
 
 def sql_number(value: float) -> str:
     return format(value, ".17g")
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def parse_chromosomes(values: list[str]) -> list[str]:
@@ -537,6 +558,14 @@ def build_sql(arguments: argparse.Namespace, motif_glob: str,
     chrom_clause = chromosome_filter(chromosomes)
     annotation_sql = gtf_sql(gtf, chromosomes) if gtf is not None else no_gtf_sql()
     gtf_source = sql_string(gtf) if gtf is not None else "NULL"
+    gtf_sha256 = (
+        sql_string(arguments.gtf_sha256)
+        if arguments.gtf_sha256 is not None else "NULL"
+    )
+    gtf_size_bytes = (
+        str(arguments.gtf_size_bytes)
+        if arguments.gtf_size_bytes is not None else "NULL"
+    )
     motif_name = (
         "COALESCE(NULLIF(motif_name::VARCHAR, ''), motif_id::VARCHAR)"
         if "motif_name" in source_columns else "motif_id::VARCHAR"
@@ -877,7 +906,7 @@ FROM widths;
 
 CREATE TEMP TABLE context_run_config AS
 SELECT
-    5::INTEGER AS schema_version,
+    6::INTEGER AS schema_version,
     {sql_string(arguments.source_commit)}::VARCHAR AS builder_source_commit,
     {sql_string(arguments.input_uniqueness)}::VARCHAR AS input_uniqueness,
     {sql_string(arguments.genome_id)}::VARCHAR AS genome_id,
@@ -934,7 +963,9 @@ SELECT
     'both_locus_best_scores_at_or_above_neighbor_qualifying_threshold'::VARCHAR
         AS cofactor_pair_score_rule,
     {sql_string(motif_hit_source)}::VARCHAR AS motif_hit_source,
-    {gtf_source}::VARCHAR AS gtf_source
+    {gtf_source}::VARCHAR AS gtf_source,
+    {gtf_sha256}::VARCHAR AS gtf_sha256,
+    {gtf_size_bytes}::BIGINT AS gtf_size_bytes
 FROM capture_parameter p;
 
 COPY context_run_config TO 'tables/jaspar2026/context_run_config.parquet'
@@ -1745,7 +1776,7 @@ WITH qualifying AS (
              neighbor_motif_id, interval_distance_band
 )
 SELECT
-    5::INTEGER AS schema_version,
+    6::INTEGER AS schema_version,
     r.anchor_locus_id,
     r.genome_id,
     r.motif_set_id,
@@ -2433,6 +2464,33 @@ def build_package(arguments: argparse.Namespace) -> None:
     gtf = arguments.gtf.expanduser().resolve() if arguments.gtf else None
     if gtf is not None and not gtf.is_file():
         raise ContextBuildError(f"GTF not found: {gtf}")
+    if gtf is None:
+        if arguments.gtf_sha256 is not None or arguments.gtf_size_bytes is not None:
+            raise ContextBuildError(
+                "--gtf-sha256/--gtf-size-bytes require --gtf"
+            )
+    else:
+        actual_size = gtf.stat().st_size
+        if (arguments.gtf_size_bytes is not None
+                and arguments.gtf_size_bytes != actual_size):
+            raise ContextBuildError(
+                "GTF size differs from --gtf-size-bytes: "
+                f"expected {arguments.gtf_size_bytes}, observed {actual_size}"
+            )
+        expected_sha256 = arguments.gtf_sha256
+        if expected_sha256 is not None and not re.fullmatch(
+            r"[0-9A-Fa-f]{64}", expected_sha256
+        ):
+            raise ContextBuildError("--gtf-sha256 must contain 64 hexadecimal digits")
+        actual_sha256 = sha256_file(gtf)
+        if (expected_sha256 is not None
+                and expected_sha256.lower() != actual_sha256):
+            raise ContextBuildError(
+                "GTF content differs from --gtf-sha256: "
+                f"expected {expected_sha256.lower()}, observed {actual_sha256}"
+            )
+        arguments.gtf_sha256 = actual_sha256
+        arguments.gtf_size_bytes = actual_size
 
     output = arguments.output.expanduser().resolve()
     if output.exists() and not arguments.force:

@@ -26,29 +26,51 @@ printf '{"motifs":["MA0861.2","MA0001.1","MA0002.1"],"chromosomes":["X"]}\n' \
 EOF
 cat > "$source_tree/scripts/build_motif_context.py" <<'EOF'
 #!/usr/bin/env bash
-exit 99
+set -euo pipefail
+output=""
+while [[ $# -gt 0 ]]; do
+    if [[ $1 == --output ]]; then output=$2; shift 2; else shift; fi
+done
+mkdir -p "$output"
+touch "$output/context.duckdb"
 EOF
 chmod +x "$source_tree/scripts/stage_motif_context_inputs.py" \
     "$source_tree/scripts/build_motif_context.py"
 printf 'abc123\n' > "$source_tree/source_commit.txt"
+printf 'gtf\n' > "$temporary/annotation.gtf"
+printf 'bad\n' > "$temporary/annotation-wrong.gtf"
+gtf_size=$(wc -c < "$temporary/annotation.gtf" | tr -d '[:space:]')
+if command -v sha256sum >/dev/null 2>&1; then
+    gtf_sha256=$(sha256sum "$temporary/annotation.gtf" | awk '{print $1}')
+else
+    gtf_sha256=$(shasum -a 256 "$temporary/annotation.gtf" | awk '{print $1}')
+fi
 
 cat > "$temporary/duckdb" <<'EOF'
 #!/usr/bin/env bash
 case "$*" in
-    *motif_context_run_config*) printf '1\n' ;;
+    *motif_context_run_config*) printf '%s\n' "${FAKE_CONFIG_COUNT:-1}" ;;
     *anchor_motif_band_feature*) printf '0\n' ;;
     *) exit 2 ;;
 esac
 EOF
 chmod +x "$temporary/duckdb"
 
-printf 'task_index\tchrom\tcofactor_motif_ids\toutput_tier\tbuilder_source_commit\n' \
-    > "$run_root/plan/context_tasks.tsv"
-printf '107\tX\tMA0001.1,MA0002.1\tband\tabc123\n' \
-    >> "$run_root/plan/context_tasks.tsv"
+{
+    printf 'task_index\tchrom\tcofactor_motif_ids\toutput_tier\tbuilder_source_commit\tcontext_schema_version\tgtf_size_bytes\tgtf_sha256\n'
+    printf '107\tX\tMA0001.1,MA0002.1\tband\tabc123\t6\t0\tnone\n'
+    printf '108\tX\tMA0001.1,MA0002.1\tband\tabc123\t6\t0\tnone\n'
+    printf '109\tX\tMA0001.1,MA0002.1\tband\tabc123\t6\t0\tnone\n'
+    printf '110\tX\tMA0001.1,MA0002.1\tselected\tabc123\t6\t%s\t%s\n' \
+        "$gtf_size" "$gtf_sha256"
+} > "$run_root/plan/context_tasks.tsv"
 touch "$run_root/packages/chrom-X/task-107/context.duckdb"
 printf '{"motifs":["MA0861.2","MA0001.1","MA0002.1"],"chromosomes":["X"]}\n' \
     > "$run_root/packages/chrom-X/task-107/input_manifest.json"
+mkdir -p "$run_root/packages/chrom-X/task-110"
+touch "$run_root/packages/chrom-X/task-110/context.duckdb"
+cp "$run_root/packages/chrom-X/task-107/input_manifest.json" \
+    "$run_root/packages/chrom-X/task-110/input_manifest.json"
 
 output=$(
     SLURM_ARRAY_TASK_ID=7 JASPAR_CONTEXT_TASK_OFFSET=100 \
@@ -59,6 +81,61 @@ output=$(
 )
 grep -Fq 'Reusing completed context task 107' <<< "$output"
 grep -Fq 'packages/chrom-X/task-107' <<< "$output"
+
+# Exercise scratch copy, fresh build, validation, atomic promotion, and the
+# task-owned cleanup trap rather than returning through the reuse branch.
+mkdir -p "$temporary/scratch-fresh"
+fresh_output=$(
+    SLURM_ARRAY_TASK_ID=8 JASPAR_CONTEXT_TASK_OFFSET=100 \
+    SLURM_TMPDIR="$temporary/scratch-fresh" \
+    "$repository_root/scripts/run_motif_context_slurm_task.sh" \
+        --run-root "$run_root" --scan-package "$scan_package" \
+        --task-file "$run_root/plan/context_tasks.tsv" \
+        --source "$source_tree" --duckdb "$temporary/duckdb" \
+        --max-temp-size 1MB 2>&1
+)
+grep -Fq 'Completed context task 108' <<< "$fresh_output"
+[[ -f $run_root/packages/chrom-X/task-108/context.duckdb ]]
+[[ -f $run_root/packages/chrom-X/task-108/input_manifest.json ]]
+[[ -f $run_root/locks/context-task-108.lock ]]
+[[ -z $(find "$run_root/staging/task-108" -mindepth 1 -print -quit) ]]
+[[ -z $(find "$temporary/scratch-fresh" -mindepth 1 -print -quit) ]]
+
+# A newly built package that fails validation must not be promoted, and both
+# durable and node-local task-owned staging must be removed.
+mkdir -p "$temporary/scratch-failure"
+if FAKE_CONFIG_COUNT=0 SLURM_ARRAY_TASK_ID=9 JASPAR_CONTEXT_TASK_OFFSET=100 \
+    SLURM_TMPDIR="$temporary/scratch-failure" \
+    "$repository_root/scripts/run_motif_context_slurm_task.sh" \
+        --run-root "$run_root" --scan-package "$scan_package" \
+        --task-file "$run_root/plan/context_tasks.tsv" \
+        --source "$source_tree" --duckdb "$temporary/duckdb" \
+        --max-temp-size 1MB >/dev/null 2>&1; then
+    echo "E: Invalid fresh context package was accepted." >&2
+    exit 1
+fi
+[[ ! -e $run_root/packages/chrom-X/task-109 ]]
+[[ -z $(find "$run_root/staging/task-109" -mindepth 1 -print -quit) ]]
+[[ -z $(find "$temporary/scratch-failure" -mindepth 1 -print -quit) ]]
+
+selected_output=$(
+    SLURM_ARRAY_TASK_ID=10 JASPAR_CONTEXT_TASK_OFFSET=100 \
+    "$repository_root/scripts/run_motif_context_slurm_task.sh" \
+        --run-root "$run_root" --scan-package "$scan_package" \
+        --task-file "$run_root/plan/context_tasks.tsv" \
+        --source "$source_tree" --duckdb "$temporary/duckdb" \
+        --gtf "$temporary/annotation.gtf" 2>&1
+)
+grep -Fq 'Reusing completed context task 110' <<< "$selected_output"
+if SLURM_ARRAY_TASK_ID=10 JASPAR_CONTEXT_TASK_OFFSET=100 \
+    "$repository_root/scripts/run_motif_context_slurm_task.sh" \
+        --run-root "$run_root" --scan-package "$scan_package" \
+        --task-file "$run_root/plan/context_tasks.tsv" \
+        --source "$source_tree" --duckdb "$temporary/duckdb" \
+        --gtf "$temporary/annotation-wrong.gtf" >/dev/null 2>&1; then
+    echo "E: Same-size changed GTF was accepted by the reuse gate." >&2
+    exit 1
+fi
 
 if SLURM_ARRAY_TASK_ID=7 JASPAR_CONTEXT_TASK_OFFSET=-1 \
     "$repository_root/scripts/run_motif_context_slurm_task.sh" \

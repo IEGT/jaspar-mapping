@@ -141,6 +141,13 @@ N new files and leaves a valid partial state. The final
 the recorded digest. A same-size mutation is detected even if its timestamp is
 restored.
 
+The downstream batched TP73 context run applies the same completion principle.
+`finalize_motif_context_run.py` follows its immutable task TSV, validates every
+exact package path and input-manifest copy, and publishes `final/manifest.json`
+last. Its DuckDB catalog materializes task/file inventories and exposes an
+exact-file Parquet macro instead of binding a run-wide wildcard. Orphan context
+staging is reported and is never removed automatically by the finalizer.
+
 ## DuckDB catalog and exact hit queries
 
 Small metadata tables are copied into the DuckDB catalog. Consequently metadata

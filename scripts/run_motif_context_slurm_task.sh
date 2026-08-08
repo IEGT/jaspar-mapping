@@ -85,10 +85,15 @@ task_row=$(awk -F '\t' -v task="$global_task_index" \
     exit 1
 }
 IFS=$'\t' read -r task_index chromosome cofactor_motif_ids output_tier \
-    builder_source_commit <<< "$task_row"
+    builder_source_commit context_schema_version gtf_size_bytes gtf_sha256 \
+    <<< "$task_row"
 [[ $task_index == "$global_task_index" ]]
 [[ $chromosome =~ ^[A-Za-z0-9._-]+$ ]]
 [[ $output_tier == selected || $output_tier == summary || $output_tier == band ]]
+[[ $context_schema_version == 6 ]] || {
+    echo "E: Task $task_index requests unsupported context schema $context_schema_version." >&2
+    exit 2
+}
 [[ $builder_source_commit =~ ^[A-Za-z0-9._-]+$ ]] || {
     echo "E: Task $task_index has an unsafe or absent builder source commit." >&2
     exit 2
@@ -117,11 +122,42 @@ if [[ $output_tier != band ]]; then
         echo "E: Task tier $output_tier requires --gtf." >&2
         exit 1
     }
+    [[ $gtf_size_bytes =~ ^[0-9]+$ && $gtf_sha256 =~ ^[0-9a-f]{64}$ ]] || {
+        echo "E: Task $task_index lacks valid GTF size/SHA-256 provenance." >&2
+        exit 2
+    }
+else
+    [[ $gtf_size_bytes == 0 && $gtf_sha256 == none ]] || {
+        echo "E: Band task $task_index unexpectedly carries GTF provenance." >&2
+        exit 2
+    }
+fi
+
+sha256_file() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | awk '{print $1}'
+    else
+        echo "E: sha256sum or shasum is required." >&2
+        return 1
+    fi
+}
+if [[ $output_tier != band ]]; then
+    actual_gtf_size=$(wc -c < "$gtf" | tr -d '[:space:]')
+    actual_gtf_sha256=$(sha256_file "$gtf")
+    [[ $actual_gtf_size == "$gtf_size_bytes" \
+       && $actual_gtf_sha256 == "$gtf_sha256" ]] || {
+        echo "E: GTF content no longer matches task $task_index provenance." >&2
+        exit 1
+    }
 fi
 
 input="$run_root/inputs/task-$task_index-chrom-$chromosome"
 output="$run_root/packages/chrom-$chromosome/task-$task_index"
-mkdir -p "$(dirname "$input")" "$(dirname "$output")" "$run_root/staging/task-$task_index"
+promotion_lock="$run_root/locks/context-task-$task_index.lock"
+mkdir -p "$(dirname "$input")" "$(dirname "$output")" \
+    "$run_root/staging/task-$task_index" "$(dirname "$promotion_lock")"
 
 stage_arguments=(
     "$source/scripts/stage_motif_context_inputs.py"
@@ -136,6 +172,11 @@ for motif in "${cofactor_motifs[@]}"; do
     if [[ -n $sql_motif_list ]]; then sql_motif_list+=","; fi
     sql_motif_list+="'$motif'"
 done
+if [[ $output_tier == band ]]; then
+    gtf_validation_sql="AND gtf_source IS NULL AND gtf_sha256 IS NULL AND gtf_size_bytes IS NULL"
+else
+    gtf_validation_sql="AND gtf_source IS NOT NULL AND gtf_sha256 = '$gtf_sha256' AND gtf_size_bytes = $gtf_size_bytes"
+fi
 
 validate_output() {
     local package=$1 valid unexpected
@@ -146,7 +187,7 @@ validate_output() {
         "$duckdb" -light-mode -readonly -csv -noheader context.duckdb -c "
 SELECT count(*)
 FROM motif_context_run_config
-WHERE schema_version = 5
+WHERE schema_version = $context_schema_version
   AND builder_source_commit = '$builder_source_commit'
   AND input_uniqueness = 'validated_scan_inventory'
   AND genome_id = 'homo_sapiens_grch38_ensembl113_primary'
@@ -158,7 +199,8 @@ WHERE schema_version = 5
   AND output_tier = '$output_tier'
   AND cofactor_pair_scope = 'at_least_one_member_is_a_tp73_context_locus'
   AND cofactor_motif_locus_scope = 'tp73_context_loci_plus_their_pair_partners'
-  AND cofactor_locus_pair_feature_scope = 'tp73_context_loci_only';"
+  AND cofactor_locus_pair_feature_scope = 'tp73_context_loci_only'
+  $gtf_validation_sql;"
     ) || return 1
     [[ $valid == 1 ]] || return 1
     unexpected=$(
@@ -183,6 +225,22 @@ scratch_base=${SLURM_TMPDIR:-/scratch/${USER:-sm718}}
 scratch="$scratch_base/jaspar-context-${SLURM_JOB_ID:-manual}-${SLURM_ARRAY_TASK_ID}-global-$task_index-restart-${SLURM_RESTART_COUNT:-0}-pid-$$"
 scratch_input="$scratch/input"
 spill="$scratch/duckdb-spill"
+attempt_root="$run_root/staging/task-$task_index/job-${SLURM_JOB_ID:-manual}-restart-${SLURM_RESTART_COUNT:-0}-pid-$$"
+attempt="$attempt_root/package"
+
+cleanup_owned_paths() {
+    case ${attempt_root:-} in
+        "$run_root/staging/task-$task_index/"job-*) rm -rf -- "$attempt_root" ;;
+    esac
+    case ${scratch:-} in
+        "$scratch_base/"jaspar-context-*) rm -rf -- "$scratch" ;;
+    esac
+}
+trap cleanup_owned_paths EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 mkdir -p "$scratch_input" "$spill"
 
 input_kib=$(du -sk "$input" | awk '{print $1}')
@@ -213,7 +271,7 @@ fi
 echo "I: Copying exact chromosome/motif payloads from /data to $scratch_input" >&2
 cp -R "$input/." "$scratch_input/"
 
-attempt="$run_root/staging/task-$task_index/job-${SLURM_JOB_ID:-manual}-restart-${SLURM_RESTART_COUNT:-0}-pid-$$"
+mkdir -p "$attempt_root"
 build_arguments=(
     "$source/scripts/build_motif_context.py"
     --motif-hits "$scratch_input/**/*.parquet"
@@ -236,7 +294,12 @@ build_arguments=(
     --max-temp-size "$max_temp_size" --temp-directory "$spill"
     --duckdb "$duckdb"
 )
-if [[ $output_tier != band ]]; then build_arguments+=(--gtf "$gtf"); fi
+if [[ $output_tier != band ]]; then
+    build_arguments+=(
+        --gtf "$gtf" --gtf-size-bytes "$gtf_size_bytes"
+        --gtf-sha256 "$gtf_sha256"
+    )
+fi
 
 echo "I: Durable output after validation: $output" >&2
 echo "I: Node-local DuckDB spill: $spill" >&2
@@ -255,5 +318,34 @@ if [[ -e $output ]]; then
     echo "I: Another retry completed task $task_index first; retaining validated output." >&2
     exit 0
 fi
-mv "$attempt" "$output"
+promote_no_replace() {
+    python3 - "$1" "$2" "$3" <<'PY'
+import fcntl
+import os
+import sys
+
+source, destination, lock_path = sys.argv[1:]
+with open(lock_path, "a", encoding="utf-8") as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    if os.path.lexists(destination):
+        raise SystemExit(3)
+    try:
+        os.rename(source, destination)
+    except OSError as error:
+        print(f"E: atomic context promotion failed: {error}", file=sys.stderr)
+        raise SystemExit(1)
+PY
+}
+if promote_no_replace "$attempt" "$output" "$promotion_lock"; then
+    :
+else
+    promotion_status=$?
+    if [[ $promotion_status -eq 3 && -e $output ]] \
+       && validate_output "$output"; then
+        echo "I: Another retry promoted task $task_index first; retaining validated output." >&2
+        exit 0
+    fi
+    echo "E: Could not promote context task $task_index without replacing output." >&2
+    exit 1
+fi
 echo "I: Completed context task $task_index: $output" >&2

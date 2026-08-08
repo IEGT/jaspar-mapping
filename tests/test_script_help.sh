@@ -30,6 +30,7 @@ scripts/export_bigwig_chrom_bedgraph.R
 scripts/export_bigwig_chrom_bedgraph.py
 scripts/export_dense_bed.py
 scripts/fetch_region_to_embl.py
+scripts/finalize_motif_context_run.py
 scripts/fix_missing_bidirect.sh
 scripts/fix_missing_bidirect_gz.sh
 scripts/genelists.sh

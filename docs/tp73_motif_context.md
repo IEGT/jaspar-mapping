@@ -23,6 +23,8 @@ measurements are recorded in
 Schema version 5 adds the physical-anchor, per-motif, per-distance-band feature
 surface described below; the schema-v4 report remains the benchmark for the
 unchanged interval geometry and pair construction.
+Schema version 6 preserves those feature semantics and adds content-pinned GTF
+provenance plus a run-level completeness/catalog contract.
 
 The evaluator offers `--fold-mode interleaved` for cyclic genomic blocks and
 `--fold-mode contiguous` for equal-width contiguous spans within each
@@ -303,14 +305,18 @@ payload from `/data` to node-local `/scratch` once, and uses a separate scratch
 directory for DuckDB spill. Output is built below a unique durable staging name,
 validated, and moved into its final neutral (non-Hive) path. A requeued task
 therefore reuses a completed package and never treats a partial attempt as
-complete.
+complete. Graceful failure and preemption remove only that task's unique durable
+attempt and node-local scratch tree. Untrappable termination may leave an
+orphan; finalization reports such paths but never deletes them automatically.
+Small persistent per-task lock files serialize no-replacement package promotion
+among simultaneous retries.
 
 ```sh
 scripts/submit_motif_context_slurm.sh \
-  --run-root /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_context_band_v5 \
+  --run-root /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_context_band_v6 \
   --scan-package /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_sparse_v3/package \
-  --motif-file /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_context_band_v5/plan/cofactor_motifs.txt \
-  --chrom-file /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_context_band_v5/plan/chromosomes.txt \
+  --motif-file /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_context_band_v6/plan/cofactor_motifs.txt \
+  --chrom-file /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_context_band_v6/plan/chromosomes.txt \
   --motifs-per-task 20 --array-chunk-size 1000 --output-tier band \
   --account cluster --partition requeue \
   --max-concurrent 20 --cpus 4 --memory 48G --time 0-02:00:00 \
@@ -323,11 +329,33 @@ array-size limit; the task offset maps local array indices back to the immutable
 global plan. With 2,632 cofactors, 25 chromosomes, and 20 cofactors per task,
 the plan has 3,300 tasks. A changed selection or batching policy fails rather
 than silently mixing packages. Every task row also pins the builder Git commit;
-submission rejects tracked changes and copies the two required Python programs
+submission rejects tracked changes and copies the three required Python programs
 into an immutable source snapshot below the run root. Compute workers verify the
 snapshot's plain-text commit marker and do not need Git. Motif batches are
 ordered before chromosomes so each array chunk contains a mixture of long and
-short sequence regions.
+short sequence regions. Schema-6 selected/summary plans additionally pin the GTF
+byte size and SHA-256; every worker verifies both before annotation starts.
+
+Submission always adds a small `afterany` finalizer after the last array. It
+follows `plan/context_tasks.tsv`, validates every exact package path and copied
+input manifest, probes the package schema without scanning feature rows, and
+fails if even one task is missing or incompatible. Only a complete run receives
+`final/manifest.json`, `final/context.duckdb`, and materialized task/file
+inventories. Because task execution is idempotent, a failed run can be
+resubmitted until that completeness gate passes.
+
+The completed schema-5 annotation-free band run remains valid. It can receive
+the same catalog without rebuilding or modifying any task package:
+
+```sh
+scripts/finalize_motif_context_run.py \
+  --run-root /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_informative_density200_context_band_v5 \
+  --task-file /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_informative_density200_context_band_v5/plan/context_tasks.tsv
+```
+
+Legacy schema-5 selected/summary runs cannot be certified by this finalizer,
+because their GTF contents were not recorded. Schema-5 band runs used no GTF and
+are therefore unambiguous.
 
 ```sh
 scripts/build_motif_context.py \
@@ -394,8 +422,17 @@ The package contains:
   semantics; and
 - `context.duckdb`: small read-only views over those Parquet files.
 
+After all batch packages validate, `final/context.duckdb` contains
+`context_task_inventory`, `context_file_inventory`, and
+`context_feature_file_inventory`. It deliberately does not bind one global
+Parquet wildcard. Select exact paths from the inventory and pass that bounded
+list to `anchor_motif_band_feature_files(file_paths)`, mirroring the finalized
+genome-scan query contract. `final/orphan_staging_paths.json` is report-only.
+
 Physical-anchor per-band counts, coupled strongest-locus fields, and
-threshold-qualified cofactor pair features are context schema version 5.
+threshold-qualified cofactor pair features appeared in context schema version
+5. Version 6 retains them and adds GTF content identity and finalized-run
+inventory fields.
 Signed interval capture, TP73 locus grain, distance bands, conservative
 regional-peak anchor selection, symmetric tandem score eligibility, and generic
 cofactor pair architecture appeared in version 4. Explicit genome/motif-set
@@ -413,6 +450,9 @@ time; retain raw pair tables only for selected motifs. DuckDB is bounded by
 `/scratch`; the final package remains on durable storage while join spill does
 not load the shared filesystem. The builder never removes an externally
 supplied spill directory, leaving that lifecycle to the scheduler.
+The Slurm worker supplies its own task-specific spill directory and removes it
+on ordinary exit; direct builder callers remain responsible for directories they
+provide.
 
 Both canonical `+`/`-` strands and the direct sparse writer's Hive values
 `plus`/`minus` are accepted and normalized to `+`/`-`. `motif_name` is optional
@@ -441,6 +481,10 @@ duckdb context.duckdb -c \
    FROM anchor_motif_band_feature \
    WHERE chrom = '1' AND anchor_start = 400 AND anchor_end = 416 \
    ORDER BY neighbor_motif_id, interval_distance_band_order"
+
+duckdb final/context.duckdb -c \
+  "SELECT chrom, cofactor_motif_ids, package_relative_path, package_bytes \
+   FROM context_task_inventory ORDER BY task_index LIMIT 20"
 ```
 
 ## Assessing the 150 bp boundary

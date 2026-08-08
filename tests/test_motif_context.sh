@@ -91,6 +91,23 @@ EOF
     --memory-limit 1GB --max-temp-size 1GB \
     --temp-directory "$temporary/external_duckdb_spill" >/dev/null
 
+if "$repository_root/scripts/build_motif_context.py" \
+    --motif-hits "$temporary/motif_hit.parquet" \
+    --gtf "$temporary/annotation.gtf" \
+    --gtf-size-bytes "$(wc -c < "$temporary/annotation.gtf")" \
+    --gtf-sha256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+    --output "$temporary/context_bad_gtf" \
+    --anchor-motif MA0861.2 \
+    --motif-set-id synthetic_jaspar2026 --genome-id synthetic_grch38_v1 \
+    --anchor-minimum-score 0 --partner-minimum-score 0 \
+    --score-mode log2_relative_risk --pseudocount 1 \
+    --chrom 1 --capture-flank 150 --context-flank 150 --tandem-flank 20 \
+    --memory-limit 1GB --max-temp-size 1GB >/dev/null 2>&1; then
+    echo "E: Mismatched GTF SHA-256 was accepted." >&2
+    exit 1
+fi
+[[ ! -e $temporary/context_bad_gtf ]]
+
 [[ -d "$temporary/external_duckdb_spill" ]] || {
     echo "E: external DuckDB spill directory was not created" >&2
     exit 1
@@ -172,6 +189,11 @@ EOF
         SELECT CASE WHEN (SELECT input_uniqueness FROM context_run_config)
                 <> 'validated_scan_inventory'
             THEN error('input uniqueness provenance was not recorded') END;
+        SELECT CASE WHEN EXISTS (
+            SELECT 1 FROM context_run_config
+            WHERE gtf_source IS NOT NULL OR gtf_sha256 IS NOT NULL
+               OR gtf_size_bytes IS NOT NULL
+        ) THEN error('annotation-free band tier recorded a GTF identity') END;
         SELECT CASE WHEN (SELECT COUNT(*) FROM anchor_motif_band_feature) = 0
             THEN error('band tier dropped per-band features') END;
         SELECT CASE WHEN EXISTS (
@@ -597,7 +619,7 @@ SELECT CASE WHEN NOT EXISTS (
 
 SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM motif_context_run_config
-    WHERE schema_version = 5
+    WHERE schema_version = 6
       AND builder_source_commit = 'unknown'
       AND input_uniqueness = 'deduplicate'
       AND genome_id = 'synthetic_grch38_v1'
@@ -633,6 +655,9 @@ SELECT CASE WHEN NOT EXISTS (
           'highest_score_then_nearest_center_then_coordinates'
       AND cofactor_pair_score_rule =
           'both_locus_best_scores_at_or_above_neighbor_qualifying_threshold'
+      AND gtf_source IS NOT NULL
+      AND length(gtf_sha256) = 64
+      AND gtf_size_bytes > 0
 ) THEN error('context run provenance is incomplete') END;
 
 SELECT CASE WHEN

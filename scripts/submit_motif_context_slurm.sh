@@ -31,6 +31,8 @@ Options:
   --memory-limit SIZE     DuckDB memory ceiling (default: 24GB)
   --max-temp-size SIZE    DuckDB scratch ceiling (default: 100GB)
   --time D-HH:MM:SS       Wall time per task (default: 0-08:00:00)
+  --finalizer-memory SIZE Slurm memory for completeness/catalog job (default: 8G)
+  --finalizer-time TIME   Finalizer wall time (default: 0-02:00:00)
   --dry-run               Render all sbatch commands without submitting
   -h, --help              Show this help and exit
 EOF
@@ -58,6 +60,8 @@ memory=32G
 memory_limit=24GB
 max_temp_size=100GB
 wall_time=0-08:00:00
+finalizer_memory=8G
+finalizer_time=0-02:00:00
 dry_run=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -81,6 +85,8 @@ while [[ $# -gt 0 ]]; do
         --memory-limit) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; memory_limit=$2; shift 2 ;;
         --max-temp-size) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; max_temp_size=$2; shift 2 ;;
         --time) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; wall_time=$2; shift 2 ;;
+        --finalizer-memory) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; finalizer_memory=$2; shift 2 ;;
+        --finalizer-time) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; finalizer_time=$2; shift 2 ;;
         --dry-run) dry_run=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "E: Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -118,6 +124,21 @@ fi
 [[ -x $source/scripts/run_motif_context_slurm_task.sh ]] || {
     echo "E: Context Slurm worker is not executable below $source." >&2
     exit 1
+}
+[[ -x $source/scripts/finalize_motif_context_run.py ]] || {
+    echo "E: Context finalizer is not executable below $source." >&2
+    exit 1
+}
+
+sha256_file() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | awk '{print $1}'
+    else
+        echo "E: sha256sum or shasum is required." >&2
+        return 1
+    fi
 }
 
 append_file_values() {
@@ -194,7 +215,8 @@ if [[ $dry_run -eq 0 ]] && {
 fi
 source_snapshot="$run_root/source"
 mkdir -p "$source_snapshot/scripts"
-for relative in scripts/build_motif_context.py scripts/stage_motif_context_inputs.py; do
+for relative in scripts/build_motif_context.py scripts/stage_motif_context_inputs.py \
+                scripts/finalize_motif_context_run.py; do
     snapshot_target="$source_snapshot/$relative"
     if [[ -e $snapshot_target ]]; then
         cmp -s "$source/$relative" "$snapshot_target" || {
@@ -217,11 +239,24 @@ if [[ -n $gtf ]]; then
     gtf_directory=$(cd "$(dirname "$gtf")" && pwd)
     gtf="$gtf_directory/$(basename "$gtf")"
 fi
+context_schema_version=6
+gtf_size_bytes=0
+gtf_sha256=none
+if [[ $output_tier != band ]]; then
+    gtf_size_bytes=$(wc -c < "$gtf" | tr -d '[:space:]')
+    gtf_sha256=$(sha256_file "$gtf")
+    [[ $gtf_size_bytes =~ ^[0-9]+$ && $gtf_sha256 =~ ^[0-9a-f]{64}$ ]] || {
+        echo "E: Could not determine stable GTF size and SHA-256." >&2
+        exit 1
+    }
+else
+    gtf=""
+fi
 
 task_file="$run_root/plan/context_tasks.tsv"
 candidate=$(mktemp "$run_root/plan/.context_tasks.XXXXXX")
 trap 'rm -f "$candidate"' EXIT HUP INT TERM
-printf 'task_index\tchrom\tcofactor_motif_ids\toutput_tier\tbuilder_source_commit\n' \
+printf 'task_index\tchrom\tcofactor_motif_ids\toutput_tier\tbuilder_source_commit\tcontext_schema_version\tgtf_size_bytes\tgtf_sha256\n' \
     > "$candidate"
 task_index=0
 motif_offset=0
@@ -233,9 +268,10 @@ while (( motif_offset < ${#motifs[@]} )); do
         joined+=$motif
     done
     for chromosome in "${chromosomes[@]}"; do
-        printf '%d\t%s\t%s\t%s\t%s\n' \
+        printf '%d\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n' \
             "$task_index" "$chromosome" "$joined" "$output_tier" \
-            "$source_commit" >> "$candidate"
+            "$source_commit" "$context_schema_version" "$gtf_size_bytes" \
+            "$gtf_sha256" >> "$candidate"
         task_index=$((task_index + 1))
     done
     motif_offset=$((motif_offset + motifs_per_task))
@@ -268,7 +304,7 @@ while (( task_offset < task_index )); do
     if (( remaining < chunk_tasks )); then chunk_tasks=$remaining; fi
     submission=(
         sbatch --parsable --account="$account" --partition="$partition" --requeue
-        --job-name=tp73_context_v5
+        --job-name=tp73_context_v6
         --array="0-$((chunk_tasks - 1))%${max_concurrent}"
         --export="ALL,JASPAR_CONTEXT_TASK_OFFSET=$task_offset"
         --nodes=1 --ntasks=1 --cpus-per-task="$cpus" --mem="$memory" --time="$wall_time"
@@ -294,6 +330,24 @@ while (( task_offset < task_index )); do
     chunk_number=$((chunk_number + 1))
 done
 
-if [[ $dry_run -eq 1 ]]; then exit 0; fi
-echo "I: Submitted $task_index context tasks in $chunk_number chained arrays; at most $max_concurrent run at once." >&2
+finalizer_submission=(
+    sbatch --parsable --account="$account" --partition="$partition" --requeue
+    --job-name=tp73_context_finalize
+    --dependency="afterany:$previous_job_id"
+    --nodes=1 --ntasks=1 --cpus-per-task=1
+    --mem="$finalizer_memory" --time="$finalizer_time"
+    --chdir="$run_root"
+    --output="$run_root/logs/context-finalize-%j.out"
+    --error="$run_root/logs/context-finalize-%j.err"
+    "$source_snapshot/scripts/finalize_motif_context_run.py"
+    --run-root "$run_root" --task-file "$task_file" --duckdb "$duckdb"
+)
+if [[ $dry_run -eq 1 ]]; then
+    printf '%q ' "${finalizer_submission[@]}"
+    printf '\n'
+    exit 0
+fi
+finalizer_job_id=$("${finalizer_submission[@]}")
+job_ids+=("$finalizer_job_id")
+echo "I: Submitted $task_index context tasks in $chunk_number chained arrays; at most $max_concurrent run at once; finalizer $finalizer_job_id is the completeness gate." >&2
 printf '%s\n' "${job_ids[@]}"

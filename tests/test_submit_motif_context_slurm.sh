@@ -22,15 +22,21 @@ grep -Fq -- '--cpus-per-task=2' <<< "$rendered"
 grep -Fq -- '--mem=20G' <<< "$rendered"
 grep -Fq -- '--memory-limit 14GB' <<< "$rendered"
 grep -Fq -- '--max-temp-size 80GB' <<< "$rendered"
+grep -Fq -- '--job-name=tp73_context_v6' <<< "$rendered"
 [[ $(wc -l < "$temporary/run/plan/context_tasks.tsv") -eq 5 ]]
 cmp -s "$repository_root/scripts/build_motif_context.py" \
     "$temporary/run/source/scripts/build_motif_context.py"
 cmp -s "$repository_root/scripts/stage_motif_context_inputs.py" \
     "$temporary/run/source/scripts/stage_motif_context_inputs.py"
+cmp -s "$repository_root/scripts/finalize_motif_context_run.py" \
+    "$temporary/run/source/scripts/finalize_motif_context_run.py"
 [[ $(tr -d '\r\n' < "$temporary/run/source/source_commit.txt") == \
    "$(git -C "$repository_root" rev-parse HEAD)" ]]
 snapshot=$(cd "$temporary/run/source" && pwd)
 grep -Fq -- "--source $snapshot" <<< "$rendered"
+grep -Fq -- 'tp73_context_finalize' <<< "$rendered"
+grep -Eq $'\t6\t[0-9]+\t[0-9a-f]{64}$' \
+    "$temporary/run/plan/context_tasks.tsv"
 
 # An identical dry run reuses the plan; changing it is rejected.
 "$repository_root/scripts/submit_motif_context_slurm.sh" \
@@ -63,12 +69,14 @@ batched=$("$repository_root/scripts/submit_motif_context_slurm.sh" \
     --max-concurrent 3 --dry-run)
 
 [[ $(wc -l < "$temporary/batched/plan/context_tasks.tsv") -eq 7 ]]
-[[ $(wc -l <<< "$batched") -eq 2 ]]
+[[ $(wc -l <<< "$batched") -eq 3 ]]
 grep -Fq -- '--array=0-3%3' <<< "$batched"
 grep -Fq -- '--array=0-1%3' <<< "$batched"
 grep -Fq -- 'JASPAR_CONTEXT_TASK_OFFSET=0' <<< "$batched"
 grep -Fq -- 'JASPAR_CONTEXT_TASK_OFFSET=4' <<< "$batched"
 grep -Fq -- 'afterany:DRY_RUN_CHUNK_0' <<< "$batched"
+grep -Fq -- 'afterany:DRY_RUN_CHUNK_1' <<< "$batched"
+grep -Fq -- 'finalize_motif_context_run.py' <<< "$batched"
 grep -Fq $'0\t1\tMA0001.1,MA0002.1\tband' \
     "$temporary/batched/plan/context_tasks.tsv"
 grep -Fq $'1\tX\tMA0001.1,MA0002.1\tband' \
@@ -76,6 +84,8 @@ grep -Fq $'1\tX\tMA0001.1,MA0002.1\tband' \
 grep -Fq $'2\t1\tMA0003.1,MA0004.1\tband' \
     "$temporary/batched/plan/context_tasks.tsv"
 grep -Fq $'5\tX\tMA0005.1\tband' \
+    "$temporary/batched/plan/context_tasks.tsv"
+awk -F '\t' 'NR > 1 && ($6 != 6 || $7 != 0 || $8 != "none") { exit 1 }' \
     "$temporary/batched/plan/context_tasks.tsv"
 
 echo "Motif-context Slurm submission tests passed."
