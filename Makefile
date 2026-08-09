@@ -199,6 +199,7 @@ check-duckdb: cutandrun_score_calibration pssm_scan_parquet
 	bash tests/test_negative_threshold_sensitivity.sh
 	bash tests/test_tp73_anchor_evidence.sh
 	bash tests/test_tp73_cofactor_thresholds.sh
+	bash tests/test_tp73_cofactor_enrichment.sh
 	bash tests/test_sparse_parquet.sh
 	bash tests/test_sparse_parquet_parity.sh
 	bash tests/test_genome_scan_manager.sh

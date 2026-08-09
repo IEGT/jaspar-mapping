@@ -12,6 +12,7 @@ actual="$temporary/actual-scripts.txt"
 cat > "$expected" <<'EOF'
 scripts/analyze_cutandrun_containment.py
 scripts/analyze_dense_cutandrun_coverage.py
+scripts/analyze_tp73_cofactor_enrichment.R
 scripts/bedtools_map_serial.sh
 scripts/benchmark_sparse_layout.py
 scripts/build_density_capped_thresholds.py

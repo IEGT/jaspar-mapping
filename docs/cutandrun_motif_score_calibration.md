@@ -22,6 +22,11 @@ recorded in
 The follow-up stratifying TP73 candidates by nearby TP73 pair architecture and
 combining PATZ1, TFAP2C, POU2F2, and E2F1 is reported in
 [`tp73_pair_stratified_chr1_cutandrun_20260718.md`](tp73_pair_stratified_chr1_cutandrun_20260718.md).
+The matched cofactor enrichment/depletion contract across TP73-score and
+CUT&RUN-depth strata is specified in
+[`tp73_cofactor_cutandrun_enrichment.md`](tp73_cofactor_cutandrun_enrichment.md).
+The first nine-motif chromosome-1 result is reported in
+[`tp73_cofactor_depth_enrichment_chr1_20260809.md`](tp73_cofactor_depth_enrichment_chr1_20260809.md).
 
 The scored span is the PSSM alignment interval `[start,end)`. It remains a
 computational interval rather than an assertion about the complete physical
