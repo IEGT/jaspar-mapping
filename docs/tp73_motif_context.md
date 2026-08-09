@@ -518,8 +518,18 @@ specified set of exact single-chromosome motif-hit partitions. It writes a
 source-file run config beside its Parquet output and rejects multi-chromosome
 anchors because the sparse partition files do not repeat chromosome in every
 row. `scripts/evaluate_tp73_cofactor_thresholds.R` then compares score floors
-with contiguous chromosome folds. The chromosome-1 POU2F2, POU4F1, and TCF7
-result is documented in
+with contiguous chromosome folds. Its default uses a fixed negative reference:
+an anchor is positive when its maximum cofactor score reaches the candidate
+threshold, negative when no maximum reaches `-1` (including no hit retained by
+a scan with floor `-1`), and intermediate otherwise. Intermediate anchors
+are excluded from that positive-versus-negative fit, so raising a positive
+threshold never silently moves lower-scoring anchors into the negative class.
+When the positive and negative-reference thresholds are both `0`, the
+intermediate band is empty and the result exactly reproduces the historical
+score-zero dichotomy while retaining explicit comparison provenance.
+The historical `threshold-complement` mode remains available only to reproduce
+the earlier negative-threshold sensitivity run. The chromosome-1 POU2F2,
+POU4F1, and TCF7 result is documented in
 [`tp73_pou4f1_tcf7_chr1_thresholds_20260721.md`](tp73_pou4f1_tcf7_chr1_thresholds_20260721.md).
 
 After calibration, the same sparse builder accepts `--threshold-parquet` and

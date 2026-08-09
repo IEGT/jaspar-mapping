@@ -13,6 +13,15 @@ motifs therefore have negative distances and abutting motifs have distance 0.
 For every TP73 anchor, the maximum cofactor score at interval distance at most
 150 bp is converted to an inclusive binary feature `score >= threshold`.
 
+This first `v1` calibration used the threshold complement as its comparison
+class: every anchor below a tested positive threshold was called absent. It
+therefore did not distinguish a fixed negative reference from intermediate
+scores. The reported values remain a reproducible historical result, but they
+must not be described as fixed-`-1` contrasts. New calibration defaults to
+positive `score >= T` versus negative `score < -1`, excluding intermediate
+anchors with `-1 <= score < T`. The thresholds must be re-estimated under that
+revised contrast before being promoted to a successor threshold set.
+
 The analysis contains 310,782 chromosome-1 TP73 anchors and 532,116 discordant
 anchor/sample observations (strict immersion in an anti-p73 sample only versus
 its matched control only). Held-out predictions use five contiguous,

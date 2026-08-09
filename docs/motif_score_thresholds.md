@@ -3,7 +3,7 @@
 ## Purpose
 
 `motif_score_threshold` stores versioned, evidence-derived proposals for turning
-a continuous motif score into an inclusive binary feature. It does **not**
+a continuous motif score into an inclusive positive call. It does **not**
 replace either the raw score or `scan_threshold_policy`:
 
 - `scan_threshold_policy.minimum_score` is the storage floor used while
@@ -45,6 +45,20 @@ context_relation_filter = any
 calibration_stratum_id = all_tp73_anchors
 source_minimum_score = -1
 ```
+
+That first fill used the historical threshold-complement comparison: all
+anchors below each candidate threshold formed its comparison class. Future
+TP73-context calibration uses a fixed negative reference. For a positive
+threshold `T`, maxima below `-1` are negative, maxima at or above `T` are
+positive, and `-1 <= score < T` is intermediate and excluded from the primary
+contrast. The negative anchor set therefore remains invariant while positive
+thresholds vary. The evaluator records the comparison mode, negative boundary,
+all three class sizes, and intermediate handling in its metrics and run config.
+A negative-reference threshold of `0` paired with a positive threshold of `0`
+has no intermediate class and provides the direct compatibility analysis for
+the original score-zero split.
+A successor threshold registry must carry that provenance explicitly rather
+than reinterpret the v1 rows.
 
 TP73's own direct CUT&RUN threshold is a different role (for example,
 `anchor_cutrun_support`) and must be imported from its direct calibration rather

@@ -29,6 +29,8 @@ storage floor remain authoritative.
 - context: signed interval-edge distance at most 150 bp;
 - motif feature: maximum neighboring score per TP73 anchor;
 - candidate thresholds: every observed non-negative integer, inclusive;
+- historical comparison: every anchor below a candidate threshold was treated
+  as absent; this is not the later fixed-`-1` negative-reference contrast;
 - fitting support: retained and absent classes must each contain at least 1% of
   physical anchors;
 - outcome: strict immersion in anti-p73 only versus matched control only, for

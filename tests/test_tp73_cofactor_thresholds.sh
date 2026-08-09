@@ -53,6 +53,10 @@ COPY (
                 THEN 5.0::FLOAT
             WHEN motif_id = 'M_NOISE' AND i % 5 IN (0, 1, 2)
                 THEN 5.0::FLOAT
+            WHEN motif_id = 'M_NOISE' AND i % 10 = 3
+                THEN 2.0::FLOAT
+            WHEN motif_id = 'M_NOISE' AND i % 10 = 8
+                THEN -1.0::FLOAT
             ELSE NULL
         END AS context_score,
         -1.0::DOUBLE AS source_score_floor,
@@ -97,12 +101,56 @@ SELECT CASE WHEN EXISTS (
     WHERE NOT isfinite(augmented_macro_roc_auc)
        OR NOT isfinite(median_adjusted_odds_ratio)
 ) THEN error('threshold evaluator emitted non-finite metrics') END;
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1
+    FROM metrics low
+    JOIN metrics high USING (motif_id)
+    WHERE low.motif_id = 'M_NOISE'
+      AND low.threshold = 0 AND high.threshold = 4
+      AND low.comparison_mode = 'fixed-negative-reference'
+      AND high.comparison_mode = 'fixed-negative-reference'
+      AND low.anchors_negative_reference = high.anchors_negative_reference
+      AND low.anchors_negative_reference = 20
+      AND low.anchors_intermediate = 10
+      AND high.anchors_intermediate = 20
+      AND high.negative_reference_threshold = -1
+      AND NOT high.negative_reference_inclusive
+      AND high.intermediate_excluded
+) THEN error('fixed negative reference changed with the positive threshold') END;
 SQL
 
 [[ -s $temporary/result_threshold_sweep.png ]] || {
     echo "E: Threshold evaluator did not create its plot." >&2
     exit 1
 }
+
+"$repository_root/scripts/evaluate_tp73_cofactor_thresholds.R" \
+    --anchor-evidence "$temporary/anchors.parquet" \
+    --cofactor-maxima "$temporary/maxima.parquet" \
+    --output-prefix "$temporary/result_zero_reference" \
+    --thresholds 0,4 --folds 5 --chrom-size 100000 \
+    --negative-reference-threshold 0 --spline-df 3 --compact-output \
+    --duckdb "$duckdb" >/dev/null
+
+"$duckdb" -batch :memory: >/dev/null <<SQL
+CREATE VIEW zero_reference AS
+SELECT * FROM read_csv_auto(
+    '$temporary/result_zero_reference_threshold_metrics.tsv',
+    delim='\t', header=true, nullstr='NA');
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1
+    FROM zero_reference low
+    JOIN zero_reference high USING (motif_id)
+    WHERE low.motif_id = 'M_NOISE'
+      AND low.threshold = 0 AND high.threshold = 4
+      AND low.anchors_negative_reference = 30
+      AND high.anchors_negative_reference = 30
+      AND low.anchors_intermediate = 0
+      AND high.anchors_intermediate = 10
+      AND low.negative_reference_threshold = 0
+      AND NOT low.negative_reference_inclusive
+) THEN error('score-zero compatibility contrast is incorrect') END;
+SQL
 
 "$repository_root/scripts/evaluate_tp73_cofactor_thresholds.R" \
     --anchor-evidence "$temporary/anchors.parquet" \
@@ -130,6 +178,10 @@ SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM auto_config
     WHERE threshold_mode = 'observed_integer_grid'
       AND threshold_specification = 'auto'
+      AND comparison_mode = 'fixed-negative-reference'
+      AND negative_reference_threshold = -1
+      AND NOT negative_reference_inclusive
+      AND intermediate_handling = 'excluded_from_positive_vs_negative_fit'
 ) THEN error('automatic threshold provenance is incomplete') END;
 SQL
 
@@ -167,9 +219,11 @@ SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM negative_metrics
     WHERE motif_id = 'M_NEGATIVE' AND threshold = 0
       AND anchors_retained = 0
-      AND evaluation_status = 'constant_indicator'
+      AND anchors_negative_reference = 0
+      AND anchors_intermediate = 100
+      AND evaluation_status = 'empty_comparison_class'
       AND delta_macro_roc_auc IS NULL
-) THEN error('negative-only motif did not receive an explicit unevaluable row') END;
+) THEN error('intermediate-only motif did not receive an explicit unevaluable row') END;
 SQL
 
 "$repository_root/scripts/evaluate_tp73_cofactor_thresholds.R" \
@@ -177,6 +231,7 @@ SQL
     --cofactor-maxima "$temporary/negative-maxima.parquet" \
     --output-prefix "$temporary/result_source_floor" \
     --thresholds auto-source-floor --folds 5 --chrom-size 100000 \
+    --comparison-mode threshold-complement \
     --spline-df 3 --minimum-class-fraction 0.01 --compact-output \
     --duckdb "$duckdb" >/dev/null
 
@@ -195,13 +250,14 @@ SELECT CASE WHEN (SELECT list(threshold ORDER BY threshold)
     THEN error('source-floor grid did not include every integer threshold') END;
 SELECT CASE WHEN EXISTS (
     SELECT 1 FROM source_floor_metrics
-    WHERE evaluation_status <> 'constant_indicator'
-) THEN error('source-floor boundary rows did not retain their status') END;
+    WHERE evaluation_status <> 'empty_comparison_class'
+) THEN error('source-floor complement rows did not retain their status') END;
 SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM source_floor_config
     WHERE threshold_mode = 'source_floor_integer_grid'
       AND threshold_specification = 'auto-source-floor'
       AND source_score_floor = -1
+      AND comparison_mode = 'threshold-complement'
 ) THEN error('source-floor threshold provenance is incomplete') END;
 SQL
 

@@ -194,6 +194,8 @@ phase=fitting_threshold_models
 run_child "$rscript" "$source/scripts/evaluate_tp73_cofactor_thresholds.R" \
     --anchor-evidence "$anchor_evidence" --cofactor-maxima "$maxima" \
     --output-prefix "$prefix" --thresholds auto --folds 5 \
+    --comparison-mode fixed-negative-reference \
+    --negative-reference-threshold -1 \
     --chrom-size 248956422 --spline-df 4 \
     --minimum-class-fraction "$minimum_class_fraction" --compact-output \
     --duckdb "$duckdb"
