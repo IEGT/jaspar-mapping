@@ -5,7 +5,7 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage: run_tp73_cofactor_enrichment_setup.sh --run-root DIR
-       --source-threshold-run DIR [options]
+       --source-threshold-run DIR --source-commit HEX [options]
 
 Build the shared depth-bearing TP73/CUT&RUN anchor table and then prepare the
 immutable all-motif enrichment plan. Exact TP73 sparse inputs and all 12
@@ -16,6 +16,7 @@ Options:
   --run-root DIR             New durable enrichment run
   --source-threshold-run DIR Completed threshold-calibration run
   --source DIR               Repository root (default: script parent)
+  --source-commit HEX        Clean commit captured on the login node
   --duckdb FILE              DuckDB CLI (default: duckdb)
   --threads N                DuckDB threads (default: 2)
   --memory-limit SIZE        DuckDB memory ceiling (default: 12GB)
@@ -30,6 +31,7 @@ EOF
 run_root=""
 source_threshold_run=""
 source=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+source_commit=""
 duckdb=duckdb
 threads=2
 memory_limit=12GB
@@ -39,6 +41,7 @@ while [[ $# -gt 0 ]]; do
         --run-root) run_root=${2:?}; shift 2 ;;
         --source-threshold-run) source_threshold_run=${2:?}; shift 2 ;;
         --source) source=${2:?}; shift 2 ;;
+        --source-commit) source_commit=${2:?}; shift 2 ;;
         --duckdb) duckdb=${2:?}; shift 2 ;;
         --threads) threads=${2:?}; shift 2 ;;
         --memory-limit) memory_limit=${2:?}; shift 2 ;;
@@ -48,7 +51,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -n $run_root && -n $source_threshold_run ]] || { usage >&2; exit 2; }
+[[ -n $run_root && -n $source_threshold_run &&
+   $source_commit =~ ^[0-9a-f]{40}$ ]] || { usage >&2; exit 2; }
 [[ $threads =~ ^[1-9][0-9]*$ &&
    $expected_anchor_count =~ ^[1-9][0-9]*$ ]] || {
     echo "E: --threads and --expected-anchor-count must be positive integers." >&2
@@ -85,7 +89,8 @@ if [[ -e $anchor_package ]]; then
     echo "I: Reusing completed depth-bearing TP73 anchors: $anchor" >&2
     python3 "$source/scripts/manage_tp73_cofactor_enrichment.py" prepare \
         --run-root "$run_root" --source-threshold-run "$source_threshold_run" \
-        --anchor-evidence "$anchor" --source "$source" --duckdb "$duckdb"
+        --anchor-evidence "$anchor" --source "$source" \
+        --source-commit "$source_commit" --duckdb "$duckdb"
     exit 0
 fi
 
@@ -288,6 +293,7 @@ mv "$attempt" "$anchor_package"
 phase=preparing_enrichment_plan
 run_child python3 "$source/scripts/manage_tp73_cofactor_enrichment.py" prepare \
     --run-root "$run_root" --source-threshold-run "$source_threshold_run" \
-    --anchor-evidence "$anchor" --source "$source" --duckdb "$duckdb"
+    --anchor-evidence "$anchor" --source "$source" \
+    --source-commit "$source_commit" --duckdb "$duckdb"
 phase=complete
 echo "I: Completed enrichment setup and immutable plan: $run_root" >&2

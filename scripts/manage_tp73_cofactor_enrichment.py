@@ -27,9 +27,27 @@ OUTPUT_FILES = (
     "evaluator_run_config.tsv",
 )
 
+SCIENTIFIC_SOURCE_FILES = (
+    "scripts/analyze_tp73_cofactor_enrichment.R",
+    "scripts/build_tp73_anchor_evidence.py",
+    "scripts/manage_tp73_cofactor_enrichment.py",
+    "scripts/run_tp73_cofactor_enrichment_finalize.sh",
+    "scripts/run_tp73_cofactor_enrichment_setup.sh",
+    "scripts/run_tp73_cofactor_enrichment_slurm_task.sh",
+    "scripts/submit_tp73_cofactor_enrichment_slurm.sh",
+)
+
 
 class EnrichmentError(RuntimeError):
     """Raised when an immutable run contract is not satisfied."""
+
+
+def parse_commit(value: str) -> str:
+    if re.fullmatch(r"[0-9a-f]{40}", value) is None:
+        raise argparse.ArgumentTypeError(
+            "source commit must be 40 lowercase hex digits"
+        )
+    return value
 
 
 def sha256(path: Path) -> str:
@@ -329,7 +347,16 @@ def prepare(arguments: argparse.Namespace) -> None:
     task_path = run_root / "plan" / "enrichment_tasks.tsv"
     immutable_write(task_path, output.getvalue())
 
-    commit, dirty = git_identity(source)
+    if arguments.source_commit is None:
+        commit, dirty = git_identity(source)
+    else:
+        commit, dirty = arguments.source_commit, False
+    source_file_sha256: dict[str, str] = {}
+    for relative_name in SCIENTIFIC_SOURCE_FILES:
+        path = source / relative_name
+        if not path.is_file():
+            raise EnrichmentError(f"scientific source file is missing: {path}")
+        source_file_sha256[relative_name] = sha256(path)
     config = {
         "schema_version": 1,
         "run_id": arguments.run_id,
@@ -350,6 +377,7 @@ def prepare(arguments: argparse.Namespace) -> None:
         "source_commit": commit,
         "source_dirty": dirty,
         "source_dirty_scope": "tracked_and_staged_files_only",
+        "scientific_source_file_sha256": source_file_sha256,
         "primary_negative_reference": -1,
         "secondary_negative_reference": 0,
         "negative_reference_semantics": "strict context_score < N or absent",
@@ -739,6 +767,14 @@ def parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--source-threshold-run", type=Path, required=True)
     prepare_parser.add_argument("--anchor-evidence", type=Path)
     prepare_parser.add_argument("--source", type=Path, required=True)
+    prepare_parser.add_argument(
+        "--source-commit",
+        type=parse_commit,
+        help=(
+            "commit captured by the login-node submitter; when omitted, inspect "
+            "the local Git checkout"
+        ),
+    )
     prepare_parser.add_argument("--duckdb", default="duckdb")
     prepare_parser.add_argument("--block-size", type=int, default=5_000_000)
     prepare_parser.add_argument("--spline-df", type=int, default=4)

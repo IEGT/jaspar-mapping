@@ -44,8 +44,11 @@ beyond both motif ends. Setup verifies that all pre-existing support booleans
 are reproduced exactly before publishing the new anchor package.
 
 The immutable enrichment plan records the exact source task directory, size,
-and SHA-256 for every maxima file. A worker reads the path named in its plan
-row; it does not use `*`, recursive discovery, or a directory listing.
+and SHA-256 for every maxima file, plus SHA-256 checksums for every scientific
+pipeline script. The login-node submitter records the clean Git commit; compute
+jobs verify the script checksums and do not require Git. A worker reads the path
+named in its plan row; it does not use `*`, recursive discovery, or a directory
+listing.
 
 For 2,615 motifs, the positive operating point is the historical threshold
 recommendation. Seventeen registry rows have no recommendation. They remain

@@ -196,7 +196,8 @@ if [[ $setup_needed -eq 1 ]]; then
         --error="$run_root/logs/setup-%j.err"
         "$source/scripts/run_tp73_cofactor_enrichment_setup.sh"
         --run-root "$run_root" --source-threshold-run "$source_threshold_run"
-        --source "$source" --duckdb "$duckdb" --threads 2 --memory-limit 12GB
+        --source "$source" --source-commit "$execution_source_commit"
+        --duckdb "$duckdb" --threads 2 --memory-limit 12GB
     )
     if [[ $dry_run -eq 1 ]]; then
         printf '%q ' "${setup_submission[@]}"; printf '\n'

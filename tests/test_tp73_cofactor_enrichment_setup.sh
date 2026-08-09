@@ -101,7 +101,9 @@ PY
 SLURM_TMPDIR="$temporary/scratch" \
     bash "$repository_root/scripts/run_tp73_cofactor_enrichment_setup.sh" \
     --run-root "$run_root" --source-threshold-run "$source_run" \
-    --source "$repository_root" --duckdb "$duckdb" --threads 1 \
+    --source "$repository_root" \
+    --source-commit 0123456789abcdef0123456789abcdef01234567 \
+    --duckdb "$duckdb" --threads 1 \
     --memory-limit 1GB --expected-anchor-count 2
 
 depth_anchor="$run_root/input/depth_anchor/tp73_chr1_anchor_evidence.parquet"
@@ -123,6 +125,8 @@ SQL
 SLURM_TMPDIR="$temporary/scratch" \
     bash "$repository_root/scripts/run_tp73_cofactor_enrichment_setup.sh" \
     --run-root "$run_root" --source-threshold-run "$source_run" \
-    --source "$repository_root" --duckdb "$duckdb" --threads 1 \
+    --source "$repository_root" \
+    --source-commit 0123456789abcdef0123456789abcdef01234567 \
+    --duckdb "$duckdb" --threads 1 \
     --memory-limit 1GB --expected-anchor-count 2 >/dev/null
 echo "I: TP73 cofactor enrichment setup test passed." >&2

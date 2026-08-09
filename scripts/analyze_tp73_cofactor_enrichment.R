@@ -38,6 +38,10 @@ usage <- function(status = 0L) {
         "                          Flag/skip a primary class below this fraction",
         "                          (default: 0.01)",
         "  --duckdb COMMAND        DuckDB CLI executable (default: duckdb)",
+        "  --source-commit HEX     Source commit supplied by the orchestrator",
+        "                          (default: unknown)",
+        "  --source-dirty BOOL     Whether tracked/staged source differed",
+        "                          (default: false)",
         "  -h, --help              Show this help"
     ), con = stream)
     quit(status = status)
@@ -56,14 +60,17 @@ values <- list(
     block_size = 5000000,
     spline_df = 4L,
     minimum_class_fraction = 0.01,
-    duckdb = "duckdb"
+    duckdb = "duckdb",
+    source_commit = "unknown",
+    source_dirty = "false"
 )
 known <- c(
     "--anchor-evidence", "--cofactor-maxima", "--thresholds",
     "--output-prefix", "--negative-reference-thresholds",
     "--primary-negative-reference", "--tp73-score-breaks",
     "--depth-quantiles", "--block-size", "--spline-df",
-    "--minimum-class-fraction", "--duckdb"
+    "--minimum-class-fraction", "--duckdb", "--source-commit",
+    "--source-dirty"
 )
 index <- 1L
 while (index <= length(arguments)) {
@@ -148,6 +155,13 @@ if (!is.finite(values$minimum_class_fraction) ||
     values$minimum_class_fraction >= 0.5) {
     stop("--minimum-class-fraction must be in [0,0.5)", call. = FALSE)
 }
+if (!grepl("^([0-9a-f]{40}|unknown)$", values$source_commit)) {
+    stop("--source-commit must be 40 lowercase hex digits or unknown", call. = FALSE)
+}
+if (!values$source_dirty %in% c("true", "false")) {
+    stop("--source-dirty must be true or false", call. = FALSE)
+}
+values$source_dirty <- values$source_dirty == "true"
 
 suppressPackageStartupMessages(library(data.table))
 
@@ -896,24 +910,6 @@ setcolorder(primary, c(
 setorder(primary, motif_id)
 fwrite(primary, paste0(output_prefix, "_primary_occupancy.tsv"), sep = "\t")
 
-git_value <- function(arguments) {
-    result <- suppressWarnings(system2(
-        "git", arguments, stdout = TRUE, stderr = FALSE
-    ))
-    if (length(result) == 0L) "unknown" else paste(result, collapse = " ")
-}
-source_commit <- git_value(c("rev-parse", "--verify", "HEAD"))
-git_clean <- function(arguments) {
-    status <- suppressWarnings(system2(
-        "git", arguments, stdout = FALSE, stderr = FALSE
-    ))
-    isTRUE(identical(as.integer(status), 0L))
-}
-source_dirty <- !(git_clean(c(
-    "diff", "--quiet", "--ignore-submodules", "--"
-)) && git_clean(c(
-    "diff", "--cached", "--quiet", "--ignore-submodules", "--"
-)))
 run_config <- data.table(
     anchor_evidence = values$anchor_evidence,
     cofactor_maxima = values$cofactor_maxima,
@@ -945,8 +941,8 @@ run_config <- data.table(
     block_size_bp = values$block_size,
     spline_df = values$spline_df,
     minimum_class_fraction = values$minimum_class_fraction,
-    source_commit = source_commit,
-    source_dirty = source_dirty,
+    source_commit = values$source_commit,
+    source_dirty = values$source_dirty,
     source_dirty_scope = "tracked_and_staged_files_only",
     inference_status = paste(
         "exploratory chr1; selected thresholds; missing GC/mappability/repeat/",

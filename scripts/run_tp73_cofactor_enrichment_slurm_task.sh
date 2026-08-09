@@ -84,24 +84,34 @@ done
     exit 1
 }
 
-planned_source=$(python3 -c \
-    'import json,sys; d=json.load(open(sys.argv[1])); print("%s\t%s" % (d["source_commit"], str(bool(d["source_dirty"])).lower()))' \
-    "$run_config")
+planned_source=$(python3 - "$run_config" "$source" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+config = json.load(open(sys.argv[1], encoding="utf-8"))
+source = pathlib.Path(sys.argv[2]).resolve()
+expected = config.get("scientific_source_file_sha256")
+if not isinstance(expected, dict) or not expected:
+    raise SystemExit("immutable plan lacks scientific source checksums")
+for relative_name, expected_digest in sorted(expected.items()):
+    path = (source / relative_name).resolve()
+    try:
+        path.relative_to(source)
+    except ValueError:
+        raise SystemExit(f"unsafe scientific source path: {relative_name}")
+    if not path.is_file():
+        raise SystemExit(f"scientific source file is missing: {path}")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if digest != expected_digest:
+        raise SystemExit(f"scientific source checksum differs: {path}")
+print("%s\t%s" % (
+    config["source_commit"], str(bool(config["source_dirty"])).lower()
+))
+PY
+)
 IFS=$'\t' read -r planned_source_commit planned_source_dirty <<< "$planned_source"
-current_source_commit=$(git -C "$source" rev-parse HEAD)
-[[ $current_source_commit == "$planned_source_commit" ]] || {
-    echo "E: Worker source commit differs from the immutable plan." >&2
-    exit 1
-}
-current_source_dirty=false
-if ! git -C "$source" diff --quiet --ignore-submodules -- ||
-   ! git -C "$source" diff --cached --quiet --ignore-submodules --; then
-    current_source_dirty=true
-fi
-if [[ $current_source_dirty != "$planned_source_dirty" ]]; then
-    echo "E: Worker tracked-dirty state differs from the immutable plan." >&2
-    exit 1
-fi
 
 sha256_file() {
     if command -v sha256sum >/dev/null 2>&1; then
@@ -253,7 +263,9 @@ run_child "$rscript" "$source/scripts/analyze_tp73_cofactor_enrichment.R" \
     --negative-reference-thresholds "-1,0" \
     --primary-negative-reference -1 --block-size "$block_size" \
     --spline-df "$spline_df" \
-    --minimum-class-fraction "$minimum_class_fraction" --duckdb "$duckdb"
+    --minimum-class-fraction "$minimum_class_fraction" --duckdb "$duckdb" \
+    --source-commit "$planned_source_commit" \
+    --source-dirty "$planned_source_dirty"
 
 phase=validating
 valid=$(
