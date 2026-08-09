@@ -54,20 +54,29 @@ SELECT CASE WHEN (SELECT count(*) FROM anchors) <> 4
 SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM anchors
     WHERE anchor_start = 10 AND anchor_end = 16 AND anchor_score = 3
-      AND supported_anti AND NOT supported_control
+      AND supported_anti AND depth_anti = 2
+      AND NOT supported_control AND depth_control = 0
 ) THEN error('adjacent coverage components did not immerse the anchor') END;
 SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM anchors
-    WHERE anchor_start = 20 AND NOT supported_anti AND supported_control
+    WHERE anchor_start = 20 AND NOT supported_anti AND depth_anti = 0
+      AND supported_control AND depth_control = 1
 ) THEN error('strict boundary equality was not enforced') END;
 SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM anchors
-    WHERE anchor_start = 25 AND supported_anti AND NOT supported_control
+    WHERE anchor_start = 25 AND supported_anti AND depth_anti = 1
+      AND NOT supported_control AND depth_control = 0
 ) THEN error('internal anchor was not immersed') END;
 SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM anchors
-    WHERE anchor_start = 40 AND NOT supported_anti AND supported_control
+    WHERE anchor_start = 40 AND NOT supported_anti AND depth_anti = 0
+      AND supported_control AND depth_control = 1
 ) THEN error('control immersion label is incorrect') END;
+SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM anchors
+    WHERE supported_anti <> (depth_anti > 0)
+       OR supported_control <> (depth_control > 0)
+) THEN error('support and effective depth disagree') END;
 SQL
 
 [[ -s $temporary/anchors.parquet.run_config.tsv &&
@@ -75,5 +84,9 @@ SQL
     echo "E: Anchor evidence provenance sidecars are missing." >&2
     exit 1
 }
+grep -Fq $'effective_depth_rule\t' \
+    "$temporary/anchors.parquet.run_config.tsv"
+grep -Fq $'support_column\tdepth_column\t' \
+    "$temporary/anchors.parquet.coverage_manifest.tsv"
 
 echo "TP73 anchor-evidence tests passed."

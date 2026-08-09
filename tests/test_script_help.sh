@@ -57,6 +57,7 @@ scripts/run_motif_threshold_calibration_slurm_task.sh
 scripts/run_negative_threshold_sensitivity_finalize.sh
 scripts/run_negative_threshold_sensitivity_slurm_task.sh
 scripts/run_tp73_cofactor_enrichment_finalize.sh
+scripts/run_tp73_cofactor_enrichment_setup.sh
 scripts/run_tp73_cofactor_enrichment_slurm_task.sh
 scripts/run_what_is_missing.sh
 scripts/shift_bed.awk

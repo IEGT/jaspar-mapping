@@ -123,6 +123,24 @@ for index, (motif, source) in enumerate((
     }, indent=2, sort_keys=True) + "\n")
 PY
 
+"$duckdb" -light-mode -batch :memory: >/dev/null <<SQL
+COPY (
+    SELECT * EXCLUDE (
+        depth_anti_s1, depth_control_s1, depth_anti_s2, depth_control_s2
+    ) FROM read_parquet('$source_run/input/tp73_chr1_anchor_evidence.parquet')
+) TO '$temporary/anchors-without-depth.parquet' (FORMAT PARQUET);
+SQL
+if python3 "$repository_root/scripts/manage_tp73_cofactor_enrichment.py" \
+    prepare --run-root "$temporary/invalid-run" \
+    --source-threshold-run "$source_run" \
+    --anchor-evidence "$temporary/anchors-without-depth.parquet" \
+    --source "$repository_root" --duckdb "$duckdb" \
+    > "$temporary/invalid.out" 2> "$temporary/invalid.err"; then
+    echo "E: manager accepted anchor evidence without depth" >&2
+    exit 1
+fi
+grep -Fq 'lacks matched support/depth columns' "$temporary/invalid.err"
+
 task_count=$(python3 "$repository_root/scripts/manage_tp73_cofactor_enrichment.py" \
     prepare --run-root "$run_root" --source-threshold-run "$source_run" \
     --source "$repository_root" --duckdb "$duckdb" --block-size 50000 \

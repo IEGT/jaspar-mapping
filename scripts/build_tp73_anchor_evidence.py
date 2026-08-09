@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Build a TP73 anchor table with strict CUT&RUN immersion labels."""
+"""Build a TP73 anchor table with strict CUT&RUN immersion and depth."""
 
 from __future__ import annotations
 
@@ -102,7 +102,7 @@ def coverage_ctes(index: int, sample_id: str, path: Path, chrom: str,
     FROM {prefix}_ordered
 ),
 {prefix}_grouped AS MATERIALIZED (
-    SELECT start, interval_end,
+    SELECT start, interval_end, depth,
            sum(CASE WHEN previous_end IS NULL OR start > previous_end
                     THEN 1 ELSE 0 END)
                OVER (ORDER BY start, interval_end ROWS UNBOUNDED PRECEDING)
@@ -111,7 +111,7 @@ def coverage_ctes(index: int, sample_id: str, path: Path, chrom: str,
     WHERE {prefix}_validation.valid
 ),
 {prefix}_components AS MATERIALIZED (
-    SELECT min(start) AS component_start,
+    SELECT component_id, min(start) AS component_start,
            max(interval_end) AS component_end
     FROM {prefix}_grouped
     GROUP BY component_id
@@ -139,16 +139,40 @@ CREATE TABLE anchors AS
     HAVING max(score) >= {arguments.minimum_anchor_score:.17g};
 """.strip()
     updates: list[str] = []
+    validations: list[str] = []
     for index, (sample_id, path, skip_lines) in enumerate(arguments.coverage):
+        depth_column = sample_id.replace("supported_", "depth_", 1)
         updates.append(
             f"ALTER TABLE anchors ADD COLUMN {sample_id} BOOLEAN DEFAULT false;\n"
+            f"ALTER TABLE anchors ADD COLUMN {depth_column} DOUBLE DEFAULT 0;\n"
             f"WITH {coverage_ctes(index, sample_id, path, arguments.chrom, skip_lines)}\n"
-            f"UPDATE anchors AS a SET {sample_id} = true\n"
-            f"FROM coverage_{index}_components AS c\n"
-            "WHERE c.component_start < a.anchor_start\n"
-            "  AND c.component_end > a.anchor_end;"
+            f", coverage_{index}_matches AS MATERIALIZED (\n"
+            "    SELECT a.anchor_start, a.anchor_end, max(g.depth) AS depth\n"
+            "    FROM anchors AS a\n"
+            f"    JOIN coverage_{index}_components AS c\n"
+            "      ON c.component_start < a.anchor_start\n"
+            "     AND c.component_end > a.anchor_end\n"
+            f"    JOIN coverage_{index}_grouped AS g\n"
+            "      ON g.component_id = c.component_id\n"
+            "     AND g.start < a.anchor_end\n"
+            "     AND g.interval_end > a.anchor_start\n"
+            "    GROUP BY a.anchor_start, a.anchor_end\n"
+            ")\n"
+            f"UPDATE anchors AS a SET {sample_id} = true, {depth_column} = m.depth\n"
+            f"FROM coverage_{index}_matches AS m\n"
+            "WHERE m.anchor_start = a.anchor_start\n"
+            "  AND m.anchor_end = a.anchor_end;"
+        )
+        validations.append(
+            "SELECT CASE WHEN count(*) FILTER (\n"
+            f"    WHERE {sample_id} IS NULL OR {depth_column} IS NULL\n"
+            f"       OR {depth_column} < 0\n"
+            f"       OR {sample_id} <> ({depth_column} > 0)\n"
+            f") > 0 THEN error('support/depth mismatch: {sample_id}')\n"
+            "ELSE true END FROM anchors;"
         )
     update_sql = "\n\n".join(updates)
+    validation_sql = "\n".join(validations)
     return f"""
 SET threads={arguments.threads};
 SET memory_limit={sql_string(arguments.memory_limit)};
@@ -157,6 +181,8 @@ SET preserve_insertion_order=false;
 {anchor_statement}
 
 {update_sql}
+
+{validation_sql}
 
 COPY (
 SELECT * FROM anchors
@@ -259,18 +285,23 @@ def build(arguments: argparse.Namespace) -> None:
         run_config,
         [
             "schema_version", "chrom", "anchor_motif_id", "anchor_score_rule",
-            "minimum_anchor_score", "strict_immersion_rule", "anchor_count",
+            "minimum_anchor_score", "strict_immersion_rule", "effective_depth_rule",
+            "anchor_count",
             "observed_minimum_score", "observed_maximum_score", "anchor_plus",
             "anchor_plus_sha256", "anchor_minus", "anchor_minus_sha256",
             "coverage_track_count", "duckdb",
         ],
         [{
-            "schema_version": 1,
+            "schema_version": 2,
             "chrom": arguments.chrom,
             "anchor_motif_id": "MA0861.2",
             "anchor_score_rule": "maximum_score_across_orientation_records_at_same_span",
             "minimum_anchor_score": arguments.minimum_anchor_score,
             "strict_immersion_rule": "component_start < anchor_start AND component_end > anchor_end",
+            "effective_depth_rule": (
+                "maximum bedGraph depth overlapping the anchor span within a "
+                "strictly immersing merged positive-depth component; zero otherwise"
+            ),
             "anchor_count": summary[0]["anchors"],
             "observed_minimum_score": summary[0]["minimum_score"],
             "observed_maximum_score": summary[0]["maximum_score"],
@@ -284,9 +315,10 @@ def build(arguments: argparse.Namespace) -> None:
     )
     write_tsv_atomic(
         coverage_manifest,
-        ["support_column", "path", "bytes", "mtime_ns", "sha256"],
+        ["support_column", "depth_column", "path", "bytes", "mtime_ns", "sha256"],
         [{
             "support_column": sample_id,
+            "depth_column": sample_id.replace("supported_", "depth_", 1),
             "path": path,
             "bytes": path.stat().st_size,
             "mtime_ns": path.stat().st_mtime_ns,
@@ -295,7 +327,7 @@ def build(arguments: argparse.Namespace) -> None:
     )
     print(
         f"I: wrote {summary[0]['anchors']} TP73 anchors with "
-        f"{len(arguments.coverage)} CUT&RUN support columns: {output}",
+        f"{len(arguments.coverage)} CUT&RUN support/depth pairs: {output}",
         file=sys.stderr,
     )
 
@@ -303,9 +335,9 @@ def build(arguments: argparse.Namespace) -> None:
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
         description=(
-            "Collapse plus/minus sparse TP73 records by alignment span and label "
-            "each retained anchor by strict immersion in merged positive-depth "
-            "CUT&RUN bedGraph components."
+            "Collapse plus/minus sparse TP73 records by alignment span, label "
+            "strict immersion in merged positive-depth CUT&RUN components, and "
+            "record maximum effective bedGraph depth within each anchor span."
         )
     )
     result.add_argument("--anchor-plus", type=Path, required=True)

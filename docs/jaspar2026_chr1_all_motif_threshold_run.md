@@ -57,8 +57,10 @@ Plus and minus records at an identical alignment span are one physical anchor;
 their maximum score is retained. Adjacent positive bedGraph segments are merged.
 A merged component supports `[anchor_start,anchor_end)` only when its start is
 strictly lower and its end strictly greater. `build_tp73_anchor_evidence.py`
-processes one track at a time, bounding memory, and records source paths and
-file statistics beside the Parquet output.
+processes one track at a time, bounding memory. It records both that support
+flag and the maximum bedGraph depth overlapping the anchor span, with depth
+forced to zero without strict immersion, and writes source hashes beside the
+Parquet output.
 
 ## Task and storage layout
 

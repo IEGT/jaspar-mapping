@@ -30,10 +30,18 @@ contexts. It reuses the completed threshold-calibration package:
 
 That package owns:
 
-- one shared TP73/CUT&RUN anchor Parquet;
+- one shared TP73/CUT&RUN strict-immersion anchor Parquet and a manifest that
+  pins all 12 source bedGraphs;
 - one exact schema-v4 `cofactor_maxima.parquet` for each of 2,632 non-TP73
   motifs; and
 - the finalized motif-score threshold registry.
+
+The setup job reconstructs the anchors once from the pinned TP73 plus/minus
+records and bedGraphs, adding `depth_anti_*` and `depth_control_*`. Effective
+depth is the maximum bedGraph value overlapping the motif alignment, but is
+forced to zero unless one merged positive-coverage component extends strictly
+beyond both motif ends. Setup verifies that all pre-existing support booleans
+are reproduced exactly before publishing the new anchor package.
 
 The immutable enrichment plan records the exact source task directory, size,
 and SHA-256 for every maxima file. A worker reads the path named in its plan
@@ -48,8 +56,11 @@ and is not presented as a newly inferred recommendation.
 
 ## Slurm Layout
 
-One array task evaluates one motif. It copies only the shared 2.5 MB anchor
-file and that motif's maxima file to node-local `$SLURM_TMPDIR` or `/scratch`,
+One setup job copies the pinned TP73 records and 12 bedGraphs to node-local
+scratch, verifies their hashes, builds the depth-bearing anchor package, and
+prepares the immutable task plan. One array task then evaluates one motif. It
+copies only the shared anchor file and that motif's maxima file to node-local
+`$SLURM_TMPDIR` or `/scratch`,
 runs the R evaluator in memory, validates all six compact tables, and atomically
 promotes a task directory below `/data/sm718`. Source maxima are never copied
 into the new durable run.
@@ -70,7 +81,7 @@ From the clean source checkout on Haumea:
 ```sh
 SOURCE=/data/sm718/GitHub/jaspar-mapping
 SOURCE_RUN=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_context_thresholds_v1
-RUN=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_cofactor_enrichment_v1
+RUN=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_cofactor_enrichment_v2
 
 "$SOURCE/scripts/submit_tp73_cofactor_enrichment_slurm.sh" \
   --run-root "$RUN" \
@@ -82,9 +93,10 @@ RUN=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_cofactor_enrichment_v1
   --time 00:30:00
 ```
 
-The source run's pinned DuckDB and R runtimes are reused by default. The plan,
-source hashes, submission IDs, and execution commit are recorded below
-`$RUN/plan/`.
+The source run's pinned DuckDB and R runtimes are reused by default. The setup
+job requests two CPUs, 16 GiB, and two hours; motif workers retain the smaller
+one-CPU, 16-GiB, 30-minute allocation. The plan, source hashes, submission IDs,
+and execution commit are recorded below `$RUN/plan/`.
 
 ## Progress And Restart
 
@@ -100,6 +112,7 @@ Slurm and recent logs provide live state:
 ```sh
 squeue -u "$USER"
 tail -n 30 "$RUN"/logs/enrichment-JOB_TASK.err
+tail -n 30 "$RUN"/logs/setup-SETUP_JOB.err
 ```
 
 Slurm is configured to send `SIGUSR1` two minutes before the time limit. A

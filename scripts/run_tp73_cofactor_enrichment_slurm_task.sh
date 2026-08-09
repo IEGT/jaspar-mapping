@@ -84,6 +84,25 @@ done
     exit 1
 }
 
+planned_source=$(python3 -c \
+    'import json,sys; d=json.load(open(sys.argv[1])); print("%s\t%s" % (d["source_commit"], str(bool(d["source_dirty"])).lower()))' \
+    "$run_config")
+IFS=$'\t' read -r planned_source_commit planned_source_dirty <<< "$planned_source"
+current_source_commit=$(git -C "$source" rev-parse HEAD)
+[[ $current_source_commit == "$planned_source_commit" ]] || {
+    echo "E: Worker source commit differs from the immutable plan." >&2
+    exit 1
+}
+current_source_dirty=false
+if ! git -C "$source" diff --quiet --ignore-submodules -- ||
+   ! git -C "$source" diff --cached --quiet --ignore-submodules --; then
+    current_source_dirty=true
+fi
+if [[ $current_source_dirty != "$planned_source_dirty" ]]; then
+    echo "E: Worker tracked-dirty state differs from the immutable plan." >&2
+    exit 1
+fi
+
 sha256_file() {
     if command -v sha256sum >/dev/null 2>&1; then
         sha256sum "$1" | awk '{print $1}'

@@ -209,13 +209,56 @@ def prepare(arguments: argparse.Namespace) -> None:
     source_config = load_json(source_config_path)
     source_plan_path = source_run / "plan" / "calibration_tasks.tsv"
     source_rows = read_tsv(source_plan_path)
-    anchor = Path(str(source_config.get("anchor_evidence", ""))).resolve()
+    source_anchor = Path(str(source_config.get("anchor_evidence", ""))).resolve()
+    anchor = (
+        arguments.anchor_evidence.expanduser().resolve()
+        if arguments.anchor_evidence is not None else source_anchor
+    )
     if not anchor.is_file():
-        raise EnrichmentError(f"source TP73 anchor evidence is missing: {anchor}")
+        raise EnrichmentError(f"TP73 anchor evidence is missing: {anchor}")
     registry = (source_run / "final" / "threshold_calibration" / "tables" /
                 "jaspar2026" / "motif_score_threshold" / "part-000000.parquet")
     if not registry.is_file():
         raise EnrichmentError(f"final threshold registry is missing: {registry}")
+
+    anchor_description = run_json([
+        duckdb, "-light-mode", "-json", ":memory:", "-c",
+        f"DESCRIBE SELECT * FROM read_parquet({sql_string(anchor)});",
+    ])
+    anchor_columns = {str(row["column_name"]) for row in anchor_description}
+    anti_support = sorted(
+        name for name in anchor_columns if name.startswith("supported_anti_")
+    )
+    required_anchor_columns = {"chrom", "anchor_start", "anchor_end", "anchor_score"}
+    for support in anti_support:
+        sample = support.removeprefix("supported_anti_")
+        required_anchor_columns.update({
+            f"supported_control_{sample}", f"depth_anti_{sample}",
+            f"depth_control_{sample}",
+        })
+    missing_anchor_columns = sorted(required_anchor_columns - anchor_columns)
+    if not anti_support or missing_anchor_columns:
+        raise EnrichmentError(
+            "anchor evidence lacks matched support/depth columns: "
+            + ", ".join(missing_anchor_columns or ["supported_anti_*"])
+        )
+    anchor_validation = run_json([
+        duckdb, "-light-mode", "-json", ":memory:", "-c",
+        "SELECT count(*) AS anchors, count(*) FILTER (WHERE "
+        + " OR ".join(
+            f"NOT coalesce({support} = "
+            f"(depth_anti_{support.removeprefix('supported_anti_')} > 0), false) "
+            f"OR NOT coalesce(supported_control_{support.removeprefix('supported_anti_')} = "
+            f"(depth_control_{support.removeprefix('supported_anti_')} > 0), false)"
+            for support in anti_support
+        )
+        + ") AS support_depth_mismatches FROM read_parquet("
+        + sql_string(anchor) + ");",
+    ])
+    if (len(anchor_validation) != 1
+            or int(anchor_validation[0]["anchors"]) == 0
+            or int(anchor_validation[0]["support_depth_mismatches"]) != 0):
+        raise EnrichmentError("anchor support/depth validation failed")
 
     registry_rows = run_json([
         duckdb, "-light-mode", "-json", ":memory:", "-c",
@@ -300,6 +343,7 @@ def prepare(arguments: argparse.Namespace) -> None:
         "source_threshold_task_plan_sha256": sha256(source_plan_path),
         "source_threshold_registry": str(registry),
         "source_threshold_registry_sha256": sha256(registry),
+        "source_threshold_anchor_evidence": str(source_anchor),
         "anchor_evidence": str(anchor),
         "anchor_evidence_sha256": sha256(anchor),
         "source": str(source),
@@ -693,13 +737,14 @@ def parser() -> argparse.ArgumentParser:
     )
     prepare_parser.add_argument("--run-root", type=Path, required=True)
     prepare_parser.add_argument("--source-threshold-run", type=Path, required=True)
+    prepare_parser.add_argument("--anchor-evidence", type=Path)
     prepare_parser.add_argument("--source", type=Path, required=True)
     prepare_parser.add_argument("--duckdb", default="duckdb")
     prepare_parser.add_argument("--block-size", type=int, default=5_000_000)
     prepare_parser.add_argument("--spline-df", type=int, default=4)
     prepare_parser.add_argument("--minimum-class-fraction", type=float, default=0.01)
     prepare_parser.add_argument(
-        "--run-id", default="jaspar2026_chr1_tp73_cofactor_enrichment_v1"
+        "--run-id", default="jaspar2026_chr1_tp73_cofactor_enrichment_v2"
     )
     prepare_parser.set_defaults(function=prepare)
 

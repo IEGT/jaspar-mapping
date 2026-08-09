@@ -8,7 +8,8 @@ Usage: submit_tp73_cofactor_enrichment_slurm.sh --run-root DIR
        --source-threshold-run DIR [options]
 
 Prepare and submit a restart-safe all-JASPAR chromosome-1 TP73 cofactor
-enrichment run. Each short array task reuses one completed cofactor-maxima
+enrichment run. A setup job reconstructs the depth-bearing TP73 anchor table
+from exact pinned bedGraphs. Each short array task reuses one cofactor-maxima
 Parquet, stages it and the shared TP73/CUT&RUN anchors to node-local scratch,
 and writes only compact statistics. Array chunks run serially with at most the
 requested number of tasks live. A dependent finalizer validates all exact
@@ -84,7 +85,8 @@ case "$source_threshold_run" in
     *) echo "E: --source-threshold-run must be below /data/sm718." >&2; exit 2 ;;
 esac
 
-mkdir -p "$run_root/plan" "$run_root/logs" "$run_root/tasks" "$run_root/final"
+mkdir -p "$run_root/plan" "$run_root/logs" "$run_root/tasks" \
+    "$run_root/final" "$run_root/input"
 run_root=$(cd "$run_root" && pwd -P)
 source_threshold_run=$(cd "$source_threshold_run" && pwd -P)
 source=$(cd "$source" && pwd -P)
@@ -99,6 +101,7 @@ rscript="$runtime_prefix/r/bin/Rscript"
 
 task_file="$run_root/plan/enrichment_tasks.tsv"
 run_config="$run_root/plan/run_config.json"
+setup_needed=0
 if [[ $reuse_plan -eq 1 ]]; then
     [[ -s $task_file && -s $run_config ]] || {
         echo "E: --reuse-plan requires an existing immutable plan." >&2
@@ -130,7 +133,9 @@ PY
     IFS=$'\t' read -r task_count plan_source_commit <<< "$plan_values"
     scientific_paths=(
         scripts/analyze_tp73_cofactor_enrichment.R
+        scripts/build_tp73_anchor_evidence.py
         scripts/manage_tp73_cofactor_enrichment.py
+        scripts/run_tp73_cofactor_enrichment_setup.sh
         scripts/run_tp73_cofactor_enrichment_slurm_task.sh
     )
     git -C "$source" cat-file -e "$plan_source_commit^{commit}" 2>/dev/null || {
@@ -143,12 +148,19 @@ PY
         exit 1
     fi
 else
-    task_count=$(python3 "$source/scripts/manage_tp73_cofactor_enrichment.py" prepare \
-        --run-root "$run_root" --source-threshold-run "$source_threshold_run" \
-        --source "$source" --duckdb "$duckdb")
-    plan_source_commit=$(python3 -c \
-        'import json,sys; print(json.load(open(sys.argv[1]))["source_commit"])' \
-        "$run_config")
+    [[ ! -e $task_file && ! -e $run_config ]] || {
+        echo "E: Existing plan requires --reuse-plan." >&2
+        exit 1
+    }
+    task_count=$(python3 - "$source_threshold_run/plan/calibration_tasks.tsv" <<'PY'
+import csv
+import sys
+with open(sys.argv[1], newline="") as handle:
+    print(sum(1 for _ in csv.DictReader(handle, delimiter="\t")))
+PY
+    )
+    plan_source_commit=$(git -C "$source" rev-parse HEAD)
+    setup_needed=1
 fi
 [[ $task_count =~ ^[1-9][0-9]*$ ]] || {
     echo "E: Invalid prepared task count: $task_count" >&2
@@ -173,8 +185,29 @@ if [[ -e $submission_record && $dry_run -eq 0 ]]; then
     exit 1
 fi
 
-array_jobs=()
+setup_job=reused
 dependency=()
+if [[ $setup_needed -eq 1 ]]; then
+    setup_submission=(
+        sbatch --parsable --account="$account" --partition="$partition" --requeue
+        --job-name=jaspar_enrich_setup --nodes=1 --ntasks=1 --cpus-per-task=2
+        --mem=16G --time=02:00:00 --signal=B:USR1@120 --chdir="$source"
+        --output="$run_root/logs/setup-%j.out"
+        --error="$run_root/logs/setup-%j.err"
+        "$source/scripts/run_tp73_cofactor_enrichment_setup.sh"
+        --run-root "$run_root" --source-threshold-run "$source_threshold_run"
+        --source "$source" --duckdb "$duckdb" --threads 2 --memory-limit 12GB
+    )
+    if [[ $dry_run -eq 1 ]]; then
+        printf '%q ' "${setup_submission[@]}"; printf '\n'
+        setup_job=SETUP_JOB_ID
+    else
+        setup_job=$("${setup_submission[@]}")
+    fi
+    dependency=(--dependency="afterok:$setup_job")
+fi
+
+array_jobs=()
 array_start=0
 array_chunk=0
 while (( array_start < task_count )); do
@@ -191,7 +224,11 @@ while (( array_start < task_count )); do
         --time="$wall_time" --signal=B:USR1@120 --chdir="$source"
         --output="$run_root/logs/enrichment-%A_%a.out"
         --error="$run_root/logs/enrichment-%A_%a.err"
-        "${dependency[@]}"
+    )
+    if (( ${#dependency[@]} > 0 )); then
+        submission+=("${dependency[@]}")
+    fi
+    submission+=(
         "$source/scripts/run_tp73_cofactor_enrichment_slurm_task.sh"
         --run-root "$run_root" --source-threshold-run "$source_threshold_run"
         --task-file "$task_file" --run-config "$run_config" --source "$source"
@@ -228,11 +265,11 @@ if [[ $dry_run -eq 1 ]]; then
 fi
 final_job=$("${final_submission[@]}")
 
-printf 'array_jobs\tfinalize_job\ttask_count\tmax_concurrent\tarray_size\tarray_chunks\tplan_source_commit\texecution_source_commit\treused_plan\n' \
+printf 'setup_job\tarray_jobs\tfinalize_job\ttask_count\tmax_concurrent\tarray_size\tarray_chunks\tplan_source_commit\texecution_source_commit\treused_plan\n' \
     > "$submission_record"
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$array_jobs_text" "$final_job" "$task_count" "$max_concurrent" \
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$setup_job" "$array_jobs_text" "$final_job" "$task_count" "$max_concurrent" \
     "$array_size" "$array_chunk" "$plan_source_commit" \
     "$execution_source_commit" "$reuse_plan" >> "$submission_record"
-echo "I: Submitted arrays=$array_jobs_text finalizer=$final_job tasks=$task_count live=$max_concurrent chunks=$array_chunk" >&2
+echo "I: Submitted setup=$setup_job arrays=$array_jobs_text finalizer=$final_job tasks=$task_count live=$max_concurrent chunks=$array_chunk" >&2
 printf '%s\n' "$array_jobs_text"

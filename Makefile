@@ -200,6 +200,7 @@ check-duckdb: cutandrun_score_calibration pssm_scan_parquet
 	bash tests/test_tp73_anchor_evidence.sh
 	bash tests/test_tp73_cofactor_thresholds.sh
 	bash tests/test_tp73_cofactor_enrichment.sh
+	bash tests/test_tp73_cofactor_enrichment_setup.sh
 	bash tests/test_tp73_cofactor_enrichment_manager.sh
 	bash tests/test_sparse_parquet.sh
 	bash tests/test_sparse_parquet_parity.sh

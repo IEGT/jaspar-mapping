@@ -72,9 +72,21 @@ bigwig_exporter=${bigwig_exporter:-$source/scripts/export_bigwig_chrom_bedgraph.
 }
 
 if [[ -e $output ]]; then
-    valid=$("$duckdb" -csv -noheader :memory: -c "
+    columns=$("$duckdb" -csv -noheader :memory: -c "
+DESCRIBE SELECT * FROM read_parquet('$output');")
+    if grep -q '^depth_anti_saos2_TA,' <<< "$columns" &&
+       grep -q '^depth_control_skmel29_2_DN,' <<< "$columns"; then
+        valid=$("$duckdb" -csv -noheader :memory: -c "
 SELECT count(*) = 310782
+   AND count(*) FILTER (
+       WHERE supported_anti_saos2_TA <> (depth_anti_saos2_TA > 0)
+          OR supported_control_skmel29_2_DN <>
+             (depth_control_skmel29_2_DN > 0)
+   ) = 0
 FROM read_parquet('$output');")
+    else
+        valid=false
+    fi
     [[ $valid == true ]] || { echo "E: Existing anchor evidence is incompatible." >&2; exit 1; }
     echo "I: Reusing completed TP73 anchor evidence: $output" >&2
     exit 0
@@ -139,6 +151,13 @@ SELECT count(*) = 310782
           OR supported_control_saos2_TA IS NULL
           OR supported_anti_skmel29_2_DN IS NULL
           OR supported_control_skmel29_2_DN IS NULL
+          OR depth_anti_saos2_TA IS NULL
+          OR depth_control_saos2_TA IS NULL
+          OR depth_anti_skmel29_2_DN IS NULL
+          OR depth_control_skmel29_2_DN IS NULL
+          OR supported_anti_saos2_TA <> (depth_anti_saos2_TA > 0)
+          OR supported_control_skmel29_2_DN <>
+             (depth_control_skmel29_2_DN > 0)
    ) = 0
 FROM read_parquet('$output');" | tail -1)
 [[ $valid == true ]] || { echo "E: TP73 anchor evidence failed validation." >&2; exit 1; }
