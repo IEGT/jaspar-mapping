@@ -167,3 +167,7 @@ For all JASPAR motifs, use one motif per restart-safe cluster task, combine the
 primary rows, and apply BH once across the complete prespecified motif family.
 Depth and TP73-score strata remain secondary until a separate validation set
 is available.
+
+The production orchestration, exact input inventory, restart contract, and
+combined DuckDB/Parquet query surface are documented in
+[`jaspar2026_chr1_all_cofactor_enrichment_run.md`](jaspar2026_chr1_all_cofactor_enrichment_run.md).

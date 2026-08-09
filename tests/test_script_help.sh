@@ -39,6 +39,7 @@ scripts/inspect_chr1_dense_dry_run.sh
 scripts/manage_genome_scan.py
 scripts/manage_motif_density_calibration.py
 scripts/manage_motif_threshold_calibration.py
+scripts/manage_tp73_cofactor_enrichment.py
 scripts/plot_informative_threshold_distribution.py
 scripts/plot_tp73_score_distributions.R
 scripts/query_genome_scan.py
@@ -55,6 +56,8 @@ scripts/run_motif_threshold_calibration_finalize.sh
 scripts/run_motif_threshold_calibration_slurm_task.sh
 scripts/run_negative_threshold_sensitivity_finalize.sh
 scripts/run_negative_threshold_sensitivity_slurm_task.sh
+scripts/run_tp73_cofactor_enrichment_finalize.sh
+scripts/run_tp73_cofactor_enrichment_slurm_task.sh
 scripts/run_what_is_missing.sh
 scripts/shift_bed.awk
 scripts/stage_fasta_region.py
@@ -64,6 +67,7 @@ scripts/submit_motif_context_slurm.sh
 scripts/submit_motif_density_calibration_slurm.sh
 scripts/submit_motif_threshold_calibration_slurm.sh
 scripts/submit_negative_threshold_sensitivity_slurm.sh
+scripts/submit_tp73_cofactor_enrichment_slurm.sh
 scripts/summarize_tp73_cutandrun_threshold.R
 scripts/summarize_tp73_patz1_cutandrun_threshold.R
 EOF

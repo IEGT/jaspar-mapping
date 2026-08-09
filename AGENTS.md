@@ -9,6 +9,9 @@ before designing or changing code.
 
 For motif-score calibration against raw CUT&RUN fragments, also read
 [`docs/cutandrun_motif_score_calibration.md`](docs/cutandrun_motif_score_calibration.md).
+For all-JASPAR enrichment/depletion around TP73 anchors, depth-stratified
+CUT&RUN summaries, or their Slurm production run, also read
+[`docs/jaspar2026_chr1_all_cofactor_enrichment_run.md`](docs/jaspar2026_chr1_all_cofactor_enrichment_run.md).
 
 For TP73-local motif spacing, tandem TP73 sites, or transcript/intron context,
 also read [`docs/tp73_motif_context.md`](docs/tp73_motif_context.md).

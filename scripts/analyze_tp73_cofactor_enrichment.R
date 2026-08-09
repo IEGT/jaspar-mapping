@@ -903,10 +903,17 @@ git_value <- function(arguments) {
     if (length(result) == 0L) "unknown" else paste(result, collapse = " ")
 }
 source_commit <- git_value(c("rev-parse", "--verify", "HEAD"))
-git_status <- suppressWarnings(system2(
-    "git", c("status", "--porcelain"), stdout = TRUE, stderr = FALSE
-))
-source_dirty <- length(git_status) > 0L
+git_clean <- function(arguments) {
+    status <- suppressWarnings(system2(
+        "git", arguments, stdout = FALSE, stderr = FALSE
+    ))
+    isTRUE(identical(as.integer(status), 0L))
+}
+source_dirty <- !(git_clean(c(
+    "diff", "--quiet", "--ignore-submodules", "--"
+)) && git_clean(c(
+    "diff", "--cached", "--quiet", "--ignore-submodules", "--"
+)))
 run_config <- data.table(
     anchor_evidence = values$anchor_evidence,
     cofactor_maxima = values$cofactor_maxima,
@@ -940,6 +947,7 @@ run_config <- data.table(
     minimum_class_fraction = values$minimum_class_fraction,
     source_commit = source_commit,
     source_dirty = source_dirty,
+    source_dirty_scope = "tracked_and_staged_files_only",
     inference_status = paste(
         "exploratory chr1; selected thresholds; missing GC/mappability/repeat/",
         "accessibility/GFP and independent validation", sep = ""

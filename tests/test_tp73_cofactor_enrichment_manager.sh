@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+repository_root=$(cd "$(dirname "$0")/.." && pwd)
+temporary=$(mktemp -d "${TMPDIR:-/tmp}/jaspar-enrichment-manager.XXXXXX")
+trap 'rm -rf "$temporary"' EXIT HUP INT TERM
+
+duckdb=${DUCKDB:-duckdb}
+command -v "$duckdb" >/dev/null 2>&1 || {
+    echo "I: DuckDB unavailable; skipping enrichment-manager test." >&2
+    exit 0
+}
+command -v Rscript >/dev/null 2>&1 || {
+    echo "I: Rscript unavailable; skipping enrichment-manager test." >&2
+    exit 0
+}
+Rscript -e 'library(data.table)' >/dev/null 2>&1 || {
+    echo "I: data.table unavailable; skipping enrichment-manager test." >&2
+    exit 0
+}
+
+source_run="$temporary/source-threshold-run"
+run_root="$temporary/enrichment-run"
+mkdir -p "$source_run/plan" "$source_run/input" \
+    "$source_run/final/threshold_calibration/tables/jaspar2026/motif_score_threshold"
+printf 'task_index\tmotif_id\tmotif_name\n0\tM_ENRICHED\tSynthetic enriched\n1\tM_DEPLETED\tSynthetic depleted\n' \
+    > "$source_run/plan/calibration_tasks.tsv"
+
+"$duckdb" -light-mode -batch :memory: >/dev/null <<SQL
+COPY (
+    SELECT
+        '1'::VARCHAR AS chrom,
+        (i * 1000)::BIGINT AS anchor_start,
+        (i * 1000 + 16)::BIGINT AS anchor_end,
+        (((i * 7) % 17) / 2.0)::FLOAT AS anchor_score,
+        ((i % 8 IN (0, 1) AND floor(i / 8) % 5 <> 0)
+          OR (i % 8 IN (4, 5) AND floor(i / 8) % 5 = 0)
+          OR i % 8 = 6) AS supported_anti_s1,
+        ((i % 8 IN (4, 5) AND floor(i / 8) % 5 <> 0)
+          OR (i % 8 IN (0, 1) AND floor(i / 8) % 5 = 0)
+          OR i % 8 = 2) AS supported_control_s1,
+        CASE WHEN supported_anti_s1 THEN 1 + (i % 10) ELSE 0 END::FLOAT
+            AS depth_anti_s1,
+        CASE WHEN supported_control_s1 THEN 1 + (i % 7) ELSE 0 END::FLOAT
+            AS depth_control_s1,
+        ((i % 8 IN (0, 1) AND floor(i / 8) % 5 <> 1)
+          OR (i % 8 IN (4, 5) AND floor(i / 8) % 5 = 1)
+          OR i % 8 = 7) AS supported_anti_s2,
+        ((i % 8 IN (4, 5) AND floor(i / 8) % 5 <> 1)
+          OR (i % 8 IN (0, 1) AND floor(i / 8) % 5 = 1)
+          OR i % 8 = 3) AS supported_control_s2,
+        CASE WHEN supported_anti_s2 THEN 1 ELSE 0 END::FLOAT
+            AS depth_anti_s2,
+        CASE WHEN supported_control_s2 THEN 1 ELSE 0 END::FLOAT
+            AS depth_control_s2
+    FROM range(400) AS r(i)
+) TO '$source_run/input/tp73_chr1_anchor_evidence.parquet'
+  (FORMAT PARQUET);
+
+COPY (
+    SELECT '1'::VARCHAR AS chrom, (i * 1000)::BIGINT AS anchor_start,
+           (i * 1000 + 16)::BIGINT AS anchor_end,
+           'M_ENRICHED'::VARCHAR AS motif_id,
+           CASE WHEN i % 8 IN (0, 1) THEN 5.0
+                WHEN i % 8 = 2 THEN -0.5
+                WHEN i % 8 = 3 THEN -1.0 ELSE NULL END::FLOAT AS context_score,
+           -1.0::DOUBLE AS source_score_floor, 150::BIGINT AS context_flank_bp,
+           'signed_interval_edge_distance'::VARCHAR AS context_distance_metric
+    FROM range(400) AS r(i)
+) TO '$temporary/enriched.parquet' (FORMAT PARQUET);
+COPY (
+    SELECT '1'::VARCHAR AS chrom, (i * 1000)::BIGINT AS anchor_start,
+           (i * 1000 + 16)::BIGINT AS anchor_end,
+           'M_DEPLETED'::VARCHAR AS motif_id,
+           CASE WHEN i % 8 IN (4, 5) THEN 5.0
+                WHEN i % 8 = 6 THEN -0.5
+                WHEN i % 8 = 7 THEN -1.0 ELSE NULL END::FLOAT AS context_score,
+           -1.0::DOUBLE AS source_score_floor, 150::BIGINT AS context_flank_bp,
+           'signed_interval_edge_distance'::VARCHAR AS context_distance_metric
+    FROM range(400) AS r(i)
+) TO '$temporary/depleted.parquet' (FORMAT PARQUET);
+COPY (
+    SELECT * FROM (VALUES
+      ('M_ENRICHED', 'Synthetic enriched', 4.0::DOUBLE, 'recommended'),
+      ('M_DEPLETED', 'Synthetic depleted', NULL::DOUBLE, 'no_eligible_threshold')
+    ) AS t(motif_id, motif_name, recommended_threshold, calibration_status)
+) TO '$source_run/final/threshold_calibration/tables/jaspar2026/motif_score_threshold/part-000000.parquet'
+  (FORMAT PARQUET);
+SQL
+
+python3 - "$source_run" "$temporary/enriched.parquet" \
+    "$temporary/depleted.parquet" <<'PY'
+import hashlib
+import json
+import pathlib
+import shutil
+import sys
+
+root = pathlib.Path(sys.argv[1])
+anchor = root / "input/tp73_chr1_anchor_evidence.parquet"
+(root / "plan/run_config.json").write_text(json.dumps({
+    "anchor_evidence": str(anchor.resolve()),
+    "source_minimum_score": -1,
+    "context_flank_bp": 150,
+}, indent=2) + "\n")
+for index, (motif, source) in enumerate((
+    ("M_ENRICHED", pathlib.Path(sys.argv[2])),
+    ("M_DEPLETED", pathlib.Path(sys.argv[3])),
+)):
+    directory = root / "tasks" / f"task-{index:06d}-{motif}"
+    directory.mkdir(parents=True)
+    target = directory / "cofactor_maxima.parquet"
+    shutil.copyfile(source, target)
+    digest = hashlib.sha256(target.read_bytes()).hexdigest()
+    (directory / "complete.json").write_text(json.dumps({
+        "schema_version": 1,
+        "task_index": index,
+        "motif_id": motif,
+        "files": {"cofactor_maxima.parquet": {
+            "bytes": target.stat().st_size, "sha256": digest,
+        }},
+    }, indent=2, sort_keys=True) + "\n")
+PY
+
+task_count=$(python3 "$repository_root/scripts/manage_tp73_cofactor_enrichment.py" \
+    prepare --run-root "$run_root" --source-threshold-run "$source_run" \
+    --source "$repository_root" --duckdb "$duckdb" --block-size 50000 \
+    --spline-df 3)
+[[ $task_count == 2 ]]
+
+real_rscript=$(command -v Rscript)
+cat > "$temporary/slow-rscript" <<EOF
+#!/usr/bin/env bash
+sleep 2
+exec "$real_rscript" "\$@"
+EOF
+chmod +x "$temporary/slow-rscript"
+mkdir -p "$temporary/scratch-0"
+progress_log="$temporary/task-0.err"
+SLURM_ARRAY_TASK_ID=0 SLURM_TMPDIR="$temporary/scratch-0" \
+    bash "$repository_root/scripts/run_tp73_cofactor_enrichment_slurm_task.sh" \
+    --run-root "$run_root" --source-threshold-run "$source_run" \
+    --task-file "$run_root/plan/enrichment_tasks.tsv" \
+    --run-config "$run_root/plan/run_config.json" \
+    --source "$repository_root" --duckdb "$duckdb" \
+    --rscript "$temporary/slow-rscript" --block-size 50000 --spline-df 3 \
+    2> "$progress_log" &
+worker_pid=$!
+for _ in $(seq 1 100); do
+    grep -q 'Node-local work:' "$progress_log" 2>/dev/null && break
+    kill -0 "$worker_pid" 2>/dev/null || {
+        cat "$progress_log" >&2
+        echo "E: enrichment worker exited before SIGUSR1 test" >&2
+        exit 1
+    }
+    sleep 0.05
+done
+kill -USR1 "$worker_pid"
+kill -0 "$worker_pid"
+wait "$worker_pid"
+[[ $(grep -c 'progress signal=SIGUSR1' "$progress_log") == 1 ]]
+
+mkdir -p "$temporary/scratch-1"
+SLURM_ARRAY_TASK_ID=1 SLURM_TMPDIR="$temporary/scratch-1" \
+    bash "$repository_root/scripts/run_tp73_cofactor_enrichment_slurm_task.sh" \
+    --run-root "$run_root" --source-threshold-run "$source_run" \
+    --task-file "$run_root/plan/enrichment_tasks.tsv" \
+    --run-config "$run_root/plan/run_config.json" \
+    --source "$repository_root" --duckdb "$duckdb" --rscript Rscript \
+    --block-size 50000 --spline-df 3
+
+reuse=$(SLURM_ARRAY_TASK_ID=0 SLURM_TMPDIR="$temporary/scratch-0" \
+    bash "$repository_root/scripts/run_tp73_cofactor_enrichment_slurm_task.sh" \
+    --run-root "$run_root" --source-threshold-run "$source_run" \
+    --task-file "$run_root/plan/enrichment_tasks.tsv" \
+    --run-config "$run_root/plan/run_config.json" \
+    --source "$repository_root" --duckdb "$duckdb" --rscript Rscript \
+    --block-size 50000 --spline-df 3 2>&1)
+[[ $reuse == *"Reusing completed enrichment task"* ]]
+
+status=$(python3 "$repository_root/scripts/manage_tp73_cofactor_enrichment.py" \
+    status --run-root "$run_root")
+[[ $status == *$'complete\t2'* && $status == *$'pending\t0'* ]]
+
+commit=$(git -C "$repository_root" rev-parse HEAD)
+bash "$repository_root/scripts/run_tp73_cofactor_enrichment_finalize.sh" \
+    --run-root "$run_root" --source "$repository_root" --duckdb "$duckdb" \
+    --finalization-source-commit "$commit"
+
+database="$run_root/final/cofactor_enrichment/tp73_cofactor_enrichment.duckdb"
+"$duckdb" -light-mode -batch "$database" >/dev/null <<'SQL'
+SELECT CASE WHEN (SELECT count(*) FROM cofactor_overview) <> 2
+    THEN error('overview cardinality is wrong') END;
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM cofactor_task
+    WHERE motif_id = 'M_DEPLETED' AND recommended_threshold IS NULL
+      AND positive_threshold = 0
+      AND positive_threshold_role = 'descriptive_fallback'
+) THEN error('null recommendation fallback was not explicit') END;
+SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM cofactor_primary_occupancy
+    WHERE requested_motifs_in_multiple_testing_scope <> 2
+      OR multiple_testing_scope NOT LIKE 'all planned%'
+) THEN error('all-motif multiple-testing scope is wrong') END;
+SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM pragma_table_info('cofactor_primary_occupancy')
+    WHERE name = 'q_value_bh_panel'
+) THEN error('per-task q value leaked into final output') END;
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM cofactor_primary_occupancy
+    WHERE q_value_bh_all_jaspar IS NOT NULL
+) THEN error('all-motif BH values were not calculated') END;
+SQL
+
+[[ ! -e "$run_root/tasks/task-000000-M_ENRICHED/cofactor_maxima.parquet" ]]
+echo "I: TP73 cofactor enrichment manager test passed." >&2
