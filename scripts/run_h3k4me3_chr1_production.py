@@ -342,14 +342,8 @@ def argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scan-package", required=True, type=Path)
     parser.add_argument("--track-root", required=True, type=Path)
     parser.add_argument("--source", type=Path, default=source)
-    parser.add_argument(
-        "--track-manifest", type=Path,
-        default=source / "config" / "h3k4me3_cutandrun_tracks_v1.tsv",
-    )
-    parser.add_argument(
-        "--thresholds", type=Path,
-        default=source / "config" / "h3k4me3_chr1_pilot_cofactors_v1.tsv",
-    )
+    parser.add_argument("--track-manifest", type=Path)
+    parser.add_argument("--thresholds", type=Path)
     parser.add_argument("--duckdb", required=True, type=Path)
     parser.add_argument("--rscript", required=True, type=Path)
     parser.add_argument("--bigwig-python", required=True, type=Path)
@@ -371,6 +365,14 @@ def argument_parser() -> argparse.ArgumentParser:
 
 def validate_arguments(arguments: argparse.Namespace) -> None:
     arguments.source = absolute(arguments.source, "source", directory=True)
+    if arguments.track_manifest is None:
+        arguments.track_manifest = (
+            arguments.source / "config" / "h3k4me3_cutandrun_tracks_v1.tsv"
+        )
+    if arguments.thresholds is None:
+        arguments.thresholds = (
+            arguments.source / "config" / "h3k4me3_chr1_pilot_cofactors_v1.tsv"
+        )
     arguments.annotation_run = absolute(
         arguments.annotation_run, "annotation run", directory=True
     )
