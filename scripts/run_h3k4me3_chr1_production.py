@@ -192,10 +192,13 @@ def stage_scan_inputs(arguments: argparse.Namespace, motifs: list[str]) -> Path:
     return output
 
 
-def copy_scan_inputs(stage: Path, scratch: Path) -> dict[str, dict[str, Path]]:
+def copy_scan_inputs(
+    stage: Path, scratch: Path
+) -> tuple[dict[str, dict[str, Path]], dict[str, dict[str, Path]]]:
     manifest_path = stage / "input_manifest.json"
     content = json.loads(manifest_path.read_text(encoding="utf-8"))
     result: dict[str, dict[str, Path]] = {}
+    durable: dict[str, dict[str, Path]] = {}
     for row in content.get("files", []):
         motif = str(row["motif_id"])
         strand = str(row["strand"])
@@ -208,10 +211,39 @@ def copy_scan_inputs(stage: Path, scratch: Path) -> dict[str, dict[str, Path]]:
         print(f"I: copying {motif} {label} to scratch", file=sys.stderr, flush=True)
         shutil.copy2(source, target)
         result.setdefault(motif, {})[label] = target
+        durable.setdefault(motif, {})[label] = source
     incomplete = [motif for motif, paths in result.items() if set(paths) != {"plus", "minus"}]
     if incomplete:
         raise ProductionError(f"staged motif inputs lack both strands: {incomplete}")
-    return result
+    return result, durable
+
+
+def canonicalize_published_provenance(
+    attempt: Path, replacements: dict[Path, Path]
+) -> None:
+    text_files = sorted(
+        path for path in attempt.rglob("*")
+        if path.is_file() and path.suffix in {".json", ".tsv"}
+    )
+    serialized = sorted(
+        ((str(source), str(target)) for source, target in replacements.items()),
+        key=lambda pair: len(pair[0]),
+        reverse=True,
+    )
+    for path in text_files:
+        content = path.read_text(encoding="utf-8")
+        updated = content
+        for source, target in serialized:
+            updated = updated.replace(source, target)
+        unresolved = [source for source, _target in serialized if source in updated]
+        if unresolved:
+            raise ProductionError(
+                f"failed to canonicalize provenance paths in {path}: {unresolved}"
+            )
+        if updated != content:
+            staging = path.with_name(f".{path.name}.canonicalizing")
+            staging.write_text(updated, encoding="utf-8")
+            os.replace(staging, path)
 
 
 def build_contract(arguments: argparse.Namespace, anchor: Path, stage: Path,
@@ -252,6 +284,12 @@ def build_contract(arguments: argparse.Namespace, anchor: Path, stage: Path,
         "genomic_block_size_bp": arguments.block_size,
         "include_occupancy_analysis": arguments.include_occupancy_analysis,
         "analysis_role": analysis_role(arguments.chrom),
+        "published_provenance_path_policy": {
+            "outputs": "absolute_final_paths",
+            "anchor": "durable_annotation_source",
+            "motif_inputs": "durable_staged_hard_links",
+            "bedgraph_intermediates": "ephemeral_execution_trace_only",
+        },
     }
 
 
@@ -492,7 +530,7 @@ def main() -> int:
         set_phase("copy-inputs-to-scratch")
         scratch_anchor = scratch / f"tp73_context_anchor_chr{arguments.chrom}.parquet"
         shutil.copy2(anchor, scratch_anchor)
-        cofactor_paths = copy_scan_inputs(stage, scratch)
+        cofactor_paths, durable_cofactor_paths = copy_scan_inputs(stage, scratch)
 
         evidence = attempt / "tp73_anchor_evidence.parquet"
         signal_output = attempt / "h3k4me3_anchor_signal.parquet"
@@ -591,6 +629,18 @@ def main() -> int:
                 "--source-dirty", "false",
                 "--inference-status", occupancy_inference_status(arguments.chrom),
             ])
+
+        replacements = {
+            attempt: final,
+            scratch_anchor: anchor,
+        }
+        for motif in motifs:
+            for label in ("plus", "minus"):
+                replacements[cofactor_paths[motif][label]] = (
+                    durable_cofactor_paths[motif][label]
+                )
+        set_phase("canonicalize-published-provenance")
+        canonicalize_published_provenance(attempt, replacements)
 
         set_phase("validate-and-publish")
         validation = validate_outputs(arguments, attempt, anchor, len(motifs))

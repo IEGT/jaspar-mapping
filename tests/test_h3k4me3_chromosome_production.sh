@@ -84,7 +84,44 @@ assert contract2["analysis_role"] == (
     "held_out_chromosome_validation_thresholds_fixed_on_chr1"
 )
 assert contract2["include_occupancy_analysis"] is True
+assert contract2["published_provenance_path_policy"]["outputs"] == (
+    "absolute_final_paths"
+)
 assert "held-out chromosome 2" in module.occupancy_inference_status("2")
+
+attempt = temporary / "attempt"
+final = temporary / "published" / "final"
+scratch_anchor = temporary / "scratch" / "anchor.parquet"
+durable_anchor = temporary / "annotation-anchor.parquet"
+scratch_motif = temporary / "scratch" / "motif.parquet"
+durable_motif = temporary / "staged" / "motif.parquet"
+attempt.mkdir()
+(attempt / "run_config.tsv").write_text(
+    f"output\tanchor\tmotif\n{attempt / 'data.parquet'}\t"
+    f"{scratch_anchor}\t{scratch_motif}\n",
+    encoding="utf-8",
+)
+(attempt / "run_config.json").write_text(
+    '{"input":"' + str(attempt / "data.parquet") + '"}\n',
+    encoding="utf-8",
+)
+module.canonicalize_published_provenance(
+    attempt,
+    {
+        attempt: final,
+        scratch_anchor: durable_anchor,
+        scratch_motif: durable_motif,
+    },
+)
+canonical_tsv = (attempt / "run_config.tsv").read_text(encoding="utf-8")
+canonical_json = (attempt / "run_config.json").read_text(encoding="utf-8")
+assert str(final / "data.parquet") in canonical_tsv
+assert str(final / "data.parquet") in canonical_json
+assert str(durable_anchor) in canonical_tsv
+assert str(durable_motif) in canonical_tsv
+assert str(attempt) not in canonical_tsv + canonical_json
+assert str(scratch_anchor) not in canonical_tsv
+assert str(scratch_motif) not in canonical_tsv
 PY
 
 if bash "$repository_root/scripts/submit_h3k4me3_chr1_production_slurm.sh" \
