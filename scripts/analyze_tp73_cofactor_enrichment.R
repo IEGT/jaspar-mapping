@@ -243,19 +243,36 @@ if (length(missing_anchor_columns) > 0L) {
         paste(missing_anchor_columns, collapse = ", "), call. = FALSE
     )
 }
-anti_support_columns <- grep(
+anti_support_columns <- sort(grep(
     "^supported_anti_", anchor_columns, value = TRUE
-)
-sample_ids <- sub("^supported_anti_", "", anti_support_columns)
+))
+if (length(anti_support_columns) > 0L) {
+    sample_ids <- sub("^supported_anti_", "", anti_support_columns)
+    control_support_columns <- paste0("supported_control_", sample_ids)
+    anti_depth_columns <- paste0("depth_anti_", sample_ids)
+    control_depth_columns <- paste0("depth_control_", sample_ids)
+    evidence_column_scheme <- "supported_anti_and_control"
+} else {
+    anti_support_columns <- sort(grep(
+        "^supported_tp73_", anchor_columns, value = TRUE
+    ))
+    sample_ids <- sub("^supported_tp73_", "", anti_support_columns)
+    control_support_columns <- paste0(
+        "supported_negative_control_", sample_ids
+    )
+    anti_depth_columns <- paste0("depth_tp73_", sample_ids)
+    control_depth_columns <- paste0("depth_negative_control_", sample_ids)
+    evidence_column_scheme <- "supported_tp73_and_negative_control"
+}
 if (length(sample_ids) == 0L || anyDuplicated(sample_ids)) {
     stop("anchor evidence contains no unique anti-p73 samples", call. = FALSE)
 }
 samples <- data.table(
     sample_id = sample_ids,
-    anti_support = paste0("supported_anti_", sample_ids),
-    control_support = paste0("supported_control_", sample_ids),
-    anti_depth = paste0("depth_anti_", sample_ids),
-    control_depth = paste0("depth_control_", sample_ids)
+    anti_support = anti_support_columns,
+    control_support = control_support_columns,
+    anti_depth = anti_depth_columns,
+    control_depth = control_depth_columns
 )
 required_evidence_columns <- unique(c(
     base_anchor_columns, samples$anti_support, samples$control_support,
@@ -915,6 +932,9 @@ run_config <- data.table(
     cofactor_maxima = values$cofactor_maxima,
     thresholds = values$thresholds,
     motifs = paste(thresholds$motif_id, collapse = ","),
+    evidence_column_scheme = evidence_column_scheme,
+    sample_ids = paste(samples$sample_id, collapse = ","),
+    sample_count = nrow(samples),
     negative_reference_thresholds = paste(negative_references, collapse = ","),
     primary_negative_reference = values$primary_negative_reference,
     negative_reference_semantics = "strict context_score < N or absent",

@@ -101,6 +101,51 @@ job requests two CPUs, 16 GiB, and two hours; motif workers retain the smaller
 one-CPU, 16-GiB, 30-minute allocation. The plan, source hashes, submission IDs,
 and execution commit are recorded below `$RUN/plan/`.
 
+## Schema-7 local-peak rerun
+
+The completed v2 result above is the historical all-JASPAR certification. The
+production rerun changes only the TP73 anchor population and accepted sample
+manifest: it uses chromosome-1 schema-7 local peaks at score `>= -1`, and the
+two accepted series `saos2` and `skmel29_2`. `skmel29_1` is not silently
+dropped by an evaluator; it is absent because the shared evidence builder never
+opens tracks marked `analysis_included=false`.
+
+First rebuild each motif's maximum score against the new anchors. The threshold
+evaluator discovers matched `supported_tp73_*` and
+`supported_negative_control_*` columns from the evidence schema, records the
+sample IDs, and rejects unmatched support/depth columns. Then run enrichment
+with the new maxima and evidence but bind the historical threshold registry as
+the fixed positive operating-point contract:
+
+```sh
+SOURCE=/data/sm718/GitHub/jaspar-mapping
+SCAN=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_sparse_v3/package
+OLD=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_context_thresholds_v1
+EVIDENCE=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_h3k4me3_production_v1/final/tp73_anchor_evidence.parquet
+LOCALPEAK=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_localpeak_thresholds_v2
+ENRICH=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_localpeak_enrichment_v3
+REGISTRY=$OLD/final/threshold_calibration/tables/jaspar2026/motif_score_threshold/part-000000.parquet
+
+"$SOURCE/scripts/submit_motif_threshold_calibration_slurm.sh" \
+  --run-root "$LOCALPEAK" --scan-package "$SCAN" \
+  --jaspar "$OLD/input/public/JASPAR2026_CORE_non-redundant_pfms_jaspar.txt" \
+  --anchor-evidence "$EVIDENCE" --runtime-prefix "$OLD/runtime" \
+  --source "$SOURCE" --partition requeue --max-concurrent 20
+
+# Run this after LOCALPEAK has finalized successfully.
+"$SOURCE/scripts/submit_tp73_cofactor_enrichment_slurm.sh" \
+  --run-root "$ENRICH" --source-threshold-run "$LOCALPEAK" \
+  --anchor-evidence "$EVIDENCE" --threshold-registry "$REGISTRY" \
+  --runtime-prefix "$OLD/runtime" --source "$SOURCE" \
+  --partition requeue --max-concurrent 20
+```
+
+Freezing the old registry is intentional: the rerun tests how enrichment and
+depletion change after replacing every-window TP73 anchors with local peaks. It
+does not move cofactor-positive classes merely because the anchor population
+changed. The newly evaluated threshold curves remain available as a separate
+sensitivity result.
+
 ## Progress And Restart
 
 Exact completion counts do not require scanning generated data:

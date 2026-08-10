@@ -186,21 +186,37 @@ duckdb_fread <- function(query) {
     fread(cmd = command, na.strings = "NA", showProgress = FALSE)
 }
 
-samples <- data.table(
-    sample_id = c(
-        "saos2_TA", "saos2_DN", "skmel29_1_TA",
-        "skmel29_1_DN", "skmel29_2_TA", "skmel29_2_DN"
-    ),
-    anti = c(
-        "supported_anti_saos2_TA", "supported_anti_saos2_DN",
-        "supported_anti_skmel29_1_TA", "supported_anti_skmel29_1_DN",
-        "supported_anti_skmel29_2_TA", "supported_anti_skmel29_2_DN"
-    ),
-    control = c(
-        "supported_control_saos2_TA", "supported_control_saos2_DN",
-        "supported_control_skmel29_1_TA", "supported_control_skmel29_1_DN",
-        "supported_control_skmel29_2_TA", "supported_control_skmel29_2_DN"
+anchor_schema <- duckdb_fread(paste0(
+    "DESCRIBE SELECT * FROM read_parquet(",
+    sql_string(values$anchor_evidence), ");"
+))
+anchor_source_columns <- as.character(anchor_schema$column_name)
+anti_columns <- sort(grep(
+    "^supported_anti_", anchor_source_columns, value = TRUE
+))
+if (length(anti_columns) > 0L) {
+    sample_ids <- sub("^supported_anti_", "", anti_columns)
+    control_columns <- paste0("supported_control_", sample_ids)
+    evidence_column_scheme <- "supported_anti_and_control"
+} else {
+    anti_columns <- sort(grep(
+        "^supported_tp73_", anchor_source_columns, value = TRUE
+    ))
+    sample_ids <- sub("^supported_tp73_", "", anti_columns)
+    control_columns <- paste0("supported_negative_control_", sample_ids)
+    evidence_column_scheme <- "supported_tp73_and_negative_control"
+}
+if (length(sample_ids) == 0L ||
+    any(!control_columns %in% anchor_source_columns)) {
+    stop(
+        "anchor evidence needs complete matched anti/control or ",
+        "TP73/negative-control support columns", call. = FALSE
     )
+}
+samples <- data.table(
+    sample_id = sample_ids,
+    anti = anti_columns,
+    control = control_columns
 )
 support_columns <- c(samples$anti, samples$control)
 anchor_query <- paste0(
@@ -914,6 +930,9 @@ run_config <- data.table(
     anchor_evidence = values$anchor_evidence,
     cofactor_maxima = values$cofactor_maxima,
     motifs = paste(motifs, collapse = ","),
+    evidence_column_scheme = evidence_column_scheme,
+    sample_ids = paste(samples$sample_id, collapse = ","),
+    sample_count = nrow(samples),
     threshold_specification = values$thresholds,
     threshold_mode = threshold_mode,
     evaluated_thresholds = paste(

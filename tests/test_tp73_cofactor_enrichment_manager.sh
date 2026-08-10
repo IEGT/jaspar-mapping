@@ -141,6 +141,53 @@ if python3 "$repository_root/scripts/manage_tp73_cofactor_enrichment.py" \
 fi
 grep -Fq 'lacks matched support/depth columns' "$temporary/invalid.err"
 
+"$duckdb" -light-mode -batch :memory: >/dev/null <<SQL
+COPY (
+    SELECT chrom, anchor_start, anchor_end, anchor_score,
+           supported_anti_s1 AS supported_tp73_s1,
+           supported_control_s1 AS supported_negative_control_s1,
+           depth_anti_s1 AS depth_tp73_s1,
+           depth_control_s1 AS depth_negative_control_s1,
+           supported_anti_s2 AS supported_tp73_s2,
+           supported_control_s2 AS supported_negative_control_s2,
+           depth_anti_s2 AS depth_tp73_s2,
+           depth_control_s2 AS depth_negative_control_s2
+    FROM read_parquet('$source_run/input/tp73_chr1_anchor_evidence.parquet')
+) TO '$temporary/manifest-anchors.parquet' (FORMAT PARQUET);
+COPY (
+    SELECT * REPLACE (
+        CASE WHEN motif_id = 'M_DEPLETED' THEN 3.0::DOUBLE
+             ELSE recommended_threshold END AS recommended_threshold
+    )
+    FROM read_parquet(
+      '$source_run/final/threshold_calibration/tables/jaspar2026/motif_score_threshold/part-000000.parquet'
+    )
+) TO '$temporary/fixed-registry.parquet' (FORMAT PARQUET);
+SQL
+external_count=$(python3 \
+    "$repository_root/scripts/manage_tp73_cofactor_enrichment.py" prepare \
+    --run-root "$temporary/external-run" --source-threshold-run "$source_run" \
+    --anchor-evidence "$temporary/manifest-anchors.parquet" \
+    --threshold-registry "$temporary/fixed-registry.parquet" \
+    --source "$repository_root" --duckdb "$duckdb")
+[[ $external_count == 2 ]]
+python3 - "$temporary/external-run" <<'PY'
+import csv
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+config = json.loads((root / "plan/run_config.json").read_text())
+assert config["evidence_column_scheme"] == "supported_tp73_and_negative_control"
+assert config["sample_ids"] == ["s1", "s2"]
+assert config["sample_count"] == 2
+assert config["source_threshold_registry"].endswith("fixed-registry.parquet")
+with (root / "plan/enrichment_tasks.tsv").open(newline="") as handle:
+    rows = {row["motif_id"]: row for row in csv.DictReader(handle, delimiter="\t")}
+assert rows["M_DEPLETED"]["positive_threshold"] == "3"
+PY
+
 task_count=$(python3 "$repository_root/scripts/manage_tp73_cofactor_enrichment.py" \
     prepare --run-root "$run_root" --source-threshold-run "$source_run" \
     --source "$repository_root" --duckdb "$duckdb" --block-size 50000 \

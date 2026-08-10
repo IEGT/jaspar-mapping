@@ -234,8 +234,12 @@ def prepare(arguments: argparse.Namespace) -> None:
     )
     if not anchor.is_file():
         raise EnrichmentError(f"TP73 anchor evidence is missing: {anchor}")
-    registry = (source_run / "final" / "threshold_calibration" / "tables" /
-                "jaspar2026" / "motif_score_threshold" / "part-000000.parquet")
+    registry = (
+        arguments.threshold_registry.expanduser().resolve()
+        if arguments.threshold_registry is not None
+        else source_run / "final" / "threshold_calibration" / "tables" /
+        "jaspar2026" / "motif_score_threshold" / "part-000000.parquet"
+    )
     if not registry.is_file():
         raise EnrichmentError(f"final threshold registry is missing: {registry}")
 
@@ -247,28 +251,50 @@ def prepare(arguments: argparse.Namespace) -> None:
     anti_support = sorted(
         name for name in anchor_columns if name.startswith("supported_anti_")
     )
+    if anti_support:
+        evidence_column_scheme = "supported_anti_and_control"
+        sample_ids = [name.removeprefix("supported_anti_")
+                      for name in anti_support]
+        control_support = [f"supported_control_{sample}" for sample in sample_ids]
+        anti_depth = [f"depth_anti_{sample}" for sample in sample_ids]
+        control_depth = [f"depth_control_{sample}" for sample in sample_ids]
+    else:
+        anti_support = sorted(
+            name for name in anchor_columns
+            if name.startswith("supported_tp73_")
+        )
+        evidence_column_scheme = "supported_tp73_and_negative_control"
+        sample_ids = [name.removeprefix("supported_tp73_")
+                      for name in anti_support]
+        control_support = [
+            f"supported_negative_control_{sample}" for sample in sample_ids
+        ]
+        anti_depth = [f"depth_tp73_{sample}" for sample in sample_ids]
+        control_depth = [
+            f"depth_negative_control_{sample}" for sample in sample_ids
+        ]
     required_anchor_columns = {"chrom", "anchor_start", "anchor_end", "anchor_score"}
-    for support in anti_support:
-        sample = support.removeprefix("supported_anti_")
-        required_anchor_columns.update({
-            f"supported_control_{sample}", f"depth_anti_{sample}",
-            f"depth_control_{sample}",
-        })
+    required_anchor_columns.update(
+        anti_support + control_support + anti_depth + control_depth
+    )
     missing_anchor_columns = sorted(required_anchor_columns - anchor_columns)
     if not anti_support or missing_anchor_columns:
         raise EnrichmentError(
             "anchor evidence lacks matched support/depth columns: "
-            + ", ".join(missing_anchor_columns or ["supported_anti_*"])
+            + ", ".join(
+                missing_anchor_columns or ["supported_anti_* or supported_tp73_*"]
+            )
         )
     anchor_validation = run_json([
         duckdb, "-light-mode", "-json", ":memory:", "-c",
         "SELECT count(*) AS anchors, count(*) FILTER (WHERE "
         + " OR ".join(
-            f"NOT coalesce({support} = "
-            f"(depth_anti_{support.removeprefix('supported_anti_')} > 0), false) "
-            f"OR NOT coalesce(supported_control_{support.removeprefix('supported_anti_')} = "
-            f"(depth_control_{support.removeprefix('supported_anti_')} > 0), false)"
-            for support in anti_support
+            f"NOT coalesce({support} = ({depth} > 0), false) "
+            f"OR NOT coalesce({control} = ({control_depth_name} > 0), false)"
+            for support, depth, control, control_depth_name in zip(
+                anti_support, anti_depth, control_support, control_depth,
+                strict=True,
+            )
         )
         + ") AS support_depth_mismatches FROM read_parquet("
         + sql_string(anchor) + ");",
@@ -373,6 +399,9 @@ def prepare(arguments: argparse.Namespace) -> None:
         "source_threshold_anchor_evidence": str(source_anchor),
         "anchor_evidence": str(anchor),
         "anchor_evidence_sha256": sha256(anchor),
+        "evidence_column_scheme": evidence_column_scheme,
+        "sample_ids": sample_ids,
+        "sample_count": len(sample_ids),
         "source": str(source),
         "source_commit": commit,
         "source_dirty": dirty,
@@ -766,6 +795,10 @@ def parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--run-root", type=Path, required=True)
     prepare_parser.add_argument("--source-threshold-run", type=Path, required=True)
     prepare_parser.add_argument("--anchor-evidence", type=Path)
+    prepare_parser.add_argument(
+        "--threshold-registry", type=Path,
+        help="fixed threshold registry to use instead of the source run registry",
+    )
     prepare_parser.add_argument("--source", type=Path, required=True)
     prepare_parser.add_argument(
         "--source-commit",

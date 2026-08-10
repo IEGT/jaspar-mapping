@@ -29,36 +29,36 @@ COPY (
         (((i * 7) % 17) / 2.0)::FLOAT AS anchor_score,
         ((i % 8 IN (0, 1) AND floor(i / 8) % 5 <> 0)
           OR (i % 8 IN (4, 5) AND floor(i / 8) % 5 = 0)
-          OR i % 8 = 6) AS supported_anti_s1,
+          OR i % 8 = 6) AS supported_tp73_s1,
         ((i % 8 IN (4, 5) AND floor(i / 8) % 5 <> 0)
           OR (i % 8 IN (0, 1) AND floor(i / 8) % 5 = 0)
-          OR i % 8 = 2) AS supported_control_s1,
+          OR i % 8 = 2) AS supported_negative_control_s1,
         CASE WHEN ((i % 8 IN (0, 1) AND floor(i / 8) % 5 <> 0)
                         OR (i % 8 IN (4, 5) AND floor(i / 8) % 5 = 0)
                         OR i % 8 = 6)
              THEN 1 + (i % 10) ELSE 0 END::FLOAT
-            AS depth_anti_s1,
+            AS depth_tp73_s1,
         CASE WHEN ((i % 8 IN (4, 5) AND floor(i / 8) % 5 <> 0)
                         OR (i % 8 IN (0, 1) AND floor(i / 8) % 5 = 0)
                         OR i % 8 = 2)
              THEN 1 + (i % 7) ELSE 0 END::FLOAT
-            AS depth_control_s1,
+            AS depth_negative_control_s1,
         ((i % 8 IN (0, 1) AND floor(i / 8) % 5 <> 1)
           OR (i % 8 IN (4, 5) AND floor(i / 8) % 5 = 1)
-          OR i % 8 = 7) AS supported_anti_s2,
+          OR i % 8 = 7) AS supported_tp73_s2,
         ((i % 8 IN (4, 5) AND floor(i / 8) % 5 <> 1)
           OR (i % 8 IN (0, 1) AND floor(i / 8) % 5 = 1)
-          OR i % 8 = 3) AS supported_control_s2,
+          OR i % 8 = 3) AS supported_negative_control_s2,
         CASE WHEN ((i % 8 IN (0, 1) AND floor(i / 8) % 5 <> 1)
                         OR (i % 8 IN (4, 5) AND floor(i / 8) % 5 = 1)
                         OR i % 8 = 7)
              THEN 1 ELSE 0 END::FLOAT
-            AS depth_anti_s2,
+            AS depth_tp73_s2,
         CASE WHEN ((i % 8 IN (4, 5) AND floor(i / 8) % 5 <> 1)
                         OR (i % 8 IN (0, 1) AND floor(i / 8) % 5 = 1)
                         OR i % 8 = 3)
              THEN 1 ELSE 0 END::FLOAT
-            AS depth_control_s2
+            AS depth_negative_control_s2
     FROM range(400) AS r(i)
 ) TO '$temporary/anchors.parquet' (FORMAT PARQUET);
 
@@ -168,6 +168,8 @@ SELECT CASE WHEN NOT EXISTS (
     WHERE negative_reference_semantics = 'strict context_score < N or absent'
       AND primary_negative_reference = -1
       AND context_geometry = 'signed_interval_edge_distance'
+      AND evidence_column_scheme = 'supported_tp73_and_negative_control'
+      AND sample_count = 2
 ) THEN error('run provenance omits comparison semantics') END;
 SQL
 

@@ -5,7 +5,8 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage: submit_motif_threshold_calibration_slurm.sh --run-root DIR
-       --scan-package DIR --jaspar FILE --cutandrun-dir DIR [options]
+       --scan-package DIR --jaspar FILE
+       (--cutandrun-dir DIR | --anchor-evidence FILE) [options]
 
 Prepare and submit a requeueable chromosome-1 threshold calibration for every
 non-target JASPAR motif. One array task reads exactly two inventory files for
@@ -19,6 +20,7 @@ Options:
   --scan-package DIR      Finalized JASPAR 2026 sparse scan package
   --jaspar FILE           Exact JASPAR 2026 matrix source
   --cutandrun-dir DIR     Existing no-duplicates CUT&RUN resources
+  --anchor-evidence FILE  Prebuilt TP73/CUT&RUN evidence; skips anchor setup
   --source DIR            Repository root (default: script parent)
   --runtime-prefix DIR    Micromamba runtime (default: RUN/runtime)
   --micromamba FILE       Micromamba executable (default: micromamba)
@@ -45,6 +47,7 @@ run_root=""
 scan_package=""
 jaspar=""
 cutandrun_dir=""
+anchor_evidence=""
 source=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 runtime_prefix=""
 micromamba=${MAMBA_EXE:-micromamba}
@@ -63,6 +66,7 @@ while [[ $# -gt 0 ]]; do
         --scan-package) scan_package=${2:?}; shift 2 ;;
         --jaspar) jaspar=${2:?}; shift 2 ;;
         --cutandrun-dir) cutandrun_dir=${2:?}; shift 2 ;;
+        --anchor-evidence) anchor_evidence=${2:?}; shift 2 ;;
         --source) source=${2:?}; shift 2 ;;
         --runtime-prefix) runtime_prefix=${2:?}; shift 2 ;;
         --micromamba) micromamba=${2:?}; shift 2 ;;
@@ -80,10 +84,15 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -n $run_root && -n $scan_package && -n $jaspar && -n $cutandrun_dir ]] || {
+[[ -n $run_root && -n $scan_package && -n $jaspar ]] || {
     usage >&2
     exit 2
 }
+if [[ -n $anchor_evidence && -n $cutandrun_dir ]] ||
+   [[ -z $anchor_evidence && -z $cutandrun_dir ]]; then
+    echo "E: Provide exactly one of --cutandrun-dir or --anchor-evidence." >&2
+    exit 2
+fi
 [[ $max_concurrent =~ ^[1-9][0-9]*$ &&
    $array_size =~ ^[1-9][0-9]*$ && $cpus =~ ^[1-9][0-9]*$ ]] || {
     echo "E: --max-concurrent, --array-size, and --cpus must be positive integers." >&2
@@ -93,7 +102,15 @@ mkdir -p "$run_root/plan" "$run_root/logs" "$run_root/input" "$run_root/tasks"
 run_root=$(cd "$run_root" && pwd -P)
 scan_package=$(cd "$scan_package" && pwd -P)
 jaspar=$(cd "$(dirname "$jaspar")" && pwd -P)/$(basename "$jaspar")
-cutandrun_dir=$(cd "$cutandrun_dir" && pwd -P)
+if [[ -n $cutandrun_dir ]]; then
+    cutandrun_dir=$(cd "$cutandrun_dir" && pwd -P)
+else
+    anchor_evidence=$(cd "$(dirname "$anchor_evidence")" && pwd -P)/$(basename "$anchor_evidence")
+    [[ -f $anchor_evidence ]] || {
+        echo "E: Prebuilt anchor evidence is missing: $anchor_evidence" >&2
+        exit 1
+    }
+fi
 source=$(cd "$source" && pwd -P)
 runtime_prefix=${runtime_prefix:-$run_root/runtime}
 
@@ -136,7 +153,7 @@ bigwig_python="$duckdb_prefix/bin/python3"
 "$rscript" -e 'stopifnot(requireNamespace("data.table", quietly=TRUE))'
 "$bigwig_python" -c 'import pyBigWig'
 
-anchor="$run_root/input/tp73_chr1_anchor_evidence.parquet"
+anchor=${anchor_evidence:-$run_root/input/tp73_chr1_anchor_evidence.parquet}
 task_file="$run_root/plan/calibration_tasks.tsv"
 run_config="$run_root/plan/run_config.json"
 if [[ $reuse_plan -eq 1 ]]; then
@@ -225,22 +242,21 @@ if [[ -e $submission_record && $dry_run -eq 0 ]]; then
     exit 1
 fi
 
-setup_submission=(
-    sbatch --parsable --account="$account" --partition="$partition" --requeue
-    --job-name=jaspar_thr_anchor --nodes=1 --ntasks=1 --cpus-per-task=4
-    --mem=16G --time=02:00:00 --signal=B:USR1@300 --chdir="$source"
-    --output="$run_root/logs/anchor-%j.out" --error="$run_root/logs/anchor-%j.err"
-    "$source/scripts/run_motif_threshold_anchor_setup.sh"
-    --run-root "$run_root" --scan-package "$scan_package"
-    --cutandrun-dir "$cutandrun_dir" --output "$anchor" --source "$source"
-    --duckdb "$duckdb" --bigwig-python "$bigwig_python"
-    --bigwig-exporter "$source/scripts/export_bigwig_chrom_bedgraph.py"
-    --threads 4 --memory-limit 12GB
-)
-
 dependency=()
 setup_job="reused"
-if [[ ! -s $anchor ]]; then
+if [[ -z $anchor_evidence && ! -s $anchor ]]; then
+    setup_submission=(
+        sbatch --parsable --account="$account" --partition="$partition" --requeue
+        --job-name=jaspar_thr_anchor --nodes=1 --ntasks=1 --cpus-per-task=4
+        --mem=16G --time=02:00:00 --signal=B:USR1@300 --chdir="$source"
+        --output="$run_root/logs/anchor-%j.out" --error="$run_root/logs/anchor-%j.err"
+        "$source/scripts/run_motif_threshold_anchor_setup.sh"
+        --run-root "$run_root" --scan-package "$scan_package"
+        --cutandrun-dir "$cutandrun_dir" --output "$anchor" --source "$source"
+        --duckdb "$duckdb" --bigwig-python "$bigwig_python"
+        --bigwig-exporter "$source/scripts/export_bigwig_chrom_bedgraph.py"
+        --threads 4 --memory-limit 12GB
+    )
     if [[ $dry_run -eq 1 ]]; then
         printf '%q ' "${setup_submission[@]}"; printf '\n'
         setup_job=SETUP_JOB_ID

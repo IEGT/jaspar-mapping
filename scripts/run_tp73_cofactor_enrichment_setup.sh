@@ -17,6 +17,7 @@ Options:
   --source-threshold-run DIR Completed threshold-calibration run
   --source DIR               Repository root (default: script parent)
   --source-commit HEX        Clean commit captured on the login node
+  --threshold-registry FILE  Fixed operating-point registry override
   --duckdb FILE              DuckDB CLI (default: duckdb)
   --threads N                DuckDB threads (default: 2)
   --memory-limit SIZE        DuckDB memory ceiling (default: 12GB)
@@ -32,6 +33,7 @@ run_root=""
 source_threshold_run=""
 source=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 source_commit=""
+threshold_registry=""
 duckdb=duckdb
 threads=2
 memory_limit=12GB
@@ -42,6 +44,7 @@ while [[ $# -gt 0 ]]; do
         --source-threshold-run) source_threshold_run=${2:?}; shift 2 ;;
         --source) source=${2:?}; shift 2 ;;
         --source-commit) source_commit=${2:?}; shift 2 ;;
+        --threshold-registry) threshold_registry=${2:?}; shift 2 ;;
         --duckdb) duckdb=${2:?}; shift 2 ;;
         --threads) threads=${2:?}; shift 2 ;;
         --memory-limit) memory_limit=${2:?}; shift 2 ;;
@@ -63,6 +66,19 @@ for path in "$run_root" "$source_threshold_run" "$source"; do
 done
 [[ -x $duckdb ]] || duckdb=$(command -v "$duckdb" || true)
 [[ -x $duckdb ]] || { echo "E: DuckDB executable is unavailable." >&2; exit 1; }
+if [[ -n $threshold_registry && ! -f $threshold_registry ]]; then
+    echo "E: Threshold registry is missing: $threshold_registry" >&2
+    exit 1
+fi
+
+prepare_arguments=(
+    --run-root "$run_root" --source-threshold-run "$source_threshold_run"
+    --anchor-evidence "$run_root/input/depth_anchor/tp73_chr1_anchor_evidence.parquet"
+    --source "$source" --source-commit "$source_commit" --duckdb "$duckdb"
+)
+if [[ -n $threshold_registry ]]; then
+    prepare_arguments+=(--threshold-registry "$threshold_registry")
+fi
 
 sha256_file() {
     if command -v sha256sum >/dev/null 2>&1; then
@@ -88,9 +104,7 @@ if [[ -e $anchor_package ]]; then
     }
     echo "I: Reusing completed depth-bearing TP73 anchors: $anchor" >&2
     python3 "$source/scripts/manage_tp73_cofactor_enrichment.py" prepare \
-        --run-root "$run_root" --source-threshold-run "$source_threshold_run" \
-        --anchor-evidence "$anchor" --source "$source" \
-        --source-commit "$source_commit" --duckdb "$duckdb"
+        "${prepare_arguments[@]}"
     exit 0
 fi
 
@@ -292,8 +306,6 @@ mv "$attempt" "$anchor_package"
 
 phase=preparing_enrichment_plan
 run_child python3 "$source/scripts/manage_tp73_cofactor_enrichment.py" prepare \
-    --run-root "$run_root" --source-threshold-run "$source_threshold_run" \
-    --anchor-evidence "$anchor" --source "$source" \
-    --source-commit "$source_commit" --duckdb "$duckdb"
+    "${prepare_arguments[@]}"
 phase=complete
 echo "I: Completed enrichment setup and immutable plan: $run_root" >&2

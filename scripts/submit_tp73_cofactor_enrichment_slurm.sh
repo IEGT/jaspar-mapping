@@ -18,6 +18,8 @@ outputs, performs the all-motif BH correction, and publishes Parquet + DuckDB.
 Options:
   --run-root DIR             New durable run below /data/sm718
   --source-threshold-run DIR Completed threshold run below /data/sm718
+  --anchor-evidence FILE    Prebuilt matched support/depth anchors; skips setup
+  --threshold-registry FILE Fixed operating-point registry (default: source run)
   --source DIR               Repository root (default: script parent)
   --runtime-prefix DIR       Existing DuckDB/R runtime (default: source run)
   --account NAME             Slurm account (default: cluster)
@@ -39,6 +41,8 @@ EOF
 
 run_root=""
 source_threshold_run=""
+anchor_evidence=""
+threshold_registry=""
 source=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 runtime_prefix=""
 account=cluster
@@ -54,6 +58,8 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --run-root) run_root=${2:?}; shift 2 ;;
         --source-threshold-run) source_threshold_run=${2:?}; shift 2 ;;
+        --anchor-evidence) anchor_evidence=${2:?}; shift 2 ;;
+        --threshold-registry) threshold_registry=${2:?}; shift 2 ;;
         --source) source=${2:?}; shift 2 ;;
         --runtime-prefix) runtime_prefix=${2:?}; shift 2 ;;
         --account) account=${2:?}; shift 2 ;;
@@ -90,6 +96,20 @@ mkdir -p "$run_root/plan" "$run_root/logs" "$run_root/tasks" \
 run_root=$(cd "$run_root" && pwd -P)
 source_threshold_run=$(cd "$source_threshold_run" && pwd -P)
 source=$(cd "$source" && pwd -P)
+if [[ -n $anchor_evidence ]]; then
+    anchor_evidence=$(cd "$(dirname "$anchor_evidence")" && pwd -P)/$(basename "$anchor_evidence")
+    [[ -f $anchor_evidence ]] || {
+        echo "E: Prebuilt anchor evidence is missing: $anchor_evidence" >&2
+        exit 1
+    }
+fi
+if [[ -n $threshold_registry ]]; then
+    threshold_registry=$(cd "$(dirname "$threshold_registry")" && pwd -P)/$(basename "$threshold_registry")
+    [[ -f $threshold_registry ]] || {
+        echo "E: Threshold registry is missing: $threshold_registry" >&2
+        exit 1
+    }
+fi
 runtime_prefix=${runtime_prefix:-$source_threshold_run/runtime}
 duckdb="$runtime_prefix/duckdb/bin/duckdb"
 rscript="$runtime_prefix/r/bin/Rscript"
@@ -152,15 +172,33 @@ else
         echo "E: Existing plan requires --reuse-plan." >&2
         exit 1
     }
-    task_count=$(python3 - "$source_threshold_run/plan/calibration_tasks.tsv" <<'PY'
+    if [[ -n $anchor_evidence ]]; then
+        prepare_arguments=(
+            python3 "$source/scripts/manage_tp73_cofactor_enrichment.py" prepare
+            --run-root "$run_root"
+            --source-threshold-run "$source_threshold_run"
+            --anchor-evidence "$anchor_evidence"
+            --source "$source" --duckdb "$duckdb"
+        )
+        if [[ -n $threshold_registry ]]; then
+            prepare_arguments+=(--threshold-registry "$threshold_registry")
+        fi
+        task_count=$("${prepare_arguments[@]}")
+        plan_source_commit=$(python3 -c \
+            'import json,sys; print(json.load(open(sys.argv[1]))["source_commit"])' \
+            "$run_config")
+        setup_needed=0
+    else
+        task_count=$(python3 - "$source_threshold_run/plan/calibration_tasks.tsv" <<'PY'
 import csv
 import sys
 with open(sys.argv[1], newline="") as handle:
     print(sum(1 for _ in csv.DictReader(handle, delimiter="\t")))
 PY
-    )
-    plan_source_commit=$(git -C "$source" rev-parse HEAD)
-    setup_needed=1
+        )
+        plan_source_commit=$(git -C "$source" rev-parse HEAD)
+        setup_needed=1
+    fi
 fi
 [[ $task_count =~ ^[1-9][0-9]*$ ]] || {
     echo "E: Invalid prepared task count: $task_count" >&2
@@ -188,16 +226,22 @@ fi
 setup_job=reused
 dependency=()
 if [[ $setup_needed -eq 1 ]]; then
+    setup_arguments=(
+        "$source/scripts/run_tp73_cofactor_enrichment_setup.sh"
+        --run-root "$run_root" --source-threshold-run "$source_threshold_run"
+        --source "$source" --source-commit "$execution_source_commit"
+        --duckdb "$duckdb" --threads 2 --memory-limit 12GB
+    )
+    if [[ -n $threshold_registry ]]; then
+        setup_arguments+=(--threshold-registry "$threshold_registry")
+    fi
     setup_submission=(
         sbatch --parsable --account="$account" --partition="$partition" --requeue
         --job-name=jaspar_enrich_setup --nodes=1 --ntasks=1 --cpus-per-task=2
         --mem=16G --time=02:00:00 --signal=B:USR1@120 --chdir="$source"
         --output="$run_root/logs/setup-%j.out"
         --error="$run_root/logs/setup-%j.err"
-        "$source/scripts/run_tp73_cofactor_enrichment_setup.sh"
-        --run-root "$run_root" --source-threshold-run "$source_threshold_run"
-        --source "$source" --source-commit "$execution_source_commit"
-        --duckdb "$duckdb" --threads 2 --memory-limit 12GB
+        "${setup_arguments[@]}"
     )
     if [[ $dry_run -eq 1 ]]; then
         printf '%q ' "${setup_submission[@]}"; printf '\n'

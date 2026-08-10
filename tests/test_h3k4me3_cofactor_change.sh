@@ -34,8 +34,8 @@ COPY (
     FROM range(0, 16, 2) AS r(i)
 ) TO '$temporary/minus.parquet' (FORMAT PARQUET);
 COPY (
-    SELECT '1'::VARCHAR AS chrom, start, "end",
-           'MA0861.2'::VARCHAR AS motif_id, '+'::VARCHAR AS strand, score,
+    SELECT start, "end", 'MA0861.2'::VARCHAR AS motif_id,
+           '+'::VARCHAR AS strand, score,
            'local_peak'::VARCHAR AS anchor_selection_class
     FROM read_parquet('$temporary/plus.parquet')
 ) TO '$temporary/context-anchor.parquet' (FORMAT PARQUET);
@@ -231,7 +231,7 @@ grep -Fq $'excluded_series\texcluded\t' \
     "$temporary/signal.parquet.track_manifest.tsv"
 grep -Fq $'excluded_series\texcluded\tGFP\th3k4me3\tR1\tfalse\tfalse\tunresolved_test_series' \
     "$temporary/signal.parquet.track_manifest.tsv"
-grep -Fq '\"anchor_source_mode\": \"schema7_local_peak_context_anchor\"' \
+grep -Fq '"anchor_source_mode": "schema7_local_peak_context_anchor"' \
     "$temporary/signal.parquet.run_config.json"
 
 "$duckdb" -batch :memory: >/dev/null <<SQL

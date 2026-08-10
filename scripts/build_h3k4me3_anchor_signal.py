@@ -261,8 +261,6 @@ SELECT {sql_string(arguments.chrom)}::VARCHAR AS chrom,
 FROM read_parquet(
     {sql_string(arguments.anchor_source)}, hive_partitioning=false)
 WHERE motif_id = 'MA0861.2'
-  AND regexp_replace(lower(CAST(chrom AS VARCHAR)), '^chr', '') =
-      {sql_string(arguments.chrom)}
   AND anchor_selection_class = 'local_peak'
 GROUP BY start, "end"
 HAVING max(score) >= {arguments.minimum_anchor_score:.17g}
@@ -623,8 +621,10 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument(
         "--anchor-source", type=Path,
         help=(
-            "schema-7 tp73_context_anchor Parquet already selected as local "
-            "peaks; mutually exclusive with --anchor-plus/--anchor-minus"
+            "one-chromosome schema-7 tp73_context_anchor Parquet already "
+            "selected as local peaks; chromosome is supplied by --chrom "
+            "because partition columns need not be stored in the file; "
+            "mutually exclusive with --anchor-plus/--anchor-minus"
         ),
     )
     result.add_argument("--anchor-plus", type=Path)

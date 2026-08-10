@@ -187,6 +187,47 @@ SQL
 
 "$duckdb" -batch :memory: >/dev/null <<SQL
 COPY (
+    SELECT chrom, anchor_start, anchor_end, anchor_score,
+           supported_anti_saos2_TA AS supported_tp73_saos2_TA,
+           supported_anti_saos2_DN AS supported_tp73_saos2_DN,
+           supported_anti_skmel29_2_TA AS supported_tp73_skmel29_2_TA,
+           supported_anti_skmel29_2_DN AS supported_tp73_skmel29_2_DN,
+           supported_control_saos2_TA AS supported_negative_control_saos2_TA,
+           supported_control_saos2_DN AS supported_negative_control_saos2_DN,
+           supported_control_skmel29_2_TA
+               AS supported_negative_control_skmel29_2_TA,
+           supported_control_skmel29_2_DN
+               AS supported_negative_control_skmel29_2_DN
+    FROM read_parquet('$temporary/anchors.parquet')
+) TO '$temporary/manifest-anchors.parquet' (FORMAT PARQUET);
+SQL
+"$repository_root/scripts/evaluate_tp73_cofactor_thresholds.R" \
+    --anchor-evidence "$temporary/manifest-anchors.parquet" \
+    --cofactor-maxima "$temporary/maxima.parquet" \
+    --output-prefix "$temporary/result_manifest_samples" \
+    --thresholds 4 --folds 5 --chrom-size 100000 \
+    --spline-df 3 --compact-output --duckdb "$duckdb" >/dev/null
+"$duckdb" -batch :memory: >/dev/null <<SQL
+CREATE VIEW manifest_metrics AS SELECT * FROM read_csv_auto(
+    '$temporary/result_manifest_samples_threshold_metrics.tsv',
+    delim='\t', header=true, nullstr='NA');
+CREATE VIEW manifest_config AS SELECT * FROM read_csv_auto(
+    '$temporary/result_manifest_samples_run_config.tsv',
+    delim='\t', header=true, nullstr='NA');
+SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM manifest_metrics
+    WHERE samples_total <> 4 OR sample_fold_cells <> 20
+) THEN error('manifest-selected evidence did not discover four samples') END;
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM manifest_config
+    WHERE evidence_column_scheme = 'supported_tp73_and_negative_control'
+      AND sample_count = 4
+      AND sample_ids NOT LIKE '%skmel29_1%'
+) THEN error('manifest-selected evidence provenance is incomplete') END;
+SQL
+
+"$duckdb" -batch :memory: >/dev/null <<SQL
+COPY (
     SELECT
         '1'::VARCHAR AS chrom,
         (i * 1000)::BIGINT AS anchor_start,
