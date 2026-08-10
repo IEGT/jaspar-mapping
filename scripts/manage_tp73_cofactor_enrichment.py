@@ -285,6 +285,11 @@ def prepare(arguments: argparse.Namespace) -> None:
                 missing_anchor_columns or ["supported_anti_* or supported_tp73_*"]
             )
         )
+    column_group_lengths = {
+        len(anti_support), len(anti_depth), len(control_support), len(control_depth)
+    }
+    if len(column_group_lengths) != 1:
+        raise EnrichmentError("matched support/depth column groups differ in length")
     anchor_validation = run_json([
         duckdb, "-light-mode", "-json", ":memory:", "-c",
         "SELECT count(*) AS anchors, count(*) FILTER (WHERE "
@@ -292,8 +297,7 @@ def prepare(arguments: argparse.Namespace) -> None:
             f"NOT coalesce({support} = ({depth} > 0), false) "
             f"OR NOT coalesce({control} = ({control_depth_name} > 0), false)"
             for support, depth, control, control_depth_name in zip(
-                anti_support, anti_depth, control_support, control_depth,
-                strict=True,
+                anti_support, anti_depth, control_support, control_depth
             )
         )
         + ") AS support_depth_mismatches FROM read_parquet("
