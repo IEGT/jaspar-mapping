@@ -122,7 +122,7 @@ SOURCE=/data/sm718/GitHub/jaspar-mapping
 SCAN=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_sparse_v3/package
 OLD=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_context_thresholds_v1
 EVIDENCE=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_h3k4me3_production_v4/final/tp73_anchor_evidence.parquet
-LOCALPEAK=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_localpeak_thresholds_v2
+LOCALPEAK=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_localpeak_thresholds_v3
 ENRICH=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_localpeak_enrichment_v3
 REGISTRY=$OLD/final/threshold_calibration/tables/jaspar2026/motif_score_threshold/part-000000.parquet
 
@@ -130,6 +130,8 @@ REGISTRY=$OLD/final/threshold_calibration/tables/jaspar2026/motif_score_threshol
   --run-root "$LOCALPEAK" --scan-package "$SCAN" \
   --jaspar "$OLD/input/public/JASPAR2026_CORE_non-redundant_pfms_jaspar.txt" \
   --anchor-evidence "$EVIDENCE" --runtime-prefix "$OLD/runtime" \
+  --run-id jaspar2026_grch38_chr1_tp73_localpeak_thresholds_v2 \
+  --threshold-set-id tp73_chr1_cutrun_schema7_localpeak_all_jaspar_v2 \
   --source "$SOURCE" --partition requeue --max-concurrent 20
 
 # Run this after LOCALPEAK has finalized successfully.
@@ -145,6 +147,12 @@ depletion change after replacing every-window TP73 anchors with local peaks. It
 does not move cofactor-positive classes merely because the anchor population
 changed. The newly evaluated threshold curves remain available as a separate
 sensitivity result.
+
+The threshold plan and registry read the adjacent anchor-evidence run config.
+They record `schema7_local_peak_context_anchor`, the `-1` TP73 score floor,
+the observed anchor count and score range, and checksums for both the evidence
+Parquet and its sidecar. Unrelated untracked files in the Haumea checkout do
+not mark the scientific source dirty; tracked worktree or index changes do.
 
 ## Progress And Restart
 

@@ -11,6 +11,43 @@ command -v "$duckdb" >/dev/null 2>&1 || {
     exit 0
 }
 
+git_source="$temporary/git-source"
+mkdir "$git_source"
+git -C "$git_source" init -q
+git -C "$git_source" config user.name Test
+git -C "$git_source" config user.email test@example.invalid
+printf 'tracked\n' > "$git_source/tracked.txt"
+git -C "$git_source" add tracked.txt
+git -C "$git_source" -c commit.gpgsign=false commit -q -m initial
+printf 'untracked\n' > "$git_source/untracked.txt"
+python3 - "$repository_root/scripts/manage_motif_threshold_calibration.py" \
+    "$git_source" false <<'PY'
+import importlib.util
+import pathlib
+import sys
+
+spec = importlib.util.spec_from_file_location("threshold_manager", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+_, dirty = module.git_identity(pathlib.Path(sys.argv[2]))
+assert dirty is (sys.argv[3] == "true")
+PY
+printf 'changed\n' > "$git_source/tracked.txt"
+python3 - "$repository_root/scripts/manage_motif_threshold_calibration.py" \
+    "$git_source" true <<'PY'
+import importlib.util
+import pathlib
+import sys
+
+spec = importlib.util.spec_from_file_location("threshold_manager", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+_, dirty = module.git_identity(pathlib.Path(sys.argv[2]))
+assert dirty is (sys.argv[3] == "true")
+PY
+
 package="$temporary/package"
 mkdir -p "$package/task_data/task_id=0" "$package/task_data/task_id=1" \
     "$package/task_data/task_id=2"
@@ -63,9 +100,23 @@ popd >/dev/null
 printf '%s\n' '{"database":"jaspar_genome_scan.duckdb"}' > "$package/manifest.json"
 
 run="$temporary/run"
+mkdir -p "$run/input"
+"$duckdb" -batch :memory: -c "
+COPY (
+    SELECT * FROM (VALUES
+        ('1', 10::BIGINT, 26::BIGINT, -0.75::DOUBLE),
+        ('1', 40::BIGINT, 56::BIGINT, 2.5::DOUBLE)
+    ) AS anchors(chrom, anchor_start, anchor_end, anchor_score)
+) TO '$run/input/anchors.parquet' (FORMAT PARQUET);" >/dev/null
+cat > "$run/input/anchors.parquet.run_config.tsv" <<'EOF'
+schema_version	chrom	anchor_motif_id	anchor_source_mode	anchor_score_rule	minimum_anchor_score	strict_immersion_rule	effective_depth_rule	anchor_count	observed_minimum_score	observed_maximum_score
+3	1	MA0861.2	schema7_local_peak_context_anchor	maximum_score_across_preselected_orientation_records_at_same_span	-1	strict	maximum	2	-0.75	2.5
+EOF
 task_count=$(python3 "$repository_root/scripts/manage_motif_threshold_calibration.py" prepare \
     --run-root "$run" --scan-package "$package" --jaspar "$temporary/jaspar.txt" \
     --anchor-evidence "$run/input/anchors.parquet" --source "$repository_root" \
+    --run-id synthetic_schema7_local_peak_v1 \
+    --threshold-set-id synthetic_schema7_local_peak_thresholds_v1 \
     --duckdb "$duckdb")
 [[ $task_count == 2 && $(wc -l < "$run/plan/calibration_tasks.tsv") -eq 3 ]] || {
     echo "E: Calibration manager prepared the wrong task count." >&2
@@ -74,6 +125,20 @@ task_count=$(python3 "$repository_root/scripts/manage_motif_threshold_calibratio
 grep -q '^MA0001.1$' "$run/plan/motifs.txt"
 grep -q '^MA0002.1$' "$run/plan/motifs.txt"
 ! grep -q '^MA0861.2$' "$run/plan/motifs.txt"
+python3 - "$run/plan/run_config.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    config = json.load(handle)
+assert config["schema_version"] == 2
+assert config["run_id"] == "synthetic_schema7_local_peak_v1"
+assert config["threshold_set_id"] == "synthetic_schema7_local_peak_thresholds_v1"
+assert config["anchor_provenance"]["anchor_source_mode"] == \
+    "schema7_local_peak_context_anchor"
+assert config["anchor_provenance"]["anchor_minimum_score"] == -1
+assert config["anchor_provenance"]["anchor_count"] == 2
+PY
 
 python3 - "$run" <<'PY'
 import csv
@@ -177,6 +242,14 @@ SELECT CASE WHEN NOT EXISTS (
       AND selected_metric_gain IS NULL
       AND calibration_status = 'no_finite_metric'
 ) THEN error('blank non-evaluable metrics did not retain null semantics') END;
+SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM read_parquet('$registry')
+    WHERE calibration_stratum_id <> 'schema7_local_peak_tp73_anchors'
+       OR CAST(json_extract(calibration_stratum,
+              '$.anchor_minimum_score') AS DOUBLE) <> -1
+       OR json_extract_string(calibration_stratum,
+              '$.anchor_source_mode') <> 'schema7_local_peak_context_anchor'
+) THEN error('schema-7 local-peak calibration stratum was not retained') END;
 SQL
 
 python3 - "$run/final/threshold_calibration/manifest.json" \
@@ -186,11 +259,17 @@ import sys
 
 with open(sys.argv[1], encoding="utf-8") as handle:
     manifest = json.load(handle)
-assert manifest["schema_version"] == 2
+assert manifest["schema_version"] == 3
 assert manifest["source_commit"] == manifest["metric_source_commit"]
 assert manifest["finalization_source_commit"] == sys.argv[2]
 assert isinstance(manifest["metric_source_dirty"], bool)
 assert isinstance(manifest["finalization_source_dirty"], bool)
+assert manifest["calibration_stratum_id"] == \
+    "schema7_local_peak_tp73_anchors"
+assert manifest["calibration_stratum"]["anchor_minimum_score"] == -1
+assert manifest["calibration_stratum"]["anchor_count"] == 2
+assert len(manifest["anchor_evidence_sha256"]) == 64
+assert len(manifest["anchor_run_config_sha256"]) == 64
 PY
 
 echo "Motif threshold-calibration manager tests passed."

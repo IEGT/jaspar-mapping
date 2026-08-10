@@ -31,6 +31,8 @@ Options:
   --cpus N                CPUs per motif task (default: 2)
   --memory SIZE           Memory per motif task (default: 16G)
   --time LIMIT            Time per motif task (default: 02:00:00)
+  --run-id ID             Unique calibration-run identifier
+  --threshold-set-id ID   Unique threshold-set identifier
   --reuse-plan            Reuse a compatible immutable prepared plan
   --dry-run               Print submissions without calling sbatch
   -h, --help              Show this help
@@ -58,6 +60,8 @@ array_size=1000
 cpus=2
 memory=16G
 wall_time=02:00:00
+run_id=jaspar2026_grch38_chr1_tp73_context_thresholds_v1
+threshold_set_id=tp73_chr1_cutrun_context_roc_auc_all_jaspar_v1
 reuse_plan=0
 dry_run=0
 while [[ $# -gt 0 ]]; do
@@ -77,6 +81,8 @@ while [[ $# -gt 0 ]]; do
         --cpus) cpus=${2:?}; shift 2 ;;
         --memory) memory=${2:?}; shift 2 ;;
         --time) wall_time=${2:?}; shift 2 ;;
+        --run-id) run_id=${2:?}; shift 2 ;;
+        --threshold-set-id) threshold_set_id=${2:?}; shift 2 ;;
         --reuse-plan) reuse_plan=1; shift ;;
         --dry-run) dry_run=1; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -162,13 +168,16 @@ if [[ $reuse_plan -eq 1 ]]; then
         exit 1
     }
     plan_values=$(python3 - "$run_config" "$task_file" "$scan_package" \
-        "$jaspar" "$source" "$anchor" <<'PY'
+        "$jaspar" "$source" "$anchor" "$run_id" "$threshold_set_id" <<'PY'
 import csv
 import json
 import pathlib
 import sys
 
-config_path, task_path, scan, jaspar, source, anchor = map(pathlib.Path, sys.argv[1:])
+config_path, task_path, scan, jaspar, source, anchor = map(
+    pathlib.Path, sys.argv[1:7]
+)
+run_id, threshold_set_id = sys.argv[7:9]
 config = json.loads(config_path.read_text())
 expected = {
     "scan_package": str(scan.resolve()),
@@ -179,6 +188,8 @@ expected = {
 for key, value in expected.items():
     if config.get(key) != value:
         raise SystemExit(f"prepared plan {key} differs: {config.get(key)!r} != {value!r}")
+if config.get("run_id") != run_id or config.get("threshold_set_id") != threshold_set_id:
+    raise SystemExit("prepared plan run/threshold-set identity differs")
 with task_path.open(newline="") as handle:
     rows = list(csv.DictReader(handle, delimiter="\t"))
 count = int(config.get("cofactor_task_count", -1))
@@ -215,7 +226,8 @@ PY
 else
     task_count=$(python3 "$source/scripts/manage_motif_threshold_calibration.py" prepare \
         --run-root "$run_root" --scan-package "$scan_package" --jaspar "$jaspar" \
-        --anchor-evidence "$anchor" --source "$source" --duckdb "$duckdb")
+        --anchor-evidence "$anchor" --source "$source" --duckdb "$duckdb" \
+        --run-id "$run_id" --threshold-set-id "$threshold_set_id")
     plan_source_commit=$(python3 -c \
         'import json,sys; print(json.load(open(sys.argv[1]))["source_commit"])' \
         "$run_config")

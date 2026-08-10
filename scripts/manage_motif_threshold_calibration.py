@@ -8,6 +8,7 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -144,14 +145,143 @@ def git_identity(source: Path) -> tuple[str, bool]:
     )
     if commit.returncode != 0:
         raise CalibrationError(commit.stderr.strip() or "cannot read Git commit")
-    status = subprocess.run(
-        ["git", "-C", str(source), "status", "--porcelain",
-         "--untracked-files=normal"],
-        text=True, capture_output=True, check=False,
+    dirty = False
+    for command in (
+        ["git", "-C", str(source), "diff", "--quiet", "--ignore-submodules", "--"],
+        ["git", "-C", str(source), "diff", "--cached", "--quiet",
+         "--ignore-submodules", "--"],
+    ):
+        status = subprocess.run(command, text=True, capture_output=True, check=False)
+        if status.returncode not in {0, 1}:
+            raise CalibrationError(status.stderr.strip() or "cannot read Git status")
+        dirty = dirty or status.returncode == 1
+    return commit.stdout.strip(), dirty
+
+
+def anchor_run_config_path(anchor_evidence: Path) -> Path:
+    return Path(f"{anchor_evidence}.run_config.tsv")
+
+
+def read_anchor_provenance(
+    anchor_evidence: Path, chrom: str, target_motif: str, *, required: bool
+) -> dict[str, object] | None:
+    sidecar = anchor_run_config_path(anchor_evidence)
+    if not anchor_evidence.is_file() or not sidecar.is_file():
+        if required or anchor_evidence.is_file() != sidecar.is_file():
+            raise CalibrationError(
+                "anchor evidence and its run-config sidecar must both exist: "
+                f"{anchor_evidence}, {sidecar}"
+            )
+        return None
+
+    with sidecar.open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        rows = list(reader)
+    required_columns = {
+        "chrom", "anchor_motif_id", "anchor_source_mode", "anchor_score_rule",
+        "minimum_anchor_score", "anchor_count", "observed_minimum_score",
+        "observed_maximum_score",
+    }
+    if reader.fieldnames is None or not required_columns.issubset(reader.fieldnames):
+        raise CalibrationError(f"anchor run config has an incomplete schema: {sidecar}")
+    if len(rows) != 1:
+        raise CalibrationError(f"anchor run config must contain exactly one row: {sidecar}")
+    row = rows[0]
+    if row["chrom"] != chrom or row["anchor_motif_id"] != target_motif:
+        raise CalibrationError(
+            "anchor run config chromosome/motif differs from the calibration plan"
+        )
+    try:
+        minimum_score = float(row["minimum_anchor_score"])
+        observed_minimum = float(row["observed_minimum_score"])
+        observed_maximum = float(row["observed_maximum_score"])
+        anchor_count = int(row["anchor_count"])
+    except ValueError as error:
+        raise CalibrationError(f"anchor run config has invalid numeric values: {sidecar}") \
+            from error
+    if (not all(math.isfinite(value) for value in (
+            minimum_score, observed_minimum, observed_maximum))
+            or anchor_count <= 0 or observed_minimum < minimum_score - 1e-9
+            or observed_maximum < observed_minimum):
+        raise CalibrationError(f"anchor run config has inconsistent score/count values: {sidecar}")
+    if not row["anchor_source_mode"] or not row["anchor_score_rule"]:
+        raise CalibrationError(f"anchor run config lacks source semantics: {sidecar}")
+    return {
+        "anchor_motif_id": row["anchor_motif_id"],
+        "anchor_source_mode": row["anchor_source_mode"],
+        "anchor_score_rule": row["anchor_score_rule"],
+        "anchor_minimum_score": minimum_score,
+        "anchor_count": anchor_count,
+        "observed_minimum_score": observed_minimum,
+        "observed_maximum_score": observed_maximum,
+        "anchor_evidence_sha256": sha256(anchor_evidence),
+        "anchor_run_config_sha256": sha256(sidecar),
+    }
+
+
+def validate_anchor_evidence(
+    duckdb: str, anchor_evidence: Path, provenance: dict[str, object], chrom: str
+) -> None:
+    query = f"""
+SELECT count(*)::BIGINT AS rows,
+       count(DISTINCT (CAST(chrom AS VARCHAR), anchor_start, anchor_end))::BIGINT
+           AS distinct_anchors,
+       count(DISTINCT CAST(chrom AS VARCHAR))::BIGINT AS chromosomes,
+       min(CAST(chrom AS VARCHAR)) AS chrom,
+       min(anchor_score)::DOUBLE AS minimum_score,
+       max(anchor_score)::DOUBLE AS maximum_score,
+       count(*) FILTER (WHERE anchor_start < 0 OR anchor_end <= anchor_start
+                         OR NOT isfinite(anchor_score))::BIGINT AS invalid_rows
+FROM read_parquet({sql_string(anchor_evidence)});
+"""
+    rows = run_json([duckdb, "-json", ":memory:", "-c", query])
+    if len(rows) != 1:
+        raise CalibrationError("anchor evidence returned no validation summary")
+    row = rows[0]
+    expected_count = int(provenance["anchor_count"])
+    observed_minimum = float(provenance["observed_minimum_score"])
+    observed_maximum = float(provenance["observed_maximum_score"])
+    tolerance = 1e-9 * max(1.0, abs(observed_minimum), abs(observed_maximum))
+    if (int(row["rows"]) != expected_count
+            or int(row["distinct_anchors"]) != expected_count
+            or int(row["chromosomes"]) != 1 or str(row["chrom"]) != chrom
+            or int(row["invalid_rows"]) != 0
+            or abs(float(row["minimum_score"]) - observed_minimum) > tolerance
+            or abs(float(row["maximum_score"]) - observed_maximum) > tolerance):
+        raise CalibrationError(
+            f"anchor evidence differs from its run-config sidecar: {row}"
+        )
+
+
+def calibration_stratum(
+    config: dict[str, object], duckdb: str
+) -> tuple[str, dict[str, object]]:
+    anchor_evidence = Path(str(config["anchor_evidence"]))
+    provenance = read_anchor_provenance(
+        anchor_evidence, str(config["chrom"]), str(config["target_motif_id"]),
+        required=True,
     )
-    if status.returncode != 0:
-        raise CalibrationError(status.stderr.strip() or "cannot read Git status")
-    return commit.stdout.strip(), bool(status.stdout.strip())
+    assert provenance is not None
+    validate_anchor_evidence(
+        duckdb, anchor_evidence, provenance, str(config["chrom"])
+    )
+    planned = config.get("anchor_provenance")
+    if planned is not None and planned != provenance:
+        raise CalibrationError("anchor evidence provenance changed after plan preparation")
+    for key in ("anchor_evidence_sha256", "anchor_run_config_sha256"):
+        expected = config.get(key)
+        if expected is not None and expected != provenance[key]:
+            raise CalibrationError(f"planned {key} differs from the final anchor input")
+
+    source_mode = str(provenance["anchor_source_mode"])
+    if source_mode == "schema7_local_peak_context_anchor":
+        stratum_id = "schema7_local_peak_tp73_anchors"
+    elif source_mode == "strand_specific_motif_scan":
+        stratum_id = "all_tp73_anchors"
+    else:
+        slug = re.sub(r"[^a-z0-9]+", "_", source_mode.lower()).strip("_")
+        stratum_id = f"tp73_anchors_{slug or 'unspecified'}"
+    return stratum_id, provenance
 
 
 def prepare(arguments: argparse.Namespace) -> None:
@@ -236,9 +366,17 @@ def prepare(arguments: argparse.Namespace) -> None:
     immutable_write(run_root / "plan" / "target_anchor_files.tsv",
                     "\n".join(target_lines) + "\n")
 
+    anchor_evidence = arguments.anchor_evidence.expanduser().resolve()
+    anchor_provenance = read_anchor_provenance(
+        anchor_evidence, arguments.chrom, arguments.target_motif, required=False
+    )
+    if anchor_provenance is not None:
+        validate_anchor_evidence(
+            duckdb, anchor_evidence, anchor_provenance, arguments.chrom
+        )
     commit, dirty = git_identity(source)
     config = {
-        "schema_version": 1,
+        "schema_version": 2,
         "run_id": arguments.run_id,
         "threshold_set_id": arguments.threshold_set_id,
         "chrom": arguments.chrom,
@@ -254,7 +392,17 @@ def prepare(arguments: argparse.Namespace) -> None:
         "target_motif_id": arguments.target_motif,
         "target_policy": "separate_direct_and_tandem_calibration",
         "cofactor_task_count": len(task_motifs),
-        "anchor_evidence": str(arguments.anchor_evidence.expanduser().resolve()),
+        "anchor_evidence": str(anchor_evidence),
+        "anchor_evidence_sha256": (
+            anchor_provenance["anchor_evidence_sha256"]
+            if anchor_provenance is not None else None
+        ),
+        "anchor_run_config_sha256": (
+            anchor_provenance["anchor_run_config_sha256"]
+            if anchor_provenance is not None else None
+        ),
+        "anchor_provenance": anchor_provenance,
+        "source_dirty_definition": "tracked_worktree_or_index_diff",
         "source_minimum_score": -1,
         "context_flank_bp": 150,
         "candidate_grid": "observed_nonnegative_integer_thresholds",
@@ -508,6 +656,9 @@ def finalize(arguments: argparse.Namespace) -> None:
     if re.fullmatch(r"[0-9a-f]{40}", finalization_commit) is None:
         raise CalibrationError("finalization source commit must be a full Git object ID")
     finalization_dirty = arguments.finalization_source_dirty
+    duckdb = shutil.which(arguments.duckdb)
+    if duckdb is None:
+        raise CalibrationError(f"DuckDB executable not found: {arguments.duckdb}")
     rows = task_rows(run_root)
     metric_rows: list[dict[str, str]] = []
     metric_fields: list[str] | None = None
@@ -540,6 +691,7 @@ def finalize(arguments: argparse.Namespace) -> None:
         )
     if metric_fields is None:
         raise CalibrationError("no threshold metrics were collected")
+    stratum_id, stratum = calibration_stratum(config, duckdb)
 
     final = run_root / "final" / "threshold_calibration"
     if final.exists():
@@ -556,9 +708,6 @@ def finalize(arguments: argparse.Namespace) -> None:
             writer = csv.DictWriter(handle, fieldnames=metric_fields, delimiter="\t")
             writer.writeheader()
             writer.writerows(metric_rows)
-        duckdb = shutil.which(arguments.duckdb)
-        if duckdb is None:
-            raise CalibrationError(f"DuckDB executable not found: {arguments.duckdb}")
         metrics_parquet = staging / "threshold_metrics.parquet"
         process = subprocess.run([
             duckdb, "-batch", ":memory:", "-c",
@@ -596,8 +745,10 @@ def finalize(arguments: argparse.Namespace) -> None:
             "--context-distance-metric", "signed_interval_edge_distance",
             "--context-max-interval-distance", "150",
             "--context-relation-filter", "any",
-            "--calibration-stratum-id", "all_tp73_anchors",
-            "--calibration-stratum-json", '{"anchor_motif_id":"MA0861.2","anchor_minimum_score":0}',
+            "--calibration-stratum-id", stratum_id,
+            "--calibration-stratum-json", json.dumps(
+                stratum, sort_keys=True, separators=(",", ":")
+            ),
             "--calibration-scope", "grch38_chr1",
             "--evidence-dataset-id", "rostock_p73_cutrun_20250602_noDuplicates",
             "--outcome-id", "discordant_anti_p73_only_vs_matched_control_only_strict_immersion",
@@ -625,7 +776,7 @@ def finalize(arguments: argparse.Namespace) -> None:
                 int(summary[0]["pending"]) != 0:
             raise CalibrationError(f"final registry validation failed: {summary}")
         final_manifest = {
-            "schema_version": 2,
+            "schema_version": 3,
             "run_id": config["run_id"],
             "threshold_set_id": config["threshold_set_id"],
             "motifs": len(rows),
@@ -633,6 +784,10 @@ def finalize(arguments: argparse.Namespace) -> None:
             "pending": summary[0]["pending"],
             "threshold_metrics_sha256": sha256(metrics_parquet),
             "threshold_registry_sha256": sha256(registry),
+            "calibration_stratum_id": stratum_id,
+            "calibration_stratum": stratum,
+            "anchor_evidence_sha256": stratum["anchor_evidence_sha256"],
+            "anchor_run_config_sha256": stratum["anchor_run_config_sha256"],
             "source_commit": config["source_commit"],
             "metric_source_commit": config["source_commit"],
             "metric_source_dirty": config["source_dirty"],

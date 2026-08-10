@@ -125,6 +125,8 @@ RUN=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_context_thresholds_v1
   --scan-package "$SCAN" \
   --jaspar /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_sparse_v3/input/JASPAR2026_CORE_non-redundant_pfms_jaspar.txt \
   --cutandrun-dir "$SOURCE/cutandrun_20250602_noDuplicates" \
+  --run-id jaspar2026_grch38_chr1_tp73_context_thresholds_v1 \
+  --threshold-set-id tp73_chr1_cutrun_context_roc_auc_all_jaspar_v1 \
   --source "$SOURCE" \
   --account cluster --partition requeue \
   --max-concurrent 20 --array-size 1000 \
