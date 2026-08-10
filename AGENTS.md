@@ -36,6 +36,15 @@ Treat [`sql/schema.sql`](sql/schema.sql) and [`sql/queries.sql`](sql/queries.sql
 as the draft query contract:
 
 - Use BED 0-based half-open coordinates for exported motif and promoter tables.
+- Treat `transcription_start_site` and `promoter` as physical interval
+  dimensions. Recover transcript/gene ownership through `transcript_tss` and
+  `promoter_gene`; do not duplicate or collapse shared TSSs into a gene-grain
+  table.
+- Use Q20 with `tp73_anchor_nearest_tss` when all tied nearest TSSs and their
+  associated genes matter. Use Q21 with `tp73_anchor_promoter` for canonical
+  many-to-many promoter membership, and always bind `promoter_definition_id`.
+  Membership means positive half-open interval overlap; mere abutment is not
+  membership.
 - Keep large generated data out of Git; package it as versioned Parquet plus a
   rebuildable DuckDB query index.
 - Prefer the materialized `promoter_card` for low-latency agent lookups, bind
