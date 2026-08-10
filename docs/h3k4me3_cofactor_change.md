@@ -1,5 +1,8 @@
 # GFP-Referenced H3K4me3 Change at TP73 Motif Anchors
 
+The completed schema-7 chromosome-1 production result is reported in
+[`h3k4me3_chr1_production_20260810.md`](h3k4me3_chr1_production_20260810.md).
+
 ## Question and estimand
 
 This analysis asks whether the sequence-defined context of a TP73 motif anchor

@@ -89,6 +89,7 @@ RUN=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_cofactor_enrichment_v2
 "$SOURCE/scripts/submit_tp73_cofactor_enrichment_slurm.sh" \
   --run-root "$RUN" \
   --source-threshold-run "$SOURCE_RUN" \
+  --run-id jaspar2026_chr1_tp73_cofactor_enrichment_v2 \
   --source "$SOURCE" \
   --partition requeue \
   --max-concurrent 20 \
@@ -137,6 +138,7 @@ REGISTRY=$OLD/final/threshold_calibration/tables/jaspar2026/motif_score_threshol
 # Run this after LOCALPEAK has finalized successfully.
 "$SOURCE/scripts/submit_tp73_cofactor_enrichment_slurm.sh" \
   --run-root "$ENRICH" --source-threshold-run "$LOCALPEAK" \
+  --run-id jaspar2026_chr1_tp73_localpeak_enrichment_v3 \
   --anchor-evidence "$EVIDENCE" --threshold-registry "$REGISTRY" \
   --runtime-prefix "$OLD/runtime" --source "$SOURCE" \
   --partition requeue --max-concurrent 20
@@ -153,6 +155,20 @@ They record `schema7_local_peak_context_anchor`, the `-1` TP73 score floor,
 the observed anchor count and score range, and checksums for both the evidence
 Parquet and its sidecar. Unrelated untracked files in the Haumea checkout do
 not mark the scientific source dirty; tracked worktree or index changes do.
+
+## Completed local-peak result
+
+All 2,632 motif tasks and the combined finalization completed. The corrected
+publication package is:
+
+```text
+/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_localpeak_enrichment_v3/final/cofactor_enrichment_localpeak_v3
+```
+
+It contains 1,571 estimable primary models; 782 point toward enrichment and 789
+toward depletion. Exact results, the historical-anchor comparison, depth-tier
+behavior, and the provenance-only republishing step are reported in
+[`jaspar2026_chr1_localpeak_enrichment_20260810.md`](jaspar2026_chr1_localpeak_enrichment_20260810.md).
 
 ## Progress And Restart
 
@@ -190,11 +206,15 @@ The finalizer verifies every exact output checksum, confirms that all workers
 used the same depth-tier manifest, and applies Benjamini-Hochberg once with the
 complete 2,632-motif family size. Per-task one-row q-values are discarded.
 
-The published directory is:
+The default published directory is:
 
 ```text
 $RUN/final/cofactor_enrichment/
 ```
+
+A corrected publication identity can be emitted into a distinct sibling with
+`--publication-run-id` and `--final-name`. The final manifest then records both
+`run_id` and `plan_run_id`; an existing final package is never overwritten.
 
 It contains Zstandard-compressed Parquet tables, a compact TSV overview, a
 manifest, and `tp73_cofactor_enrichment.duckdb`. The main tables are:

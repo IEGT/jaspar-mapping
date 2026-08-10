@@ -340,12 +340,19 @@ TFAP2C models, including a count-matched cofactor comparison, is recorded in
 The corresponding POU2F2 analysis confirms a strong negative count-matched
 association and is recorded in
 [`docs/tp73_pou2f2_chr1_cutandrun_20260717.md`](docs/tp73_pou2f2_chr1_cutandrun_20260717.md).
+The completed all-JASPAR chromosome-1 screen at schema-7 TP73 local peaks,
+including fixed cofactor thresholds, primary enrichment/depletion models,
+depth-tier behavior, and comparison with the historical anchor population, is
+reported in
+[`docs/jaspar2026_chr1_localpeak_enrichment_20260810.md`](docs/jaspar2026_chr1_localpeak_enrichment_20260810.md).
 The separate GFP-referenced H3K4me3 change analysis uses condition-matched
 input, predeclared motif-centred windows, and per-series models without a
 persistent BED intermediate. Its contract and chromosome-1 pilot are recorded
 in [`docs/h3k4me3_cofactor_change.md`](docs/h3k4me3_cofactor_change.md). The
 same document gives the restart-safe Slurm production command using schema-7
-TP73 local-peak anchors and node-local scratch.
+TP73 local-peak anchors and node-local scratch. The completed production result
+is reported in
+[`docs/h3k4me3_chr1_production_20260810.md`](docs/h3k4me3_chr1_production_20260810.md).
 
 ## Automated reference checks
 

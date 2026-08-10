@@ -12,6 +12,13 @@ For motif-score calibration against raw CUT&RUN fragments, also read
 For all-JASPAR enrichment/depletion around TP73 anchors, depth-stratified
 CUT&RUN summaries, or their Slurm production run, also read
 [`docs/jaspar2026_chr1_all_cofactor_enrichment_run.md`](docs/jaspar2026_chr1_all_cofactor_enrichment_run.md).
+The completed schema-7 local-peak result is reported in
+[`docs/jaspar2026_chr1_localpeak_enrichment_20260810.md`](docs/jaspar2026_chr1_localpeak_enrichment_20260810.md).
+
+For GFP-referenced H3K4me3 change at TP73 anchors, read
+[`docs/h3k4me3_cofactor_change.md`](docs/h3k4me3_cofactor_change.md). The
+completed chromosome-1 result is reported in
+[`docs/h3k4me3_chr1_production_20260810.md`](docs/h3k4me3_chr1_production_20260810.md).
 For GFP-referenced H3K4me3 change, H3K4me3/input window selection, or
 cofactor-by-confirmed-TP73 effect modification, also read
 [`docs/h3k4me3_cofactor_change.md`](docs/h3k4me3_cofactor_change.md).
