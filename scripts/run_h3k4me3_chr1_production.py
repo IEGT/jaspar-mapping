@@ -113,6 +113,15 @@ def git_value(source: Path, *arguments: str) -> str:
     return process.stdout.strip()
 
 
+def git_success(source: Path, *arguments: str) -> bool:
+    return subprocess.run(
+        ["git", "-C", str(source), *arguments],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    ).returncode == 0
+
+
 def read_panel(path: Path) -> list[str]:
     with path.open(encoding="utf-8", newline="") as stream:
         reader = csv.DictReader(stream, delimiter="\t")
@@ -390,7 +399,12 @@ def main() -> int:
         validate_arguments(arguments)
         signal.signal(signal.SIGUSR1, progress)
         source_commit = git_value(arguments.source, "rev-parse", "HEAD")
-        if git_value(arguments.source, "status", "--porcelain"):
+        if not git_success(
+            arguments.source, "diff", "--quiet", "--ignore-submodules", "--"
+        ) or not git_success(
+            arguments.source, "diff", "--cached", "--quiet",
+            "--ignore-submodules", "--"
+        ):
             raise ProductionError("production execution requires a tracked-clean source tree")
         motifs = read_panel(arguments.thresholds)
         arguments.run_root.mkdir(parents=True, exist_ok=True)
