@@ -132,4 +132,7 @@ See
 [`jaspar2026_chr1_all_cofactor_enrichment_run.md`](jaspar2026_chr1_all_cofactor_enrichment_run.md)
 for the execution/query contract and
 [`h3k4me3_chr1_production_20260810.md`](h3k4me3_chr1_production_20260810.md)
-for the separate GFP-referenced H3K4me3 change analysis.
+for the separate GFP-referenced H3K4me3 change analysis. The prespecified panel
+was subsequently evaluated without changing its thresholds on chromosome 2;
+see
+[`jaspar2026_chr2_heldout_validation_20260810.md`](jaspar2026_chr2_heldout_validation_20260810.md).

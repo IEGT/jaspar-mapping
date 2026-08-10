@@ -12,6 +12,9 @@ For motif-score calibration against raw CUT&RUN fragments, also read
 For all-JASPAR enrichment/depletion around TP73 anchors, depth-stratified
 CUT&RUN summaries, or their Slurm production run, also read
 [`docs/jaspar2026_chr1_all_cofactor_enrichment_run.md`](docs/jaspar2026_chr1_all_cofactor_enrichment_run.md).
+For fixed-threshold genomic transfer of the prespecified cofactor panel and
+H3K4me3 change effects, also read
+[`docs/jaspar2026_chr2_heldout_validation_20260810.md`](docs/jaspar2026_chr2_heldout_validation_20260810.md).
 The completed schema-7 local-peak result is reported in
 [`docs/jaspar2026_chr1_localpeak_enrichment_20260810.md`](docs/jaspar2026_chr1_localpeak_enrichment_20260810.md).
 

@@ -123,6 +123,14 @@ primary outcomes.
 
 ## Interpretation and limits
 
+The subsequent chromosome-2 holdout materially sharpens this interpretation.
+SK-Mel-29 TA effects transfer for all eight estimable motifs, while no SaOS-2
+TA effect excludes zero on chromosome 2. The chromosome-1 SaOS-2 POU4F1 effect
+and the apparent cross-system REST direction do not replicate as supported
+effects. See
+[`jaspar2026_chr2_heldout_validation_20260810.md`](jaspar2026_chr2_heldout_validation_20260810.md)
+for the fixed-threshold comparison.
+
 - The production anchor definition confirms rather than resolves the
   system-specific TA result seen in the pilot.
 - DN cofactor contrasts are remarkably consistent, but they stratify the
