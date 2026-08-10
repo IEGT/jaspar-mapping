@@ -35,6 +35,7 @@ combined.expression.data.tsv
 *.png
 *.svg
 *.jpg
+!docs/figures/h3k4me3_gfp_tp73_anchor_metaprofile_chr1_100k.png
 *.dSYM/
 score_distributions_*/
 renv/library/

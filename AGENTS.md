@@ -12,6 +12,9 @@ For motif-score calibration against raw CUT&RUN fragments, also read
 For all-JASPAR enrichment/depletion around TP73 anchors, depth-stratified
 CUT&RUN summaries, or their Slurm production run, also read
 [`docs/jaspar2026_chr1_all_cofactor_enrichment_run.md`](docs/jaspar2026_chr1_all_cofactor_enrichment_run.md).
+For GFP-referenced H3K4me3 change, H3K4me3/input window selection, or
+cofactor-by-confirmed-TP73 effect modification, also read
+[`docs/h3k4me3_cofactor_change.md`](docs/h3k4me3_cofactor_change.md).
 
 For TP73-local motif spacing, tandem TP73 sites, or transcript/intron context,
 also read [`docs/tp73_motif_context.md`](docs/tp73_motif_context.md).

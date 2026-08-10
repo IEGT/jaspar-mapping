@@ -12,11 +12,13 @@ actual="$temporary/actual-scripts.txt"
 cat > "$expected" <<'EOF'
 scripts/analyze_cutandrun_containment.py
 scripts/analyze_dense_cutandrun_coverage.py
+scripts/analyze_h3k4me3_cofactor_change.R
 scripts/analyze_tp73_cofactor_enrichment.R
 scripts/bedtools_map_serial.sh
 scripts/benchmark_sparse_layout.py
 scripts/build_density_capped_thresholds.py
 scripts/build_fasta_index.py
+scripts/build_h3k4me3_anchor_signal.py
 scripts/build_motif_context.py
 scripts/build_motif_score_thresholds.py
 scripts/build_sparse_context_maxima.py
@@ -40,6 +42,7 @@ scripts/manage_genome_scan.py
 scripts/manage_motif_density_calibration.py
 scripts/manage_motif_threshold_calibration.py
 scripts/manage_tp73_cofactor_enrichment.py
+scripts/plot_h3k4me3_metaprofile.R
 scripts/plot_informative_threshold_distribution.py
 scripts/plot_tp73_score_distributions.R
 scripts/query_genome_scan.py

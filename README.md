@@ -340,6 +340,10 @@ TFAP2C models, including a count-matched cofactor comparison, is recorded in
 The corresponding POU2F2 analysis confirms a strong negative count-matched
 association and is recorded in
 [`docs/tp73_pou2f2_chr1_cutandrun_20260717.md`](docs/tp73_pou2f2_chr1_cutandrun_20260717.md).
+The separate GFP-referenced H3K4me3 change analysis uses condition-matched
+input, predeclared motif-centred windows, and per-series models without a
+persistent BED intermediate. Its contract and chromosome-1 pilot are recorded
+in [`docs/h3k4me3_cofactor_change.md`](docs/h3k4me3_cofactor_change.md).
 
 ## Automated reference checks
 

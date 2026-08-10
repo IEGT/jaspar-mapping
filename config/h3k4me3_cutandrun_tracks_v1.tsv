@@ -1,0 +1,37 @@
+series_id	cell_line	condition	channel	replicate	filename	analysis_included	exclusion_reason	reference_build	signal_scale
+saos2	SaOS-2	GFP	h3k4me3	R1	pos_saos2_GFP_R1.bigWig	true		GRCh38	processed_bigwig_scale_pending_provenance
+saos2	SaOS-2	GFP	input	R1	input_saos2_GFP_R1.bigWig	true		GRCh38	processed_bigwig_scale_pending_provenance
+saos2	SaOS-2	GFP	tp73	R1	tp73_saos2_GFP_R1.bigWig	true		GRCh38	processed_bigwig_scale_pending_provenance
+saos2	SaOS-2	GFP	negative_control	R1	neg_saos2_GFP_R1.bigWig	true		GRCh38	processed_bigwig_scale_pending_provenance
+saos2	SaOS-2	TA	h3k4me3	R1	pos_saos2_TA_R1.bigWig	true		GRCh38	processed_bigwig_scale_pending_provenance
+saos2	SaOS-2	TA	input	R1	input_saos2_TA_R1.bigWig	true		GRCh38	processed_bigwig_scale_pending_provenance
+saos2	SaOS-2	TA	tp73	R1	tp73_saos2_TA_R1.bigWig	true		GRCh38	processed_bigwig_scale_pending_provenance
+saos2	SaOS-2	TA	negative_control	R1	neg_saos2_TA_R1.bigWig	true		GRCh38	processed_bigwig_scale_pending_provenance
+saos2	SaOS-2	DN	h3k4me3	R1	pos_saos2_DN_R1.bigWig	true		GRCh38	processed_bigwig_scale_pending_provenance
+saos2	SaOS-2	DN	input	R1	input_saos2_DN_R1.bigWig	true		GRCh38	processed_bigwig_scale_pending_provenance
+saos2	SaOS-2	DN	tp73	R1	tp73_saos2_DN_R1.bigWig	true		GRCh38	processed_bigwig_scale_pending_provenance
+saos2	SaOS-2	DN	negative_control	R1	neg_saos2_DN_R1.bigWig	true		GRCh38	processed_bigwig_scale_pending_provenance
+skmel29_2	SK-Mel-29	GFP	h3k4me3	R1	pos_skmel29_2_GFP_R1.bigWig	true		GRCh38	processed_bigwig_scale_pending_provenance
+skmel29_2	SK-Mel-29	GFP	input	R1	input_skmel29_2_GFP_R1.bigWig	true		GRCh38	processed_bigwig_scale_pending_provenance
+skmel29_2	SK-Mel-29	GFP	tp73	R1	tp73_skmel29_2_GFP_R1.bigWig	true		GRCh38	processed_bigwig_scale_pending_provenance
+skmel29_2	SK-Mel-29	GFP	negative_control	R1	neg_skmel29_2_GFP_R1.bigWig	true		GRCh38	processed_bigwig_scale_pending_provenance
+skmel29_2	SK-Mel-29	TA	h3k4me3	R1	pos_skmel29_2_TA_R1.bigWig	true		GRCh38	processed_bigwig_scale_pending_provenance
+skmel29_2	SK-Mel-29	TA	input	R1	input_skmel29_2_TA_R1.bigWig	true		GRCh38	processed_bigwig_scale_pending_provenance
+skmel29_2	SK-Mel-29	TA	tp73	R1	tp73_skmel29_2_TA_R1.bigWig	true		GRCh38	processed_bigwig_scale_pending_provenance
+skmel29_2	SK-Mel-29	TA	negative_control	R1	neg_skmel29_2_TA_R1.bigWig	true		GRCh38	processed_bigwig_scale_pending_provenance
+skmel29_2	SK-Mel-29	DN	h3k4me3	R1	pos_skmel29_2_DN_R1.bigWig	true		GRCh38	processed_bigwig_scale_pending_provenance
+skmel29_2	SK-Mel-29	DN	input	R1	input_skmel29_2_DN_R1.bigWig	true		GRCh38	processed_bigwig_scale_pending_provenance
+skmel29_2	SK-Mel-29	DN	tp73	R1	tp73_skmel29_2_DN_R1.bigWig	true		GRCh38	processed_bigwig_scale_pending_provenance
+skmel29_2	SK-Mel-29	DN	negative_control	R1	neg_skmel29_2_DN_R1.bigWig	true		GRCh38	processed_bigwig_scale_pending_provenance
+skmel29_1	SK-Mel-29	GFP	h3k4me3	R1	pos_skmel29_1_GFP_R1.bigWig	false	data_set_unresolved_excluded_by_investigator_2026-08-09	GRCh38	processed_bigwig_scale_pending_provenance
+skmel29_1	SK-Mel-29	GFP	input	R1	input_skmel29_1_GFP_R1.bigWig	false	data_set_unresolved_excluded_by_investigator_2026-08-09	GRCh38	processed_bigwig_scale_pending_provenance
+skmel29_1	SK-Mel-29	GFP	tp73	R1	tp73_skmel29_1_GFP_R1.bigWig	false	data_set_unresolved_excluded_by_investigator_2026-08-09	GRCh38	processed_bigwig_scale_pending_provenance
+skmel29_1	SK-Mel-29	GFP	negative_control	R1	neg_skmel29_1_GFP_R1.bigWig	false	data_set_unresolved_excluded_by_investigator_2026-08-09	GRCh38	processed_bigwig_scale_pending_provenance
+skmel29_1	SK-Mel-29	TA	h3k4me3	R1	pos_skmel29_1_TA_R1.bigWig	false	data_set_unresolved_excluded_by_investigator_2026-08-09	GRCh38	processed_bigwig_scale_pending_provenance
+skmel29_1	SK-Mel-29	TA	input	R1	input_skmel29_1_TA_R1.bigWig	false	data_set_unresolved_excluded_by_investigator_2026-08-09	GRCh38	processed_bigwig_scale_pending_provenance
+skmel29_1	SK-Mel-29	TA	tp73	R1	tp73_skmel29_1_TA_R1.bigWig	false	data_set_unresolved_excluded_by_investigator_2026-08-09	GRCh38	processed_bigwig_scale_pending_provenance
+skmel29_1	SK-Mel-29	TA	negative_control	R1	neg_skmel29_1_TA_R1.bigWig	false	data_set_unresolved_excluded_by_investigator_2026-08-09	GRCh38	processed_bigwig_scale_pending_provenance
+skmel29_1	SK-Mel-29	DN	h3k4me3	R1	pos_skmel29_1_DN_R1.bigWig	false	data_set_unresolved_excluded_by_investigator_2026-08-09	GRCh38	processed_bigwig_scale_pending_provenance
+skmel29_1	SK-Mel-29	DN	input	R1	input_skmel29_1_DN_R1.bigWig	false	data_set_unresolved_excluded_by_investigator_2026-08-09	GRCh38	processed_bigwig_scale_pending_provenance
+skmel29_1	SK-Mel-29	DN	tp73	R1	tp73_skmel29_1_DN_R1.bigWig	false	data_set_unresolved_excluded_by_investigator_2026-08-09	GRCh38	processed_bigwig_scale_pending_provenance
+skmel29_1	SK-Mel-29	DN	negative_control	R1	neg_skmel29_1_DN_R1.bigWig	false	data_set_unresolved_excluded_by_investigator_2026-08-09	GRCh38	processed_bigwig_scale_pending_provenance
