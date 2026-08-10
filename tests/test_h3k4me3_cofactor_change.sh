@@ -20,6 +20,39 @@ Rscript -e 'library(data.table)' >/dev/null 2>&1 || {
     exit 0
 }
 
+python3 - "$repository_root" "$temporary" <<'PY'
+import errno
+import importlib.util
+import os
+import pathlib
+import sys
+
+repository, temporary = map(pathlib.Path, sys.argv[1:])
+spec = importlib.util.spec_from_file_location(
+    "h3_signal", repository / "scripts" / "build_h3k4me3_anchor_signal.py"
+)
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+source = temporary / "cross-device-source.txt"
+target = temporary / "cross-device-target.txt"
+source.write_text("complete output\n")
+real_replace = module.os.replace
+raised = False
+
+def forced_cross_device(left, right):
+    global raised
+    if not raised:
+        raised = True
+        raise OSError(errno.EXDEV, os.strerror(errno.EXDEV))
+    return real_replace(left, right)
+
+module.os.replace = forced_cross_device
+module.promote_file(source, target)
+assert target.read_text() == "complete output\n"
+assert not list(temporary.glob(".cross-device-target.txt.tmp-*"))
+PY
+
 "$duckdb" -batch :memory: >/dev/null <<SQL
 COPY (
     SELECT (100 + i * 500)::BIGINT AS start,

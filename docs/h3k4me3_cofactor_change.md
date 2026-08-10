@@ -229,7 +229,7 @@ ANNOTATION=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_tp73_annotation_v2
 SCAN=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_sparse_v3/package
 TRACKS=$SOURCE/cutandrun_20250602_noDuplicates
 RUNTIME=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_context_thresholds_v1/runtime
-RUN=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_h3k4me3_production_v3
+RUN=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_h3k4me3_production_v4
 
 "$SOURCE/scripts/submit_h3k4me3_chr1_production_slurm.sh" \
   --run-root "$RUN" --annotation-run "$ANNOTATION" \
@@ -243,3 +243,6 @@ elapsed time, durable bytes, and scratch bytes. Attempts are immutable. Only a
 validated attempt is atomically promoted to `$RUN/final`, whose `manifest.json`
 pins the annotation catalog, anchor file, scan inventory, track manifest,
 cofactor thresholds, source commit, output checksums, and cardinality checks.
+Scratch-to-`/data` publication copies first to a hidden file beside the durable
+target and renames that file atomically, because a direct cross-filesystem
+`rename(2)` is not valid.

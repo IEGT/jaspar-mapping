@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import errno
 import hashlib
 import json
 import math
@@ -180,6 +181,25 @@ def run(command: list[str], *, input_text: str | None = None) -> None:
             process.stderr.strip() or process.stdout.strip() or
             f"command failed: {' '.join(command)}"
         )
+
+
+def promote_file(source: Path, target: Path) -> None:
+    """Publish a complete file atomically, including across filesystems."""
+    try:
+        os.replace(source, target)
+        return
+    except OSError as error:
+        if error.errno != errno.EXDEV:
+            raise
+    temporary = target.with_name(f".{target.name}.tmp-{os.getpid()}")
+    if temporary.exists():
+        raise SignalBuildError(f"promotion temporary already exists: {temporary}")
+    try:
+        shutil.copy2(source, temporary)
+        os.replace(temporary, target)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def stage_track(track: Track, root: Path, scratch: Path, chrom: str,
@@ -789,7 +809,7 @@ def main() -> int:
                     arguments, profile_tracks, staged_profile, anchor_source
                 )
                 run([arguments.duckdb, "-batch", ":memory:"], input_text=sql)
-                os.replace(staged_profile, arguments.profile_output)
+                promote_file(staged_profile, arguments.profile_output)
                 write_sidecars(
                     arguments.profile_output, arguments, tracks, used, windows,
                     "profile_only" if arguments.profile_only else "full",
@@ -823,12 +843,14 @@ def main() -> int:
                     f"{time.monotonic() - phase_start:.1f} seconds",
                     file=sys.stderr,
                 )
-                os.replace(staged_signal, arguments.signal_output)
-                os.replace(staged_tp73, arguments.tp73_output)
+                promote_file(staged_signal, arguments.signal_output)
+                promote_file(staged_tp73, arguments.tp73_output)
                 for suffix in (".run_config.tsv", ".coverage_manifest.tsv"):
                     source = Path(str(staged_tp73) + suffix)
                     if source.exists():
-                        os.replace(source, Path(str(arguments.tp73_output) + suffix))
+                        promote_file(
+                            source, Path(str(arguments.tp73_output) + suffix)
+                        )
                 write_sidecars(
                     arguments.signal_output, arguments, tracks, used, windows, "full"
                 )
