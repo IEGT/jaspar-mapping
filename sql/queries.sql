@@ -210,7 +210,15 @@ SELECT
     best_other_anchor_locus_score,
     anchor_locus_score_prominence,
     anchor_locus_is_local_peak,
+    nearest_tss_id,
+    nearest_tss_start,
+    nearest_tss_strand,
+    nearest_tss_tie_count,
+    nearest_tss_has_mixed_strands,
+    nearest_tss_genomic_distance_bp,
     nearest_tss_distance_bp,
+    nearest_tss_interval_distance_bp,
+    nearest_tss_relation,
     primary_transcript_region,
     in_any_intron,
     has_tandem_tp73,
@@ -551,3 +559,68 @@ WHERE genome_id = $genome_id
   AND score_mode = $score_mode
   AND pseudocount = $pseudocount
 ORDER BY neighbor_motif_id, interval_distance_band_order;
+
+-- Q20. Every physical TSS tied as nearest to one TP73 anchor, with all genes
+--      and transcripts using that TSS. No deterministic representative is
+--      discarded here.
+--      Params: $anchor_hit_id
+SELECT
+    n.anchor_hit_id,
+    n.chrom,
+    n.anchor_start,
+    n.anchor_end,
+    n.tss_id,
+    n.tss_start,
+    n.tss_end,
+    n.tss_strand,
+    n.genomic_center_offset_bp,
+    n.transcription_oriented_center_offset_bp,
+    n.tss_interval_distance_bp,
+    n.anchor_tss_relation,
+    n.nearest_tss_tie_count,
+    n.nearest_tss_has_mixed_strands,
+    tt.gene_id,
+    tt.gene_name,
+    tt.transcript_id
+FROM tp73_anchor_nearest_tss n
+JOIN transcript_tss tt
+  ON tt.genome_id = n.genome_id
+ AND tt.annotation_release = n.annotation_release
+ AND tt.tss_id = n.tss_id
+WHERE n.anchor_hit_id = $anchor_hit_id
+ORDER BY n.tss_start, n.tss_strand, tt.gene_id, tt.transcript_id;
+
+-- Q21. Every versioned promoter containing one TP73 anchor. One physical
+--      promoter can map to several genes; promoter_gene preserves those
+--      associations without multiplying the canonical anchor/promoter bridge.
+--      Params: $anchor_hit_id, $promoter_definition_id
+SELECT
+    ap.anchor_hit_id,
+    ap.chrom,
+    ap.anchor_start,
+    ap.anchor_end,
+    ap.promoter_id,
+    ap.tss_id,
+    ap.promoter_definition_id,
+    ap.promoter_start,
+    ap.promoter_end,
+    ap.tss_start,
+    ap.tss_end,
+    ap.tss_strand,
+    ap.promoter_overlap_bp,
+    ap.anchor_fully_within_promoter,
+    ap.tss_interval_distance_bp,
+    ap.transcription_oriented_center_offset_bp,
+    ap.anchor_tss_relation,
+    pg.gene_id,
+    pg.gene_name,
+    pg.n_transcripts
+FROM tp73_anchor_promoter ap
+JOIN promoter_gene pg
+  ON pg.genome_id = ap.genome_id
+ AND pg.annotation_release = ap.annotation_release
+ AND pg.promoter_definition_id = ap.promoter_definition_id
+ AND pg.promoter_id = ap.promoter_id
+WHERE ap.anchor_hit_id = $anchor_hit_id
+  AND ap.promoter_definition_id = $promoter_definition_id
+ORDER BY ap.tss_start, ap.tss_strand, pg.gene_id;

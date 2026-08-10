@@ -324,6 +324,8 @@ FROM read_parquet('tables/jaspar2026/hit_architecture/*/*.parquet', hive_partiti
 CREATE OR REPLACE VIEW motif_context_run_config AS
 SELECT
     schema_version,
+    builder_source_commit,
+    input_uniqueness,
     genome_id,
     motif_set_id,
     anchor_motif_id,
@@ -357,7 +359,16 @@ SELECT
     partner_locus_identity_rule,
     pair_class_rule,
     motif_hit_source,
-    gtf_source
+    annotation_release,
+    promoter_definition_id,
+    promoter_upstream_bp,
+    promoter_downstream_bp,
+    tss_coordinate_rule,
+    nearest_tss_rule,
+    promoter_membership_rule,
+    gtf_source,
+    gtf_sha256,
+    gtf_size_bytes
 FROM read_parquet('tables/jaspar2026/context_run_config.parquet');
 
 -- Backward-compatible short name used by the standalone context packages.
@@ -667,7 +678,15 @@ SELECT
     nearest_gene_id,
     nearest_gene_name,
     nearest_transcript_id,
+    nearest_tss_id,
+    nearest_tss_start,
+    nearest_tss_strand,
+    nearest_tss_tie_count,
+    nearest_tss_has_mixed_strands,
+    nearest_tss_genomic_distance_bp,
     nearest_tss_distance_bp,
+    nearest_tss_interval_distance_bp,
+    nearest_tss_relation,
     in_any_transcript,
     in_any_intron,
     overlaps_any_intron_boundary,
@@ -700,13 +719,37 @@ FROM read_parquet('tables/jaspar2026/cutandrun/*/*.parquet', hive_partitioning =
 -- ---------------------------------------------------------------------------
 -- Layer 4: regulatory / gene context
 -- ---------------------------------------------------------------------------
+-- gene.tss is retained as a compatibility representative. Alternative starts
+-- live in transcription_start_site + transcript_tss and must not be collapsed
+-- to this one value for promoter membership.
 CREATE OR REPLACE VIEW gene AS
-SELECT genome_id, gene_id, gene_name, chrom, strand, gene_start, gene_end, tss, biotype
+SELECT genome_id, gene_id, gene_name, chrom, strand, gene_start, gene_end,
+       tss AS representative_tss, tss, biotype
 FROM read_parquet('tables/jaspar2026/gene/*.parquet');
 
+-- A TSS is a physical one-base BED interval. Gene/transcript ownership is a
+-- separate bridge because several transcripts or genes can share one start.
+CREATE OR REPLACE VIEW transcription_start_site AS
+SELECT tss_id, genome_id, annotation_release, chrom, start, "end", strand
+FROM read_parquet('tables/jaspar2026/transcription_start_site.parquet');
+
+CREATE OR REPLACE VIEW transcript_tss AS
+SELECT genome_id, annotation_release, gene_id, gene_name, transcript_id, tss_id
+FROM read_parquet('tables/jaspar2026/transcript_tss.parquet');
+
+-- Promoter intervals are resolved once from a physical TSS and an explicitly
+-- versioned strand-aware definition. promoter_gene recovers every gene using
+-- a shared physical promoter without duplicating the promoter itself.
 CREATE OR REPLACE VIEW promoter AS
-SELECT genome_id, gene_id, transcript_id, chrom, strand, promoter_start, promoter_end, tss
-FROM read_parquet('tables/jaspar2026/promoter/*.parquet');
+SELECT promoter_id, tss_id, genome_id, annotation_release,
+       promoter_definition_id, chrom, strand, promoter_start, promoter_end,
+       tss_start, tss_end, upstream_bp, downstream_bp
+FROM read_parquet('tables/jaspar2026/promoter.parquet');
+
+CREATE OR REPLACE VIEW promoter_gene AS
+SELECT genome_id, annotation_release, promoter_definition_id, promoter_id,
+       gene_id, gene_name, n_transcripts
+FROM read_parquet('tables/jaspar2026/promoter_gene.parquet');
 
 -- Transcript and intron intervals are regenerated directly from the pinned
 -- GTF. A motif can be intronic for one transcript and non-intronic for another;
@@ -732,6 +775,7 @@ SELECT
     gene_id,
     gene_name,
     transcript_id,
+    tss_id,
     transcript_strand,
     tss,
     signed_tss_distance_bp,
@@ -739,6 +783,19 @@ SELECT
     overlaps_intron,
     transcript_region
 FROM read_parquet('tables/jaspar2026/motif_transcript_context.parquet');
+
+-- Every physical TSS tied for the minimum distance is retained. The compact
+-- tp73_context_anchor view stores a deterministic display representative plus
+-- explicit tie and mixed-strand flags; this relation is authoritative.
+CREATE OR REPLACE VIEW tp73_anchor_nearest_tss AS
+SELECT *
+FROM read_parquet('tables/jaspar2026/tp73_anchor_nearest_tss.parquet');
+
+-- Canonical many-to-many TP73-anchor/promoter membership. Join promoter_gene
+-- for gene ownership and transcript_tss for the complete isoform provenance.
+CREATE OR REPLACE VIEW tp73_anchor_promoter AS
+SELECT *
+FROM read_parquet('tables/jaspar2026/tp73_anchor_promoter.parquet');
 
 -- Transcript-oriented TP73/cofactor direction is derived here rather than
 -- multiplying the chromosome-wide feature table once per transcript.
@@ -803,8 +860,8 @@ WITH transcript_overlap AS (
     SELECT
         p.genome_id,
         h.motif_set_id,
-        p.gene_id,
-        p.transcript_id,
+        tt.gene_id,
+        tt.transcript_id,
         h.chrom,
         h.motif_id,
         h.strand,
@@ -815,9 +872,13 @@ WITH transcript_overlap AS (
         h.start AS hit_start,
         h."end" AS hit_end,
         -- signed distance from TSS, positive = downstream in gene direction
-        CASE WHEN p.strand = '+' THEN h.start - p.tss
-             ELSE p.tss - h."end" END AS tss_distance
+        CASE WHEN p.strand = '+' THEN h.start - p.tss_start
+             ELSE p.tss_start - h."end" END AS tss_distance
     FROM promoter p
+    JOIN transcript_tss tt
+      ON tt.genome_id = p.genome_id
+     AND tt.annotation_release = p.annotation_release
+     AND tt.tss_id = p.tss_id
     JOIN motif_hit h
       ON  h.genome_id = p.genome_id
       AND h.chrom = p.chrom
@@ -1067,13 +1128,17 @@ JOIN expression_differential d USING (genome_id, gene_id);
 CREATE OR REPLACE TABLE promoter_card AS
 WITH promoter_span AS (
     SELECT
-        genome_id,
-        gene_id,
-        MIN(promoter_start) AS promoter_start,
-        MAX(promoter_end) AS promoter_end,
-        COUNT(DISTINCT transcript_id) AS n_promoter_transcripts
-    FROM promoter
-    GROUP BY genome_id, gene_id
+        p.genome_id,
+        tt.gene_id,
+        MIN(p.promoter_start) AS promoter_start,
+        MAX(p.promoter_end) AS promoter_end,
+        COUNT(DISTINCT tt.transcript_id) AS n_promoter_transcripts
+    FROM promoter p
+    JOIN transcript_tss tt
+      ON tt.genome_id = p.genome_id
+     AND tt.annotation_release = p.annotation_release
+     AND tt.tss_id = p.tss_id
+    GROUP BY p.genome_id, tt.gene_id
 ),
 score_configuration AS (
     SELECT DISTINCT genome_id, motif_set_id, score_mode, pseudocount

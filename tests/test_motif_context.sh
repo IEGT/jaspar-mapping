@@ -77,6 +77,18 @@ cat > "$temporary/annotation.gtf" <<'EOF'
 1	test	transcript	51	300	.	+	.	gene_id "G1"; transcript_id "T1"; gene_name "GENE1"; transcript_biotype "protein_coding";
 1	test	exon	51	120	.	+	.	gene_id "G1"; transcript_id "T1"; gene_name "GENE1"; exon_number "1";
 1	test	exon	181	300	.	+	.	gene_id "G1"; transcript_id "T1"; gene_name "GENE1"; exon_number "2";
+1	test	transcript	251	409	.	-	.	gene_id "G2"; transcript_id "T2"; gene_name "GENE2"; transcript_biotype "protein_coding";
+1	test	exon	251	409	.	-	.	gene_id "G2"; transcript_id "T2"; gene_name "GENE2"; exon_number "1";
+1	test	transcript	1009	1200	.	+	.	gene_id "G3"; transcript_id "T3"; gene_name "GENE3"; transcript_biotype "protein_coding";
+1	test	exon	1009	1200	.	+	.	gene_id "G3"; transcript_id "T3"; gene_name "GENE3"; exon_number "1";
+1	test	transcript	900	1200	.	+	.	gene_id "G3"; transcript_id "T3_ALT"; gene_name "GENE3"; transcript_biotype "protein_coding";
+1	test	exon	900	1200	.	+	.	gene_id "G3"; transcript_id "T3_ALT"; gene_name "GENE3"; exon_number "1";
+1	test	transcript	800	1009	.	-	.	gene_id "G4"; transcript_id "T4"; gene_name "GENE4"; transcript_biotype "protein_coding";
+1	test	exon	800	1009	.	-	.	gene_id "G4"; transcript_id "T4"; gene_name "GENE4"; exon_number "1";
+1	test	transcript	1009	1250	.	+	.	gene_id "G5"; transcript_id "T5"; gene_name "GENE5"; transcript_biotype "protein_coding";
+1	test	exon	1009	1250	.	+	.	gene_id "G5"; transcript_id "T5"; gene_name "GENE5"; exon_number "1";
+1	test	transcript	417	550	.	+	.	gene_id "G6"; transcript_id "T6"; gene_name "GENE6"; transcript_biotype "protein_coding";
+1	test	exon	417	550	.	+	.	gene_id "G6"; transcript_id "T6"; gene_name "GENE6"; exon_number "1";
 EOF
 
 "$repository_root/scripts/build_motif_context.py" \
@@ -85,6 +97,9 @@ EOF
     --output "$temporary/context_package" \
     --anchor-motif MA0861.2 \
     --motif-set-id synthetic_jaspar2026 --genome-id synthetic_grch38_v1 \
+    --annotation-release synthetic_v1 \
+    --promoter-definition-id synthetic_up100_down25_v1 \
+    --promoter-upstream-bp 100 --promoter-downstream-bp 25 \
     --anchor-minimum-score 0 --partner-minimum-score 0 \
     --score-mode log2_relative_risk --pseudocount 1 \
     --chrom 1 --capture-flank 150 --context-flank 150 --tandem-flank 20 \
@@ -617,9 +632,84 @@ SELECT CASE WHEN NOT EXISTS (
       AND transcript_oriented_side = 'upstream'
 ) THEN error('transcript-oriented cofactor direction is incorrect') END;
 
+-- TSSs are one-base BED intervals on both strands. The minus transcript ends
+-- at exclusive BED coordinate 409, so its actual TSS base is 408.
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM transcription_start_site
+    WHERE start = 408 AND "end" = 409 AND strand = '-'
+) THEN error('minus-strand TSS was not converted from exclusive end to end - 1') END;
+
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM tp73_anchor_nearest_tss
+    WHERE anchor_start = 400 AND tss_start = 408 AND tss_strand = '-'
+      AND transcription_oriented_center_offset_bp = 0
+      AND tss_interval_distance_bp = -1
+      AND anchor_spans_tss AND anchor_tss_relation = 'spans_tss'
+) THEN error('minus-strand nearest-TSS geometry is incorrect') END;
+
+-- A motif ending immediately before a plus-strand TSS has interval distance
+-- zero and remains upstream; distance zero is not treated as TSS overlap.
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM tp73_anchor_promoter
+    WHERE anchor_start = 400 AND anchor_end = 416
+      AND tss_start = 416 AND tss_strand = '+'
+      AND tss_interval_distance_bp = 0
+      AND NOT anchor_spans_tss AND anchor_tss_relation = 'upstream'
+) THEN error('distance-zero TSS relation is incorrect') END;
+
+-- Two genes share the physical plus-strand TSS at 1008, while an
+-- opposite-strand TSS occupies the same base. Preserve two physical TSSs,
+-- every transcript/gene association, and both nearest ties.
+SELECT CASE WHEN (SELECT COUNT(*) FROM transcription_start_site
+                  WHERE start = 1008) <> 2
+    OR (SELECT COUNT(DISTINCT tt.gene_id)
+        FROM transcript_tss tt
+        JOIN transcription_start_site t USING (tss_id)
+        WHERE t.start = 1008) <> 3
+    OR (SELECT COUNT(*) FROM tp73_anchor_nearest_tss
+        WHERE anchor_start = 1000) <> 2
+    OR EXISTS (
+        SELECT 1 FROM tp73_anchor_nearest_tss
+        WHERE anchor_start = 1000
+          AND (nearest_tss_tie_count <> 2
+               OR NOT nearest_tss_has_mixed_strands)
+    )
+THEN error('shared or opposite-strand nearest TSSs were collapsed') END;
+
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM tp73_context_anchor
+    WHERE start = 1000
+      AND nearest_tss_id IS NOT NULL
+      AND nearest_tss_start = 1008
+      AND nearest_tss_strand IS NULL
+      AND nearest_tss_tie_count = 2
+      AND nearest_tss_has_mixed_strands
+      AND nearest_tss_genomic_distance_bp = 0
+      AND nearest_tss_interval_distance_bp = -1
+      AND nearest_tss_relation = 'spans_tss'
+) THEN error('anchor-level nearest-TSS tie summary is incorrect') END;
+
+-- Promoter membership stays at the physical anchor/promoter grain. Joining
+-- through promoter_gene recovers both genes sharing the plus TSS and the gene
+-- using the opposite-strand TSS without duplicating the physical promoters.
+SELECT CASE WHEN (SELECT COUNT(*) FROM tp73_anchor_promoter
+                  WHERE anchor_start = 1000) <> 2
+    OR (SELECT COUNT(DISTINCT pg.gene_id)
+        FROM tp73_anchor_promoter ap
+        JOIN promoter_gene pg USING (promoter_id)
+        WHERE ap.anchor_start = 1000) <> 3
+    OR EXISTS (
+        SELECT 1 FROM tp73_anchor_promoter
+        WHERE anchor_start = 1000
+          AND (promoter_definition_id <> 'synthetic_up100_down25_v1'
+               OR tss_interval_distance_bp <> -1
+               OR anchor_tss_relation <> 'spans_tss')
+    )
+THEN error('many-to-many TP73 anchor/promoter membership is incorrect') END;
+
 SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM motif_context_run_config
-    WHERE schema_version = 6
+    WHERE schema_version = 7
       AND builder_source_commit = 'unknown'
       AND input_uniqueness = 'deduplicate'
       AND genome_id = 'synthetic_grch38_v1'
@@ -655,6 +745,13 @@ SELECT CASE WHEN NOT EXISTS (
           'highest_score_then_nearest_center_then_coordinates'
       AND cofactor_pair_score_rule =
           'both_locus_best_scores_at_or_above_neighbor_qualifying_threshold'
+      AND annotation_release = 'synthetic_v1'
+      AND promoter_definition_id = 'synthetic_up100_down25_v1'
+      AND promoter_upstream_bp = 100 AND promoter_downstream_bp = 25
+      AND tss_coordinate_rule = 'one_base_bed_start_plus_end_minus_1'
+      AND nearest_tss_rule = 'all_physical_tss_at_minimum_center_distance'
+      AND promoter_membership_rule =
+          'anchor_overlaps_resolved_promoter_interval'
       AND gtf_source IS NOT NULL
       AND length(gtf_sha256) = 64
       AND gtf_size_bytes > 0
@@ -819,6 +916,7 @@ PREPARE q19 AS
 SQL
     awk '
         /^-- Q19\./ { capture = 1 }
+        /^-- Q20\./ { capture = 0 }
         capture { print }
     ' "$repository_root/sql/queries.sql"
     cat <<'SQL'

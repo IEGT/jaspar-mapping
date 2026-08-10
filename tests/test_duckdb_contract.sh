@@ -13,19 +13,97 @@ trap 'rm -f "$test_sql"' EXIT HUP INT TERM
 
 cat > "$test_sql" <<'SQL'
 CREATE TABLE promoter (
+    promoter_id VARCHAR,
+    tss_id VARCHAR,
     genome_id VARCHAR,
-    gene_id VARCHAR,
-    transcript_id VARCHAR,
+    annotation_release VARCHAR,
+    promoter_definition_id VARCHAR,
     chrom VARCHAR,
     strand VARCHAR,
     promoter_start BIGINT,
     promoter_end BIGINT,
-    tss BIGINT
+    tss_start BIGINT,
+    tss_end BIGINT
 );
 INSERT INTO promoter VALUES
-    ('genome1', 'G1', 'T1', '1', '+', 0, 100, 50),
-    ('genome1', 'G1', 'T2', '1', '+', 0, 100, 60),
-    ('genome1', 'G2', 'T3', '1', '+', 200, 300, 250);
+    ('P1', 'S1', 'genome1', 'release1', 'promoter_v1', '1', '+', 0, 100, 50, 51),
+    ('P2', 'S2', 'genome1', 'release1', 'promoter_v1', '1', '+', 0, 100, 60, 61),
+    ('P3', 'S3', 'genome1', 'release1', 'promoter_v1', '1', '+', 200, 300, 250, 251);
+
+CREATE TABLE transcript_tss (
+    genome_id VARCHAR,
+    annotation_release VARCHAR,
+    gene_id VARCHAR,
+    gene_name VARCHAR,
+    transcript_id VARCHAR,
+    tss_id VARCHAR
+);
+INSERT INTO transcript_tss VALUES
+    ('genome1', 'release1', 'G1', 'GENE1', 'T1', 'S1'),
+    ('genome1', 'release1', 'G1', 'GENE1', 'T2', 'S2'),
+    ('genome1', 'release1', 'G2', 'GENE2', 'T3', 'S3');
+
+CREATE TABLE promoter_gene (
+    genome_id VARCHAR,
+    annotation_release VARCHAR,
+    promoter_definition_id VARCHAR,
+    promoter_id VARCHAR,
+    gene_id VARCHAR,
+    gene_name VARCHAR,
+    n_transcripts BIGINT
+);
+INSERT INTO promoter_gene VALUES
+    ('genome1', 'release1', 'promoter_v1', 'P1', 'G1', 'GENE1', 1);
+
+CREATE TABLE tp73_anchor_nearest_tss (
+    anchor_hit_id VARCHAR,
+    genome_id VARCHAR,
+    motif_set_id VARCHAR,
+    chrom VARCHAR,
+    anchor_start BIGINT,
+    anchor_end BIGINT,
+    tss_id VARCHAR,
+    annotation_release VARCHAR,
+    tss_start BIGINT,
+    tss_end BIGINT,
+    tss_strand VARCHAR,
+    genomic_center_offset_bp DOUBLE,
+    transcription_oriented_center_offset_bp DOUBLE,
+    tss_interval_distance_bp BIGINT,
+    anchor_tss_relation VARCHAR,
+    nearest_tss_tie_count BIGINT,
+    nearest_tss_has_mixed_strands BOOLEAN
+);
+INSERT INTO tp73_anchor_nearest_tss VALUES
+    ('H1_LO', 'genome1', 'motifs1', '1', 55, 60, 'S1', 'release1',
+     50, 51, '+', 7.5, 7.5, 4, 'downstream', 1, false);
+
+CREATE TABLE tp73_anchor_promoter (
+    anchor_hit_id VARCHAR,
+    genome_id VARCHAR,
+    motif_set_id VARCHAR,
+    chrom VARCHAR,
+    anchor_start BIGINT,
+    anchor_end BIGINT,
+    promoter_id VARCHAR,
+    tss_id VARCHAR,
+    annotation_release VARCHAR,
+    promoter_definition_id VARCHAR,
+    promoter_start BIGINT,
+    promoter_end BIGINT,
+    tss_start BIGINT,
+    tss_end BIGINT,
+    tss_strand VARCHAR,
+    promoter_overlap_bp BIGINT,
+    anchor_fully_within_promoter BOOLEAN,
+    tss_interval_distance_bp BIGINT,
+    transcription_oriented_center_offset_bp DOUBLE,
+    anchor_tss_relation VARCHAR
+);
+INSERT INTO tp73_anchor_promoter VALUES
+    ('H1_LO', 'genome1', 'motifs1', '1', 55, 60, 'P1', 'S1',
+     'release1', 'promoter_v1', 0, 100, 50, 51, '+', 5, true, 4, 7.5,
+     'downstream');
 
 CREATE TABLE motif_hit (
     genome_id VARCHAR,
@@ -284,6 +362,26 @@ EXECUTE q13(
     neighbor_motif_id := 'M2',
     score_mode := 'log_odds',
     pseudocount := 1.0
+);
+PREPARE q20 AS
+SQL
+    awk '
+        /^-- Q20\./ { capture = 1 }
+        /^-- Q21\./ { capture = 0 }
+        capture { print }
+    ' "$repository_root/sql/queries.sql"
+    cat <<'SQL'
+EXECUTE q20(anchor_hit_id := 'H1_LO');
+PREPARE q21 AS
+SQL
+    awk '
+        /^-- Q21\./ { capture = 1 }
+        capture { print }
+    ' "$repository_root/sql/queries.sql"
+    cat <<'SQL'
+EXECUTE q21(
+    anchor_hit_id := 'H1_LO',
+    promoter_definition_id := 'promoter_v1'
 );
 SQL
 } >> "$test_sql"

@@ -127,7 +127,7 @@ def parse_task_plan(path: Path) -> tuple[list[dict[str, Any]], str]:
             raise ContextFinalizationError(
                 f"invalid context schema at task {task_index}: {schema_text}"
             ) from error
-        if schema_version not in {5, 6}:
+        if schema_version not in {5, 6, 7}:
             raise ContextFinalizationError(
                 f"unsupported context schema at task {task_index}: {schema_version}"
             )
@@ -162,6 +162,31 @@ def parse_task_plan(path: Path) -> tuple[list[dict[str, Any]], str]:
                     )
                 gtf_sha256 = gtf_sha256_text
 
+        if schema_version >= 7:
+            annotation_release = row.get("annotation_release") or ""
+            promoter_definition_id = row.get("promoter_definition_id") or ""
+            if (not SAFE_IDENTIFIER.fullmatch(annotation_release)
+                    or not SAFE_IDENTIFIER.fullmatch(promoter_definition_id)):
+                raise ContextFinalizationError(
+                    f"invalid annotation identity at task {task_index}"
+                )
+            try:
+                promoter_upstream_bp = int(row.get("promoter_upstream_bp") or "")
+                promoter_downstream_bp = int(row.get("promoter_downstream_bp") or "")
+            except ValueError as error:
+                raise ContextFinalizationError(
+                    f"invalid promoter extent at task {task_index}"
+                ) from error
+            if promoter_upstream_bp < 0 or promoter_downstream_bp < 0:
+                raise ContextFinalizationError(
+                    f"negative promoter extent at task {task_index}"
+                )
+        else:
+            annotation_release = None
+            promoter_definition_id = None
+            promoter_upstream_bp = None
+            promoter_downstream_bp = None
+
         tasks.append({
             "task_index": task_index,
             "chrom": chrom,
@@ -171,6 +196,10 @@ def parse_task_plan(path: Path) -> tuple[list[dict[str, Any]], str]:
             "context_schema_version": schema_version,
             "gtf_size_bytes": gtf_size_bytes,
             "gtf_sha256": gtf_sha256,
+            "annotation_release": annotation_release,
+            "promoter_definition_id": promoter_definition_id,
+            "promoter_upstream_bp": promoter_upstream_bp,
+            "promoter_downstream_bp": promoter_downstream_bp,
         })
 
     for field in ("output_tier", "builder_source_commit", "context_schema_version"):
@@ -184,6 +213,15 @@ def parse_task_plan(path: Path) -> tuple[list[dict[str, Any]], str]:
     }
     if len(gtf_identities) != 1:
         raise ContextFinalizationError("task plan mixes GTF content identities")
+    annotation_identities = {
+        (task["annotation_release"], task["promoter_definition_id"],
+         task["promoter_upstream_bp"], task["promoter_downstream_bp"])
+        for task in tasks
+    }
+    if len(annotation_identities) != 1:
+        raise ContextFinalizationError(
+            "task plan mixes annotation or promoter definitions"
+        )
     return tasks, plan_sha256
 
 
@@ -266,6 +304,24 @@ def validate_package_config(config: dict[str, Any], task: dict[str, Any],
             require_equal(config, "gtf_source", None, package)
         elif not config.get("gtf_source"):
             raise ContextFinalizationError(f"{package}: GTF source path is absent")
+    if task["context_schema_version"] >= 7:
+        for field in (
+            "annotation_release", "promoter_definition_id",
+            "promoter_upstream_bp", "promoter_downstream_bp",
+        ):
+            require_equal(config, field, task[field], package)
+        require_equal(
+            config, "tss_coordinate_rule",
+            "one_base_bed_start_plus_end_minus_1", package,
+        )
+        require_equal(
+            config, "nearest_tss_rule",
+            "all_physical_tss_at_minimum_center_distance", package,
+        )
+        require_equal(
+            config, "promoter_membership_rule",
+            "anchor_overlaps_resolved_promoter_interval", package,
+        )
 
 
 def dataset_name(relative: Path) -> str:
@@ -572,6 +628,10 @@ def finalize(arguments: argparse.Namespace) -> None:
             "source_scan_manifest_sha256": next(iter(scan_manifest_ids)),
             "gtf_size_bytes": task_rows[0]["gtf_size_bytes"],
             "gtf_sha256": task_rows[0]["gtf_sha256"],
+            "annotation_release": task_rows[0]["annotation_release"],
+            "promoter_definition_id": task_rows[0]["promoter_definition_id"],
+            "promoter_upstream_bp": task_rows[0]["promoter_upstream_bp"],
+            "promoter_downstream_bp": task_rows[0]["promoter_downstream_bp"],
             "orphan_staging_count": len(orphans),
             "finalization_validation_mode": (
                 "exact_task_plan_input_manifest_run_config_schema_probe_file_inventory"

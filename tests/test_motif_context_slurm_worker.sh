@@ -57,11 +57,11 @@ EOF
 chmod +x "$temporary/duckdb"
 
 {
-    printf 'task_index\tchrom\tcofactor_motif_ids\toutput_tier\tbuilder_source_commit\tcontext_schema_version\tgtf_size_bytes\tgtf_sha256\n'
-    printf '107\tX\tMA0001.1,MA0002.1\tband\tabc123\t6\t0\tnone\n'
-    printf '108\tX\tMA0001.1,MA0002.1\tband\tabc123\t6\t0\tnone\n'
-    printf '109\tX\tMA0001.1,MA0002.1\tband\tabc123\t6\t0\tnone\n'
-    printf '110\tX\tMA0001.1,MA0002.1\tselected\tabc123\t6\t%s\t%s\n' \
+    printf 'task_index\tchrom\tcofactor_motif_ids\toutput_tier\tbuilder_source_commit\tcontext_schema_version\tgtf_size_bytes\tgtf_sha256\tannotation_release\tpromoter_definition_id\tpromoter_upstream_bp\tpromoter_downstream_bp\n'
+    printf '107\tX\tMA0001.1,MA0002.1\tband\tabc123\t7\t0\tnone\tensembl_113\ttss_upstream_2000_downstream_500_v1\t2000\t500\n'
+    printf '108\tX\tMA0001.1,MA0002.1\tband\tabc123\t7\t0\tnone\tensembl_113\ttss_upstream_2000_downstream_500_v1\t2000\t500\n'
+    printf '109\tX\tMA0001.1,MA0002.1\tband\tabc123\t7\t0\tnone\tensembl_113\ttss_upstream_2000_downstream_500_v1\t2000\t500\n'
+    printf '110\tX\tMA0001.1,MA0002.1\tselected\tabc123\t7\t%s\t%s\tensembl_113\ttss_upstream_2000_downstream_500_v1\t2000\t500\n' \
         "$gtf_size" "$gtf_sha256"
 } > "$run_root/plan/context_tasks.tsv"
 touch "$run_root/packages/chrom-X/task-107/context.duckdb"

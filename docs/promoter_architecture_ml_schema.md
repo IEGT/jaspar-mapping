@@ -149,8 +149,19 @@ implemented by `scripts/query_genome_scan.py`. Optional synteny bridges are in
   This is the pair-stratified feature surface for per-site CUT&RUN models and
   is not restricted to promoters.
 - **`tp73_context_anchor`** — one feature-ready row per TP73 occurrence with
-  tandem summary, local motif counts, nearest signed TSS distance, and
-  transcript/intron indicators. It never replaces the pair table.
+  tandem summary, local motif counts, a convenient representative nearest-TSS
+  annotation with explicit tie/mixed-strand flags, and transcript/intron
+  indicators. It never replaces the pair or nearest-TSS tables.
+- **`transcription_start_site / transcript_tss`** — physical one-base TSS
+  intervals and their many-to-many transcript/gene ownership. A shared TSS is
+  not duplicated merely because several transcripts or genes use it.
+- **`tp73_anchor_nearest_tss`** — every physical TSS tied for the minimum
+  distance from a TP73 anchor. This is authoritative when the compact anchor
+  summary reports a tie.
+- **`promoter / promoter_gene / tp73_anchor_promoter`** — resolved,
+  strand-aware intervals under a versioned promoter definition, gene ownership,
+  and canonical many-to-many TP73-anchor membership. Nearest-TSS annotation and
+  promoter membership are deliberately separate concepts.
 - **`motif_transcript_context_pair`** — a transcript-specific view of each
   TP73/cofactor relationship with transcription-oriented direction and signed
   TSS distances. It is kept out of the anchor-grain ML table to avoid
@@ -160,17 +171,17 @@ implemented by `scripts/query_genome_scan.py`. Optional synteny bridges are in
   adjacent intervals are merged for motif-immersion labels; depth remains a
   separate signal.
 - **`cutandrun`** — `chrom, start, end, cell_line, isoform, antibody, replicate, signal`. The sample facets are columns, so a TA-vs-DN contrast is a `GROUP BY`, not a filename parse.
-- **`gene / promoter / transcript / intron / gene_set`** — annotation
+- **`gene / transcript / intron / gene_set`** — remaining annotation
   dimensions regenerated from the pinned GTF. Transcript-level intron state is
   kept in `motif_transcript_context` because isoforms can classify one locus
   differently.
 - **`expression_differential`** — `gene_id, cell_line, log2fc_ta_vs_dn, padj, …`. **This is the ML label.**
 
 Five materialized tables carry the reusable join/aggregation cost:
-`promoter_motif_hit` (the single
-interval join of hits into promoter windows, deduplicated to one row per gene
-and unique hit while retaining the closest transcript's strand-aware
-`tss_distance` and the number of overlapping transcripts),
+`promoter_motif_hit` (the compatibility gene-level summary over the canonical
+versioned promoter intervals, deduplicated to one row per gene and unique hit
+while retaining the closest transcript's strand-aware `tss_distance` and the
+number of overlapping transcripts),
 `promoter_arch_feature` (per-gene, per-motif architecture summary),
 `promoter_pair_feature` (TP73 anchors grouped by pair class),
 `promoter_motif_pair_feature` (neighbor motifs grouped by TP73 pair class,
@@ -295,7 +306,8 @@ the file-plus-SQL form already covers local agent use with no infrastructure.
 OpenClaw, Claude, and Codex should expose a small read-only surface rather than
 free-form access to raw genome-wide files:
 
-- `resolve_gene(gene_name)` -> stable `gene_id`, chromosome, strand, TSS.
+- `resolve_gene(gene_name)` -> stable `gene_id`, chromosome, strand, and a
+  compatibility representative TSS; Q20/Q21 expose alternative starts.
 - `get_promoter_card(gene_name, score_mode, pseudocount)` -> one compact row
   from `promoter_card`.
 - `get_promoter_architecture(gene_name, score_mode, pseudocount)` -> query Q2 over
@@ -313,6 +325,10 @@ free-form access to raw genome-wide files:
   -> query Q13.
 - `get_tp73_site_neighbor_features(chrom, start, strand, neighbor_motif_id, score_mode, pseudocount)`
   -> query Q14, without a promoter restriction.
+- `get_tp73_nearest_tss(anchor_hit_id)` -> query Q20, returning every tied
+  physical TSS and all transcript/gene associations.
+- `get_tp73_promoters(anchor_hit_id, promoter_definition_id)` -> query Q21,
+  returning every overlapping versioned promoter and associated gene.
 - `get_cutandrun_promoter_signal(gene_name, cell_line)` -> query Q4.
 - `export_ml_matrix(cell_line, score_mode, pseudocount, feature_set)` -> query
   Q3, pivot its bound long result in the client, or read a pinned Parquet export
@@ -323,10 +339,12 @@ parameters are typed, and no agent needs to discover table joins on the fly.
 
 ## Open questions to settle before building the exporter
 
-- **Promoter window definition** — regenerate the historical GeneLists
-  `*.promoter.bed` files with the corrected GTF-to-BED conversion before they
-  seed this layer. Pin the chosen upstream/downstream extents and coordinate
-  convention in the manifest because they fix every distance feature.
+- **Promoter window comparison** — schema 7 no longer depends on the historical
+  GeneLists `*.promoter.bed` files: it resolves strand-aware intervals directly
+  from the pinned GTF and records `promoter_definition_id`, upstream extent,
+  downstream extent, and coordinate convention. The default
+  `tss_upstream_2000_downstream_500_v1` remains a declared analysis choice;
+  alternative definitions receive distinct IDs rather than overwriting it.
 - **Differential source** — how `log2fc_ta_vs_dn` is computed from E-MTAB-14704 (per cell line, which contrast, which shrinkage), and whether `skmel29` and `saos2` are modelled separately or pooled.
 - **Motif-version consistency** — the run uses `MA0861.2`; the legacy datatable pipeline still references `MA0861.1` (see the earlier review). Reconcile before joining old and new outputs.
 - **Ensembl release** — genome vs GTF release for the 2026 run (Makefile pulls 113; the paper used 112). Coordinates are stable on GRCh38, but layer-4 annotation is not.

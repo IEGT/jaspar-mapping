@@ -22,7 +22,7 @@ grep -Fq -- '--cpus-per-task=2' <<< "$rendered"
 grep -Fq -- '--mem=20G' <<< "$rendered"
 grep -Fq -- '--memory-limit 14GB' <<< "$rendered"
 grep -Fq -- '--max-temp-size 80GB' <<< "$rendered"
-grep -Fq -- '--job-name=tp73_context_v6' <<< "$rendered"
+grep -Fq -- '--job-name=tp73_context_v7' <<< "$rendered"
 [[ $(wc -l < "$temporary/run/plan/context_tasks.tsv") -eq 5 ]]
 cmp -s "$repository_root/scripts/build_motif_context.py" \
     "$temporary/run/source/scripts/build_motif_context.py"
@@ -35,7 +35,7 @@ cmp -s "$repository_root/scripts/finalize_motif_context_run.py" \
 snapshot=$(cd "$temporary/run/source" && pwd)
 grep -Fq -- "--source $snapshot" <<< "$rendered"
 grep -Fq -- 'tp73_context_finalize' <<< "$rendered"
-grep -Eq $'\t6\t[0-9]+\t[0-9a-f]{64}$' \
+grep -Eq $'\t7\t[0-9]+\t[0-9a-f]{64}\tensembl_113\ttss_upstream_2000_downstream_500_v1\t2000\t500$' \
     "$temporary/run/plan/context_tasks.tsv"
 
 # An identical dry run reuses the plan; changing it is rejected.
@@ -85,7 +85,10 @@ grep -Fq $'2\t1\tMA0003.1,MA0004.1\tband' \
     "$temporary/batched/plan/context_tasks.tsv"
 grep -Fq $'5\tX\tMA0005.1\tband' \
     "$temporary/batched/plan/context_tasks.tsv"
-awk -F '\t' 'NR > 1 && ($6 != 6 || $7 != 0 || $8 != "none") { exit 1 }' \
+awk -F '\t' 'NR > 1 && ($6 != 7 || $7 != 0 || $8 != "none" \
+    || $9 != "ensembl_113" \
+    || $10 != "tss_upstream_2000_downstream_500_v1" \
+    || $11 != 2000 || $12 != 500) { exit 1 }' \
     "$temporary/batched/plan/context_tasks.tsv"
 
 echo "Motif-context Slurm submission tests passed."

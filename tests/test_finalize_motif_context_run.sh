@@ -9,9 +9,9 @@ run_root="$temporary/run"
 mkdir -p "$run_root/plan" "$run_root/staging"
 
 {
-    printf 'task_index\tchrom\tcofactor_motif_ids\toutput_tier\tbuilder_source_commit\tcontext_schema_version\tgtf_size_bytes\tgtf_sha256\n'
-    printf '0\t1\tMA0001.1\tband\tabc123\t6\t0\tnone\n'
-    printf '1\tX\tMA0002.1\tband\tabc123\t6\t0\tnone\n'
+    printf 'task_index\tchrom\tcofactor_motif_ids\toutput_tier\tbuilder_source_commit\tcontext_schema_version\tgtf_size_bytes\tgtf_sha256\tannotation_release\tpromoter_definition_id\tpromoter_upstream_bp\tpromoter_downstream_bp\n'
+    printf '0\t1\tMA0001.1\tband\tabc123\t7\t0\tnone\tensembl_113\ttss_upstream_2000_downstream_500_v1\t2000\t500\n'
+    printf '1\tX\tMA0002.1\tband\tabc123\t7\t0\tnone\tensembl_113\ttss_upstream_2000_downstream_500_v1\t2000\t500\n'
 } > "$run_root/plan/context_tasks.tsv"
 
 build_task() {
@@ -47,6 +47,9 @@ COPY (
         --anchor-motif MA0861.2 --source-commit abc123 \
         --motif-set-id jaspar2026_core_nonredundant \
         --genome-id homo_sapiens_grch38_ensembl113_primary \
+        --annotation-release ensembl_113 \
+        --promoter-definition-id tss_upstream_2000_downstream_500_v1 \
+        --promoter-upstream-bp 2000 --promoter-downstream-bp 500 \
         --anchor-minimum-score -1 --partner-minimum-score 0 \
         --anchor-selection-mode local_peak --anchor-local-peak-flank 150 \
         --score-mode log2_relative_risk --pseudocount 1 \

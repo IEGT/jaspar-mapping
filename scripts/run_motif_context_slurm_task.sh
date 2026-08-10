@@ -15,6 +15,10 @@ Options:
   --run-root DIR          Dedicated context-run tree on durable storage
   --scan-package DIR      Finalized sparse genome-scan package
   --gtf FILE              GTF/GTF.gz (required for selected/summary tiers)
+  --annotation-release ID Annotation release (default: ensembl_113)
+  --promoter-definition ID Versioned promoter definition
+  --promoter-upstream-bp N Upstream promoter extent (default: 2000)
+  --promoter-downstream-bp N Downstream promoter extent (default: 500)
   --task-file FILE        TSV written by submit_motif_context_slurm.sh
   --source DIR            Repository root (default: parent of this script)
   --duckdb FILE           DuckDB executable (default: duckdb)
@@ -28,6 +32,10 @@ EOF
 run_root=""
 scan_package=""
 gtf=""
+annotation_release=ensembl_113
+promoter_definition_id=tss_upstream_2000_downstream_500_v1
+promoter_upstream_bp=2000
+promoter_downstream_bp=500
 task_file=""
 source=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 duckdb=duckdb
@@ -39,6 +47,10 @@ while [[ $# -gt 0 ]]; do
         --run-root) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; run_root=$2; shift 2 ;;
         --scan-package) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; scan_package=$2; shift 2 ;;
         --gtf) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; gtf=$2; shift 2 ;;
+        --annotation-release) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; annotation_release=$2; shift 2 ;;
+        --promoter-definition) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; promoter_definition_id=$2; shift 2 ;;
+        --promoter-upstream-bp) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; promoter_upstream_bp=$2; shift 2 ;;
+        --promoter-downstream-bp) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; promoter_downstream_bp=$2; shift 2 ;;
         --task-file) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; task_file=$2; shift 2 ;;
         --source) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; source=$2; shift 2 ;;
         --duckdb) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; duckdb=$2; shift 2 ;;
@@ -64,6 +76,15 @@ task_offset=${JASPAR_CONTEXT_TASK_OFFSET:-0}
     echo "E: --threads must be a positive integer." >&2
     exit 2
 }
+[[ $annotation_release =~ ^[A-Za-z0-9._-]+$ \
+   && $promoter_definition_id =~ ^[A-Za-z0-9._-]+$ ]] || {
+    echo "E: Annotation release and promoter definition must be safe identifiers." >&2
+    exit 2
+}
+[[ $promoter_upstream_bp =~ ^[0-9]+$ && $promoter_downstream_bp =~ ^[0-9]+$ ]] || {
+    echo "E: Promoter extents must be nonnegative integers." >&2
+    exit 2
+}
 [[ -d $run_root && -d $scan_package && -f $task_file ]] || {
     echo "E: Run root, scan package, or task file is missing." >&2
     exit 1
@@ -86,12 +107,21 @@ task_row=$(awk -F '\t' -v task="$global_task_index" \
 }
 IFS=$'\t' read -r task_index chromosome cofactor_motif_ids output_tier \
     builder_source_commit context_schema_version gtf_size_bytes gtf_sha256 \
+    task_annotation_release task_promoter_definition_id \
+    task_promoter_upstream_bp task_promoter_downstream_bp \
     <<< "$task_row"
 [[ $task_index == "$global_task_index" ]]
 [[ $chromosome =~ ^[A-Za-z0-9._-]+$ ]]
 [[ $output_tier == selected || $output_tier == summary || $output_tier == band ]]
-[[ $context_schema_version == 6 ]] || {
+[[ $context_schema_version == 7 ]] || {
     echo "E: Task $task_index requests unsupported context schema $context_schema_version." >&2
+    exit 2
+}
+[[ $task_annotation_release == "$annotation_release" \
+   && $task_promoter_definition_id == "$promoter_definition_id" \
+   && $task_promoter_upstream_bp == "$promoter_upstream_bp" \
+   && $task_promoter_downstream_bp == "$promoter_downstream_bp" ]] || {
+    echo "E: Worker annotation/promoter arguments differ from task $task_index." >&2
     exit 2
 }
 [[ $builder_source_commit =~ ^[A-Za-z0-9._-]+$ ]] || {
@@ -200,6 +230,10 @@ WHERE schema_version = $context_schema_version
   AND cofactor_pair_scope = 'at_least_one_member_is_a_tp73_context_locus'
   AND cofactor_motif_locus_scope = 'tp73_context_loci_plus_their_pair_partners'
   AND cofactor_locus_pair_feature_scope = 'tp73_context_loci_only'
+  AND annotation_release = '$annotation_release'
+  AND promoter_definition_id = '$promoter_definition_id'
+  AND promoter_upstream_bp = $promoter_upstream_bp
+  AND promoter_downstream_bp = $promoter_downstream_bp
   $gtf_validation_sql;"
     ) || return 1
     [[ $valid == 1 ]] || return 1
@@ -287,6 +321,10 @@ build_arguments=(
     --score-mode log2_relative_risk --pseudocount 1
     --background-model-id uniform_acgt_v1
     --pseudocount-scheme additive_per_base
+    --annotation-release "$annotation_release"
+    --promoter-definition-id "$promoter_definition_id"
+    --promoter-upstream-bp "$promoter_upstream_bp"
+    --promoter-downstream-bp "$promoter_downstream_bp"
     --chrom "$chromosome"
     --capture-flank 150 --context-flank 150 --tandem-flank 20
     --cofactor-pair-flank 150 --output-tier "$output_tier"

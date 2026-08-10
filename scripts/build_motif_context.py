@@ -115,6 +115,34 @@ def argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gtf", type=Path,
                         help="optional Ensembl-compatible GTF or GTF.gz for TSS/introns")
     parser.add_argument(
+        "--annotation-release",
+        default="unspecified",
+        help=(
+            "gene-annotation release recorded with TSS/promoter dimensions "
+            "(default: unspecified; production builds should set this)"
+        ),
+    )
+    parser.add_argument(
+        "--promoter-definition-id",
+        default="tss_upstream_2000_downstream_500_v1",
+        help=(
+            "versioned promoter-window identity (default: "
+            "tss_upstream_2000_downstream_500_v1)"
+        ),
+    )
+    parser.add_argument(
+        "--promoter-upstream-bp",
+        type=nonnegative_integer,
+        default=2000,
+        help="promoter bases upstream of the TSS, inclusive (default: 2000)",
+    )
+    parser.add_argument(
+        "--promoter-downstream-bp",
+        type=nonnegative_integer,
+        default=500,
+        help="promoter bases downstream of the TSS, inclusive (default: 500)",
+    )
+    parser.add_argument(
         "--gtf-sha256",
         help=(
             "expected SHA-256 of the GTF bytes; verified before building and "
@@ -318,8 +346,14 @@ def chromosome_filter(chromosomes: list[str], column: str = "chrom") -> str:
     return f" AND CAST({column} AS VARCHAR) IN ({values})"
 
 
-def gtf_sql(gtf: Path, chromosomes: list[str]) -> str:
+def gtf_sql(arguments: argparse.Namespace, gtf: Path,
+            chromosomes: list[str]) -> str:
     chrom_clause = chromosome_filter(chromosomes, "chrom")
+    genome_id = sql_string(arguments.genome_id)
+    annotation_release = sql_string(arguments.annotation_release)
+    promoter_definition_id = sql_string(arguments.promoter_definition_id)
+    promoter_upstream_bp = arguments.promoter_upstream_bp
+    promoter_downstream_bp = arguments.promoter_downstream_bp
     return f"""
 -- Convert GTF coordinates once at ingestion. GTF end is already the correct
 -- exclusive BED end after subtracting one only from the GTF start.
@@ -351,17 +385,91 @@ WHERE column2 IN ('transcript', 'exon')
 
 CREATE TEMP TABLE transcript_annotation AS
 SELECT
+    {genome_id}::VARCHAR AS genome_id,
+    {annotation_release}::VARCHAR AS annotation_release,
     gene_id,
     transcript_id,
     CAST(chrom AS VARCHAR) AS chrom,
     strand,
     MIN(start)::BIGINT AS transcript_start,
     MAX("end")::BIGINT AS transcript_end,
-    CASE WHEN strand = '+' THEN MIN(start) ELSE MAX("end") END::BIGINT AS tss,
+    -- TSS is the genomic base, not the exclusive transcript boundary.
+    CASE WHEN strand = '+' THEN MIN(start) ELSE MAX("end") - 1 END::BIGINT AS tss,
     MAX(gene_name) AS gene_name,
     MAX(biotype) AS biotype
 FROM gtf_raw
 GROUP BY gene_id, transcript_id, chrom, strand;
+
+-- TSS identity is physical. Genes and transcripts attach through
+-- transcript_tss, so shared starts are represented once without losing their
+-- biological associations. A TSS is a one-base BED interval on both strands.
+CREATE TEMP TABLE transcription_start_site AS
+SELECT DISTINCT
+    md5(concat_ws('|', genome_id, annotation_release, chrom, tss::VARCHAR,
+                  strand)) AS tss_id,
+    genome_id,
+    annotation_release,
+    chrom,
+    tss::BIGINT AS start,
+    (tss + 1)::BIGINT AS "end",
+    strand
+FROM transcript_annotation;
+
+CREATE TEMP TABLE transcript_tss AS
+SELECT
+    t.genome_id,
+    t.annotation_release,
+    t.gene_id,
+    t.gene_name,
+    t.transcript_id,
+    s.tss_id
+FROM transcript_annotation t
+JOIN transcription_start_site s
+  ON s.genome_id = t.genome_id
+ AND s.annotation_release = t.annotation_release
+ AND s.chrom = t.chrom
+ AND s.start = t.tss
+ AND s.strand = t.strand;
+
+-- A promoter is a resolved genomic interval for one physical TSS under one
+-- versioned definition. Offsets include the TSS base and are oriented in the
+-- direction of transcription.
+CREATE TEMP TABLE promoter_annotation AS
+SELECT
+    md5(concat_ws('|', tss_id, {promoter_definition_id})) AS promoter_id,
+    tss_id,
+    genome_id,
+    annotation_release,
+    {promoter_definition_id}::VARCHAR AS promoter_definition_id,
+    chrom,
+    strand,
+    CASE WHEN strand = '+'
+         THEN GREATEST(0, start - {promoter_upstream_bp})
+         ELSE GREATEST(0, start - {promoter_downstream_bp})
+    END::BIGINT AS promoter_start,
+    CASE WHEN strand = '+'
+         THEN start + {promoter_downstream_bp} + 1
+         ELSE start + {promoter_upstream_bp} + 1
+    END::BIGINT AS promoter_end,
+    start AS tss_start,
+    "end" AS tss_end,
+    {promoter_upstream_bp}::INTEGER AS upstream_bp,
+    {promoter_downstream_bp}::INTEGER AS downstream_bp
+FROM transcription_start_site;
+
+CREATE TEMP TABLE promoter_gene AS
+SELECT
+    p.genome_id,
+    p.annotation_release,
+    p.promoter_definition_id,
+    p.promoter_id,
+    tt.gene_id,
+    MAX(tt.gene_name) AS gene_name,
+    COUNT(DISTINCT tt.transcript_id)::BIGINT AS n_transcripts
+FROM promoter_annotation p
+JOIN transcript_tss tt USING (genome_id, annotation_release, tss_id)
+GROUP BY p.genome_id, p.annotation_release, p.promoter_definition_id,
+         p.promoter_id, tt.gene_id;
 
 CREATE TEMP TABLE intron_annotation AS
 WITH ordered_exon AS (
@@ -399,6 +507,15 @@ SELECT
     END::INTEGER AS intron_number
 FROM gaps;
 
+COPY transcription_start_site
+TO 'tables/jaspar2026/transcription_start_site.parquet'
+    (FORMAT PARQUET, COMPRESSION ZSTD);
+COPY transcript_tss TO 'tables/jaspar2026/transcript_tss.parquet'
+    (FORMAT PARQUET, COMPRESSION ZSTD);
+COPY promoter_annotation TO 'tables/jaspar2026/promoter.parquet'
+    (FORMAT PARQUET, COMPRESSION ZSTD);
+COPY promoter_gene TO 'tables/jaspar2026/promoter_gene.parquet'
+    (FORMAT PARQUET, COMPRESSION ZSTD);
 COPY transcript_annotation TO 'tables/jaspar2026/transcript.parquet'
     (FORMAT PARQUET, COMPRESSION ZSTD);
 COPY intron_annotation TO 'tables/jaspar2026/intron.parquet'
@@ -414,6 +531,7 @@ WITH overlap AS (
         t.gene_id,
         t.gene_name,
         t.transcript_id,
+        tt.tss_id,
         t.strand AS transcript_strand,
         t.tss,
         CASE WHEN t.strand = '+' THEN a.center_bp - t.tss
@@ -427,13 +545,19 @@ WITH overlap AS (
       ON a.chrom = t.chrom
      AND a.start >= t.transcript_start
      AND a."end" <= t.transcript_end
+    JOIN transcript_tss tt
+      ON tt.genome_id = t.genome_id
+     AND tt.annotation_release = t.annotation_release
+     AND tt.gene_id = t.gene_id
+     AND tt.transcript_id = t.transcript_id
     LEFT JOIN intron_annotation i
       ON i.gene_id = t.gene_id
      AND i.transcript_id = t.transcript_id
      AND a.start < i."end"
      AND a."end" > i.start
     GROUP BY a.anchor_hit_id, a.chrom, a.start, a."end", t.gene_id,
-             t.gene_name, t.transcript_id, t.strand, t.tss, a.center_bp
+             t.gene_name, t.transcript_id, tt.tss_id, t.strand, t.tss,
+             a.center_bp
 )
 SELECT *,
        CASE WHEN fully_within_intron THEN 'intron'
@@ -444,45 +568,170 @@ FROM overlap;
 COPY anchor_transcript_context TO 'tables/jaspar2026/motif_transcript_context.parquet'
     (FORMAT PARQUET, COMPRESSION ZSTD);
 
-CREATE TEMP TABLE unique_tss AS
-SELECT * EXCLUDE (tss_rank)
-FROM (
-    SELECT *, ROW_NUMBER() OVER (
-        PARTITION BY chrom, tss
-        ORDER BY gene_id, transcript_id
-    ) AS tss_rank
-    FROM transcript_annotation
-)
-WHERE tss_rank = 1;
+CREATE TEMP TABLE unique_tss_coordinate AS
+SELECT DISTINCT chrom, start AS tss
+FROM transcription_start_site;
 
 CREATE TEMP TABLE nearest_left AS
-SELECT a.anchor_hit_id, a.center_bp, t.gene_id, t.gene_name,
-       t.transcript_id, t.strand, t.tss
+SELECT a.anchor_hit_id, a.center_bp, t.tss
 FROM anchor_hit a
-ASOF LEFT JOIN unique_tss t
+ASOF LEFT JOIN unique_tss_coordinate t
   ON a.chrom = t.chrom AND a.center_bp >= t.tss;
 
 CREATE TEMP TABLE nearest_right AS
-SELECT a.anchor_hit_id, a.center_bp, t.gene_id, t.gene_name,
-       t.transcript_id, t.strand, t.tss
+SELECT a.anchor_hit_id, a.center_bp, t.tss
 FROM anchor_hit a
-ASOF LEFT JOIN unique_tss t
+ASOF LEFT JOIN unique_tss_coordinate t
   ON a.chrom = t.chrom AND a.center_bp <= t.tss;
 
-CREATE TEMP TABLE nearest_tss AS
+CREATE TEMP TABLE nearest_tss_coordinate AS
 SELECT * EXCLUDE (nearest_rank)
 FROM (
-    SELECT *, ROW_NUMBER() OVER (
+    SELECT *, DENSE_RANK() OVER (
         PARTITION BY anchor_hit_id
-        ORDER BY ABS(center_bp - tss), gene_id, transcript_id
+        ORDER BY ABS(center_bp - tss)
     ) AS nearest_rank
     FROM (
-        SELECT * FROM nearest_left WHERE transcript_id IS NOT NULL
-        UNION ALL
-        SELECT * FROM nearest_right WHERE transcript_id IS NOT NULL
+        SELECT * FROM nearest_left WHERE tss IS NOT NULL
+        UNION
+        SELECT * FROM nearest_right WHERE tss IS NOT NULL
     )
 )
 WHERE nearest_rank = 1;
+
+-- Authoritative nearest relation. Every physical TSS tied for the minimum
+-- distance is retained, including opposite-strand starts at one coordinate.
+CREATE TEMP TABLE tp73_anchor_nearest_tss AS
+WITH geometry AS (
+    SELECT
+        a.anchor_hit_id,
+        a.genome_id,
+        a.motif_set_id,
+        a.chrom,
+        a.start AS anchor_start,
+        a."end" AS anchor_end,
+        a.center_bp AS anchor_center_bp,
+        s.tss_id,
+        s.annotation_release,
+        s.start AS tss_start,
+        s."end" AS tss_end,
+        s.strand AS tss_strand,
+        a.center_bp - s.start AS genomic_center_offset_bp,
+        CASE WHEN s.strand = '+' THEN a.center_bp - s.start
+             ELSE s.start - a.center_bp END
+            AS transcription_oriented_center_offset_bp,
+        CASE
+            WHEN a."end" <= s.start THEN s.start - a."end"
+            WHEN s."end" <= a.start THEN a.start - s."end"
+            ELSE -(LEAST(a."end", s."end") - GREATEST(a.start, s.start))
+        END::BIGINT AS tss_interval_distance_bp,
+        a.start <= s.start AND a."end" > s.start AS anchor_spans_tss
+    FROM anchor_hit a
+    JOIN nearest_tss_coordinate n USING (anchor_hit_id)
+    JOIN transcription_start_site s
+      ON s.chrom = a.chrom AND s.start = n.tss
+)
+SELECT
+    *,
+    CASE
+        WHEN anchor_spans_tss THEN 'spans_tss'
+        WHEN transcription_oriented_center_offset_bp < 0 THEN 'upstream'
+        WHEN transcription_oriented_center_offset_bp > 0 THEN 'downstream'
+        ELSE 'coincident_center'
+    END AS anchor_tss_relation,
+    COUNT(*) OVER (PARTITION BY anchor_hit_id)::BIGINT
+        AS nearest_tss_tie_count,
+    COUNT(DISTINCT tss_strand) OVER (PARTITION BY anchor_hit_id) > 1
+        AS nearest_tss_has_mixed_strands
+FROM geometry;
+
+COPY tp73_anchor_nearest_tss
+TO 'tables/jaspar2026/tp73_anchor_nearest_tss.parquet'
+    (FORMAT PARQUET, COMPRESSION ZSTD);
+
+-- Canonical many-to-many membership. Gene association remains normalized via
+-- promoter_gene so shared physical promoters are not duplicated here.
+CREATE TEMP TABLE tp73_anchor_promoter AS
+WITH geometry AS (
+    SELECT
+        a.anchor_hit_id,
+        a.genome_id,
+        a.motif_set_id,
+        a.chrom,
+        a.start AS anchor_start,
+        a."end" AS anchor_end,
+        a.center_bp AS anchor_center_bp,
+        p.promoter_id,
+        p.tss_id,
+        p.annotation_release,
+        p.promoter_definition_id,
+        p.promoter_start,
+        p.promoter_end,
+        p.tss_start,
+        p.tss_end,
+        p.strand AS tss_strand,
+        LEAST(a."end", p.promoter_end)
+            - GREATEST(a.start, p.promoter_start) AS promoter_overlap_bp,
+        a.start >= p.promoter_start AND a."end" <= p.promoter_end
+            AS anchor_fully_within_promoter,
+        CASE
+            WHEN a."end" <= p.tss_start THEN p.tss_start - a."end"
+            WHEN p.tss_end <= a.start THEN a.start - p.tss_end
+            ELSE -(LEAST(a."end", p.tss_end) - GREATEST(a.start, p.tss_start))
+        END::BIGINT AS tss_interval_distance_bp,
+        CASE WHEN p.strand = '+' THEN a.center_bp - p.tss_start
+             ELSE p.tss_start - a.center_bp END
+            AS transcription_oriented_center_offset_bp,
+        a.start <= p.tss_start AND a."end" > p.tss_start AS anchor_spans_tss
+    FROM anchor_hit a
+    JOIN promoter_annotation p
+      ON p.chrom = a.chrom
+     AND a.start < p.promoter_end
+     AND a."end" > p.promoter_start
+)
+SELECT
+    *,
+    CASE
+        WHEN anchor_spans_tss THEN 'spans_tss'
+        WHEN transcription_oriented_center_offset_bp < 0 THEN 'upstream'
+        WHEN transcription_oriented_center_offset_bp > 0 THEN 'downstream'
+        ELSE 'coincident_center'
+    END AS anchor_tss_relation
+FROM geometry;
+
+COPY tp73_anchor_promoter
+TO 'tables/jaspar2026/tp73_anchor_promoter.parquet'
+    (FORMAT PARQUET, COMPRESSION ZSTD);
+
+CREATE TEMP TABLE nearest_tss_summary AS
+SELECT * EXCLUDE (representative_rank, n_tss_strands)
+FROM (
+    SELECT
+        n.anchor_hit_id,
+        n.tss_id AS nearest_tss_id,
+        n.tss_start AS nearest_tss_start,
+        CASE WHEN COUNT(DISTINCT n.tss_strand) OVER anchor_partition = 1
+             THEN n.tss_strand ELSE NULL END AS nearest_tss_strand,
+        n.nearest_tss_tie_count,
+        n.nearest_tss_has_mixed_strands,
+        ABS(n.genomic_center_offset_bp) AS nearest_tss_genomic_distance_bp,
+        n.transcription_oriented_center_offset_bp AS nearest_tss_distance_bp,
+        n.tss_interval_distance_bp AS nearest_tss_interval_distance_bp,
+        n.anchor_tss_relation AS nearest_tss_relation,
+        tt.gene_id,
+        tt.gene_name,
+        tt.transcript_id,
+        COUNT(DISTINCT n.tss_strand) OVER anchor_partition AS n_tss_strands,
+        ROW_NUMBER() OVER (
+            anchor_partition
+            ORDER BY n.tss_start, n.tss_strand, n.tss_id,
+                     tt.gene_id, tt.transcript_id
+        ) AS representative_rank
+    FROM tp73_anchor_nearest_tss n
+    JOIN transcript_tss tt USING (genome_id, tss_id)
+    WINDOW anchor_partition AS (PARTITION BY n.anchor_hit_id)
+)
+WHERE representative_rank = 1;
 
 CREATE TEMP TABLE transcript_context_summary AS
 SELECT
@@ -500,9 +749,15 @@ SELECT
     n.gene_id AS nearest_gene_id,
     n.gene_name AS nearest_gene_name,
     n.transcript_id AS nearest_transcript_id,
-    CASE WHEN n.strand = '+' THEN a.center_bp - n.tss
-         WHEN n.strand = '-' THEN n.tss - a.center_bp
-         ELSE NULL END AS nearest_tss_distance_bp,
+    n.nearest_tss_id,
+    n.nearest_tss_start,
+    n.nearest_tss_strand,
+    n.nearest_tss_tie_count,
+    n.nearest_tss_has_mixed_strands,
+    n.nearest_tss_genomic_distance_bp,
+    n.nearest_tss_distance_bp,
+    n.nearest_tss_interval_distance_bp,
+    n.nearest_tss_relation,
     COALESCE(s.in_any_transcript, false) AS in_any_transcript,
     COALESCE(s.in_any_intron, false) AS in_any_intron,
     COALESCE(s.overlaps_any_intron_boundary, false) AS overlaps_any_intron_boundary,
@@ -511,7 +766,7 @@ SELECT
          WHEN COALESCE(s.in_any_transcript, false) THEN 'transcribed_non_intron'
          ELSE 'intergenic' END AS primary_transcript_region
 FROM anchor_hit a
-LEFT JOIN nearest_tss n USING (anchor_hit_id)
+LEFT JOIN nearest_tss_summary n USING (anchor_hit_id)
 LEFT JOIN transcript_context_summary s USING (anchor_hit_id);
 """
 
@@ -525,7 +780,15 @@ SELECT
     NULL::VARCHAR AS nearest_gene_id,
     NULL::VARCHAR AS nearest_gene_name,
     NULL::VARCHAR AS nearest_transcript_id,
+    NULL::VARCHAR AS nearest_tss_id,
+    NULL::BIGINT AS nearest_tss_start,
+    NULL::VARCHAR AS nearest_tss_strand,
+    NULL::BIGINT AS nearest_tss_tie_count,
+    NULL::BOOLEAN AS nearest_tss_has_mixed_strands,
+    NULL::DOUBLE AS nearest_tss_genomic_distance_bp,
     NULL::DOUBLE AS nearest_tss_distance_bp,
+    NULL::BIGINT AS nearest_tss_interval_distance_bp,
+    NULL::VARCHAR AS nearest_tss_relation,
     NULL::BOOLEAN AS in_any_transcript,
     NULL::BOOLEAN AS in_any_intron,
     NULL::BOOLEAN AS overlaps_any_intron_boundary,
@@ -556,7 +819,10 @@ def build_sql(arguments: argparse.Namespace, motif_glob: str,
               temp_directory: Path,
               source_columns: set[str]) -> str:
     chrom_clause = chromosome_filter(chromosomes)
-    annotation_sql = gtf_sql(gtf, chromosomes) if gtf is not None else no_gtf_sql()
+    annotation_sql = (
+        gtf_sql(arguments, gtf, chromosomes)
+        if gtf is not None else no_gtf_sql()
+    )
     gtf_source = sql_string(gtf) if gtf is not None else "NULL"
     gtf_sha256 = (
         sql_string(arguments.gtf_sha256)
@@ -906,7 +1172,7 @@ FROM widths;
 
 CREATE TEMP TABLE context_run_config AS
 SELECT
-    6::INTEGER AS schema_version,
+    7::INTEGER AS schema_version,
     {sql_string(arguments.source_commit)}::VARCHAR AS builder_source_commit,
     {sql_string(arguments.input_uniqueness)}::VARCHAR AS input_uniqueness,
     {sql_string(arguments.genome_id)}::VARCHAR AS genome_id,
@@ -963,6 +1229,15 @@ SELECT
     'both_locus_best_scores_at_or_above_neighbor_qualifying_threshold'::VARCHAR
         AS cofactor_pair_score_rule,
     {sql_string(motif_hit_source)}::VARCHAR AS motif_hit_source,
+    {sql_string(arguments.annotation_release)}::VARCHAR AS annotation_release,
+    {sql_string(arguments.promoter_definition_id)}::VARCHAR
+        AS promoter_definition_id,
+    {arguments.promoter_upstream_bp}::INTEGER AS promoter_upstream_bp,
+    {arguments.promoter_downstream_bp}::INTEGER AS promoter_downstream_bp,
+    'one_base_bed_start_plus_end_minus_1'::VARCHAR AS tss_coordinate_rule,
+    'all_physical_tss_at_minimum_center_distance'::VARCHAR AS nearest_tss_rule,
+    'anchor_overlaps_resolved_promoter_interval'::VARCHAR
+        AS promoter_membership_rule,
     {gtf_source}::VARCHAR AS gtf_source,
     {gtf_sha256}::VARCHAR AS gtf_sha256,
     {gtf_size_bytes}::BIGINT AS gtf_size_bytes
@@ -1776,7 +2051,7 @@ WITH qualifying AS (
              neighbor_motif_id, interval_distance_band
 )
 SELECT
-    6::INTEGER AS schema_version,
+    7::INTEGER AS schema_version,
     r.anchor_locus_id,
     r.genome_id,
     r.motif_set_id,
@@ -2241,7 +2516,15 @@ SELECT
     g.nearest_gene_id,
     g.nearest_gene_name,
     g.nearest_transcript_id,
+    g.nearest_tss_id,
+    g.nearest_tss_start,
+    g.nearest_tss_strand,
+    g.nearest_tss_tie_count,
+    g.nearest_tss_has_mixed_strands,
+    g.nearest_tss_genomic_distance_bp,
     g.nearest_tss_distance_bp,
+    g.nearest_tss_interval_distance_bp,
+    g.nearest_tss_relation,
     g.in_any_transcript,
     g.in_any_intron,
     g.overlaps_any_intron_boundary,
@@ -2376,6 +2659,27 @@ FROM read_parquet(
 """ + (
         """
 DROP TABLE anchor_transcript_context;
+DROP TABLE transcription_start_site;
+DROP TABLE transcript_tss;
+DROP TABLE promoter_gene;
+DROP TABLE tp73_anchor_nearest_tss;
+DROP TABLE tp73_anchor_promoter;
+CREATE VIEW transcription_start_site AS
+SELECT * FROM read_parquet(
+    'tables/jaspar2026/transcription_start_site.parquet'
+);
+CREATE VIEW transcript_tss AS
+SELECT * FROM read_parquet('tables/jaspar2026/transcript_tss.parquet');
+CREATE VIEW promoter AS
+SELECT * FROM read_parquet('tables/jaspar2026/promoter.parquet');
+CREATE VIEW promoter_gene AS
+SELECT * FROM read_parquet('tables/jaspar2026/promoter_gene.parquet');
+CREATE VIEW tp73_anchor_nearest_tss AS
+SELECT * FROM read_parquet(
+    'tables/jaspar2026/tp73_anchor_nearest_tss.parquet'
+);
+CREATE VIEW tp73_anchor_promoter AS
+SELECT * FROM read_parquet('tables/jaspar2026/tp73_anchor_promoter.parquet');
 CREATE VIEW transcript AS
 SELECT * FROM read_parquet('tables/jaspar2026/transcript.parquet');
 CREATE VIEW intron AS
@@ -2442,6 +2746,8 @@ def build_package(arguments: argparse.Namespace) -> None:
         ("--background-model-id", arguments.background_model_id),
         ("--pseudocount-scheme", arguments.pseudocount_scheme),
         ("--source-commit", arguments.source_commit),
+        ("--annotation-release", arguments.annotation_release),
+        ("--promoter-definition-id", arguments.promoter_definition_id),
     ):
         if not identifier_pattern.fullmatch(value):
             raise ContextBuildError(

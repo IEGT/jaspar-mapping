@@ -262,10 +262,29 @@ created. GTF 1-based inclusive coordinates are converted to BED coordinates.
 Transcript bounds come from transcript/exon records, and introns are the gaps
 between consecutive exons of each transcript.
 
-The output deliberately preserves transcript ambiguity:
+Schema 7 represents a TSS as a physical one-base BED interval: transcript
+`start` on `+`, and exclusive transcript `end - 1` on `-`. TSS identity is
+`(genome, annotation release, chromosome, position, strand)`; genes and
+transcripts attach through `transcript_tss`, so shared starts are not collapsed.
+Promoter intervals are resolved from that TSS under the versioned
+`promoter_definition_id` recorded in `context_run_config`.
 
-- `nearest_tss_distance_bp` is signed in the nearest transcript's direction;
-  positive means downstream of transcription initiation.
+The output deliberately preserves transcript and promoter ambiguity:
+
+- `tp73_anchor_nearest_tss` retains every physical TSS tied for the minimum
+  motif-centre distance, including opposite-strand TSSs at one coordinate.
+- `tp73_context_anchor.nearest_tss_distance_bp` remains a convenient signed
+  value from one deterministic representative; positive means downstream.
+  `nearest_tss_tie_count`, `nearest_tss_strand`, and
+  `nearest_tss_has_mixed_strands` prevent that summary from implying false
+  uniqueness. The strand is null when tied nearest TSSs use both strands.
+- `tp73_anchor_promoter` is the canonical many-to-many physical
+  anchor/promoter membership. `promoter_gene` attaches every associated gene;
+  several transcripts or genes may share one physical promoter.
+- `tss_interval_distance_bp` follows the motif interval convention: abutting
+  is 0 and a motif spanning the one-base TSS has distance -1. The separate
+  transcription-oriented centre offset determines upstream/downstream, so a
+  distance-0 motif remains directional.
 - `motif_transcript_context` has one row per anchor and containing transcript.
 - `motif_transcript_context_pair` derives cofactor direction in each
   transcript's frame, signed TSS distances for both spans, and whether either
@@ -361,6 +380,9 @@ are therefore unambiguous.
 scripts/build_motif_context.py \
   --motif-hits 'RUN/task_data/*/tables/jaspar2026/motif_hit/**/*.parquet' \
   --gtf Homo_sapiens.GRCh38.113.gtf.gz \
+  --annotation-release ensembl_113 \
+  --promoter-definition-id tss_upstream_2000_downstream_500_v1 \
+  --promoter-upstream-bp 2000 --promoter-downstream-bp 500 \
   --output RUN/tp73_context \
   --anchor-motif MA0861.2 \
   --motif-set-id jaspar2026_core_nonredundant \
@@ -415,6 +437,13 @@ The package contains:
   score prominence;
 - `tables/jaspar2026/tp73_context_anchor/genome_id=*/chrom=*/`: one ML-friendly row per
   TP73 occurrence;
+- `tables/jaspar2026/tp73_anchor_nearest_tss.parquet`: every tied nearest
+  physical TSS for each TP73 occurrence;
+- `tables/jaspar2026/tp73_anchor_promoter.parquet`: canonical physical
+  TP73-anchor/promoter memberships;
+- `tables/jaspar2026/transcription_start_site.parquet`,
+  `transcript_tss.parquet`, `promoter.parquet`, and `promoter_gene.parquet`:
+  normalized shared annotation dimensions and bridges;
 - `tables/jaspar2026/motif_transcript_context.parquet`: per-transcript location;
 - regenerated `tables/jaspar2026/transcript.parquet` and
   `tables/jaspar2026/intron.parquet` annotation dimensions;
