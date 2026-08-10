@@ -5,7 +5,7 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage: run_tp73_cofactor_enrichment_setup.sh --run-root DIR
-       --source-threshold-run DIR --source-commit HEX [options]
+       --source-threshold-run DIR --source-commit HEX --run-id ID [options]
 
 Build the shared depth-bearing TP73/CUT&RUN anchor table and then prepare the
 immutable all-motif enrichment plan. Exact TP73 sparse inputs and all 12
@@ -17,6 +17,7 @@ Options:
   --source-threshold-run DIR Completed threshold-calibration run
   --source DIR               Repository root (default: script parent)
   --source-commit HEX        Clean commit captured on the login node
+  --run-id ID                Unique enrichment-run identifier
   --threshold-registry FILE  Fixed operating-point registry override
   --duckdb FILE              DuckDB CLI (default: duckdb)
   --threads N                DuckDB threads (default: 2)
@@ -33,6 +34,7 @@ run_root=""
 source_threshold_run=""
 source=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 source_commit=""
+run_id=""
 threshold_registry=""
 duckdb=duckdb
 threads=2
@@ -44,6 +46,7 @@ while [[ $# -gt 0 ]]; do
         --source-threshold-run) source_threshold_run=${2:?}; shift 2 ;;
         --source) source=${2:?}; shift 2 ;;
         --source-commit) source_commit=${2:?}; shift 2 ;;
+        --run-id) run_id=${2:?}; shift 2 ;;
         --threshold-registry) threshold_registry=${2:?}; shift 2 ;;
         --duckdb) duckdb=${2:?}; shift 2 ;;
         --threads) threads=${2:?}; shift 2 ;;
@@ -54,7 +57,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -n $run_root && -n $source_threshold_run &&
+[[ -n $run_root && -n $source_threshold_run && -n $run_id &&
    $source_commit =~ ^[0-9a-f]{40}$ ]] || { usage >&2; exit 2; }
 [[ $threads =~ ^[1-9][0-9]*$ &&
    $expected_anchor_count =~ ^[1-9][0-9]*$ ]] || {
@@ -75,6 +78,7 @@ prepare_arguments=(
     --run-root "$run_root" --source-threshold-run "$source_threshold_run"
     --anchor-evidence "$run_root/input/depth_anchor/tp73_chr1_anchor_evidence.parquet"
     --source "$source" --source-commit "$source_commit" --duckdb "$duckdb"
+    --run-id "$run_id"
 )
 if [[ -n $threshold_registry ]]; then
     prepare_arguments+=(--threshold-registry "$threshold_registry")

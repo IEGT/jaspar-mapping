@@ -103,6 +103,7 @@ SLURM_TMPDIR="$temporary/scratch" \
     --run-root "$run_root" --source-threshold-run "$source_run" \
     --source "$repository_root" \
     --source-commit 0123456789abcdef0123456789abcdef01234567 \
+    --run-id synthetic_setup_v1 \
     --duckdb "$duckdb" --threads 1 \
     --memory-limit 1GB --expected-anchor-count 2
 
@@ -127,6 +128,7 @@ SLURM_TMPDIR="$temporary/scratch" \
     --run-root "$run_root" --source-threshold-run "$source_run" \
     --source "$repository_root" \
     --source-commit 0123456789abcdef0123456789abcdef01234567 \
+    --run-id synthetic_setup_v1 \
     --duckdb "$duckdb" --threads 1 \
     --memory-limit 1GB --expected-anchor-count 2 >/dev/null
 echo "I: TP73 cofactor enrichment setup test passed." >&2

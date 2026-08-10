@@ -50,6 +50,15 @@ def parse_commit(value: str) -> str:
     return value
 
 
+def parse_identifier(value: str) -> str:
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", value) is None:
+        raise argparse.ArgumentTypeError(
+            "identifier must contain only letters, digits, dots, underscores, "
+            "or hyphens"
+        )
+    return value
+
+
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -469,6 +478,15 @@ def finalize(arguments: argparse.Namespace) -> None:
     finalization_commit = arguments.finalization_source_commit
     if re.fullmatch(r"[0-9a-f]{40}", finalization_commit) is None:
         raise EnrichmentError("finalization source commit must be a full Git object ID")
+    plan_run_id = str(config.get("run_id", ""))
+    if not plan_run_id:
+        raise EnrichmentError("run configuration lacks a run ID")
+    publication_run_id = arguments.publication_run_id or plan_run_id
+    if publication_run_id != plan_run_id and arguments.final_name == "cofactor_enrichment":
+        raise EnrichmentError(
+            "a publication run ID differing from the plan requires a distinct "
+            "--final-name"
+        )
 
     files: dict[str, list[Path]] = {name: [] for name in OUTPUT_FILES}
     depth_manifest_digest: str | None = None
@@ -497,9 +515,16 @@ def finalize(arguments: argparse.Namespace) -> None:
     duckdb = shutil.which(arguments.duckdb)
     if duckdb is None:
         raise EnrichmentError(f"DuckDB executable not found: {arguments.duckdb}")
-    final = run_root / "final" / "cofactor_enrichment"
+    final = run_root / "final" / arguments.final_name
     if final.exists():
         if (final / "manifest.json").is_file():
+            existing = load_json(final / "manifest.json")
+            if (existing.get("run_id") != publication_run_id
+                    or existing.get("plan_run_id", existing.get("run_id"))
+                    != plan_run_id):
+                raise EnrichmentError(
+                    f"existing final output has a different identity: {final}"
+                )
             print(f"I: Reusing finalized cofactor enrichment: {final}", file=sys.stderr)
             return
         raise EnrichmentError(f"incomplete final output already exists: {final}")
@@ -746,8 +771,11 @@ CHECKPOINT;
                     f"final {name} count differs: {count[name]} != {value}"
                 )
         manifest = {
-            "schema_version": 1,
-            "run_id": config["run_id"],
+            "schema_version": 2,
+            "run_id": publication_run_id,
+            "plan_run_id": plan_run_id,
+            "publication_identity_overrides_plan": publication_run_id != plan_run_id,
+            "final_name": arguments.final_name,
             "analysis_scope": config["analysis_scope"],
             "motifs": task_count,
             "estimable_primary_models": count["estimable"],
@@ -817,7 +845,8 @@ def parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--spline-df", type=int, default=4)
     prepare_parser.add_argument("--minimum-class-fraction", type=float, default=0.01)
     prepare_parser.add_argument(
-        "--run-id", default="jaspar2026_chr1_tp73_cofactor_enrichment_v2"
+        "--run-id", required=True, type=parse_identifier,
+        help="unique identifier recorded in the immutable run plan",
     )
     prepare_parser.set_defaults(function=prepare)
 
@@ -832,6 +861,17 @@ def parser() -> argparse.ArgumentParser:
     )
     finalize_parser.add_argument("--run-root", type=Path, required=True)
     finalize_parser.add_argument("--duckdb", default="duckdb")
+    finalize_parser.add_argument(
+        "--publication-run-id", type=parse_identifier,
+        help=(
+            "published identity; defaults to the immutable plan run ID and may "
+            "differ only when --final-name names a distinct sibling package"
+        ),
+    )
+    finalize_parser.add_argument(
+        "--final-name", type=parse_identifier, default="cofactor_enrichment",
+        help="directory name below RUN/final (default: cofactor_enrichment)",
+    )
     finalize_parser.add_argument("--finalization-source-commit", required=True)
     finalize_parser.add_argument(
         "--finalization-source-dirty", action="store_true"

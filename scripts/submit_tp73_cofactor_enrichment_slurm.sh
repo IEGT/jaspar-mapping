@@ -5,7 +5,7 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage: submit_tp73_cofactor_enrichment_slurm.sh --run-root DIR
-       --source-threshold-run DIR [options]
+       --source-threshold-run DIR --run-id ID [options]
 
 Prepare and submit a restart-safe all-JASPAR chromosome-1 TP73 cofactor
 enrichment run. A setup job reconstructs the depth-bearing TP73 anchor table
@@ -18,6 +18,7 @@ outputs, performs the all-motif BH correction, and publishes Parquet + DuckDB.
 Options:
   --run-root DIR             New durable run below /data/sm718
   --source-threshold-run DIR Completed threshold run below /data/sm718
+  --run-id ID                 Unique enrichment-run identifier
   --anchor-evidence FILE    Prebuilt matched support/depth anchors; skips setup
   --threshold-registry FILE Fixed operating-point registry (default: source run)
   --source DIR               Repository root (default: script parent)
@@ -41,6 +42,7 @@ EOF
 
 run_root=""
 source_threshold_run=""
+run_id=""
 anchor_evidence=""
 threshold_registry=""
 source=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -58,6 +60,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --run-root) run_root=${2:?}; shift 2 ;;
         --source-threshold-run) source_threshold_run=${2:?}; shift 2 ;;
+        --run-id) run_id=${2:?}; shift 2 ;;
         --anchor-evidence) anchor_evidence=${2:?}; shift 2 ;;
         --threshold-registry) threshold_registry=${2:?}; shift 2 ;;
         --source) source=${2:?}; shift 2 ;;
@@ -76,7 +79,10 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -n $run_root && -n $source_threshold_run ]] || { usage >&2; exit 2; }
+[[ -n $run_root && -n $source_threshold_run && -n $run_id ]] || {
+    usage >&2
+    exit 2
+}
 [[ $max_concurrent =~ ^[1-9][0-9]*$ &&
    $array_size =~ ^[1-9][0-9]*$ && $cpus =~ ^[1-9][0-9]*$ ]] || {
     echo "E: concurrency, array size, and CPUs must be positive integers." >&2
@@ -128,17 +134,19 @@ if [[ $reuse_plan -eq 1 ]]; then
         exit 1
     }
     plan_values=$(python3 - "$run_config" "$task_file" \
-        "$source_threshold_run" "$source" <<'PY'
+        "$source_threshold_run" "$source" "$run_id" <<'PY'
 import csv
 import json
 import pathlib
 import sys
 
-config_path, tasks_path, source_run, source = map(pathlib.Path, sys.argv[1:])
+config_path, tasks_path, source_run, source = map(pathlib.Path, sys.argv[1:5])
+run_id = sys.argv[5]
 config = json.loads(config_path.read_text())
 expected = {
     "source_threshold_run": str(source_run.resolve()),
     "source": str(source.resolve()),
+    "run_id": run_id,
 }
 for key, value in expected.items():
     if config.get(key) != value:
@@ -178,7 +186,7 @@ else
             --run-root "$run_root"
             --source-threshold-run "$source_threshold_run"
             --anchor-evidence "$anchor_evidence"
-            --source "$source" --duckdb "$duckdb"
+            --source "$source" --duckdb "$duckdb" --run-id "$run_id"
         )
         if [[ -n $threshold_registry ]]; then
             prepare_arguments+=(--threshold-registry "$threshold_registry")
@@ -230,7 +238,7 @@ if [[ $setup_needed -eq 1 ]]; then
         "$source/scripts/run_tp73_cofactor_enrichment_setup.sh"
         --run-root "$run_root" --source-threshold-run "$source_threshold_run"
         --source "$source" --source-commit "$execution_source_commit"
-        --duckdb "$duckdb" --threads 2 --memory-limit 12GB
+        --duckdb "$duckdb" --threads 2 --memory-limit 12GB --run-id "$run_id"
     )
     if [[ -n $threshold_registry ]]; then
         setup_arguments+=(--threshold-registry "$threshold_registry")

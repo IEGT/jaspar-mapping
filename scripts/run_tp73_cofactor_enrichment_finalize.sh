@@ -16,6 +16,8 @@ Options:
   --duckdb FILE                   DuckDB CLI (default: duckdb)
   --finalization-source-commit ID Full source commit fixed at submission
   --finalization-source-dirty     Record tracked changes at submission
+  --publication-run-id ID         Corrected published identity (optional)
+  --final-name NAME               Distinct directory below RUN/final
   -h, --help                      Show this help
 EOF
 }
@@ -25,6 +27,8 @@ source=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 duckdb=duckdb
 finalization_source_commit=""
 finalization_source_dirty=0
+publication_run_id=""
+final_name="cofactor_enrichment"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --run-root) run_root=${2:?}; shift 2 ;;
@@ -33,6 +37,8 @@ while [[ $# -gt 0 ]]; do
         --finalization-source-commit)
             finalization_source_commit=${2:?}; shift 2 ;;
         --finalization-source-dirty) finalization_source_dirty=1; shift ;;
+        --publication-run-id) publication_run_id=${2:?}; shift 2 ;;
+        --final-name) final_name=${2:?}; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "E: Unknown argument: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -46,7 +52,11 @@ command=(
     python3 "$source/scripts/manage_tp73_cofactor_enrichment.py" finalize
     --run-root "$run_root" --duckdb "$duckdb"
     --finalization-source-commit "$finalization_source_commit"
+    --final-name "$final_name"
 )
+if [[ -n $publication_run_id ]]; then
+    command+=(--publication-run-id "$publication_run_id")
+fi
 if [[ $finalization_source_dirty -eq 1 ]]; then
     command+=(--finalization-source-dirty)
 fi

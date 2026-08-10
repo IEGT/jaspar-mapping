@@ -134,7 +134,7 @@ if python3 "$repository_root/scripts/manage_tp73_cofactor_enrichment.py" \
     prepare --run-root "$temporary/invalid-run" \
     --source-threshold-run "$source_run" \
     --anchor-evidence "$temporary/anchors-without-depth.parquet" \
-    --source "$repository_root" --duckdb "$duckdb" \
+    --source "$repository_root" --duckdb "$duckdb" --run-id invalid_test_v1 \
     > "$temporary/invalid.out" 2> "$temporary/invalid.err"; then
     echo "E: manager accepted anchor evidence without depth" >&2
     exit 1
@@ -169,7 +169,8 @@ external_count=$(python3 \
     --run-root "$temporary/external-run" --source-threshold-run "$source_run" \
     --anchor-evidence "$temporary/manifest-anchors.parquet" \
     --threshold-registry "$temporary/fixed-registry.parquet" \
-    --source "$repository_root" --duckdb "$duckdb")
+    --source "$repository_root" --duckdb "$duckdb" \
+    --run-id synthetic_external_v1)
 [[ $external_count == 2 ]]
 python3 - "$temporary/external-run" <<'PY'
 import csv
@@ -191,7 +192,7 @@ PY
 task_count=$(python3 "$repository_root/scripts/manage_tp73_cofactor_enrichment.py" \
     prepare --run-root "$run_root" --source-threshold-run "$source_run" \
     --source "$repository_root" --duckdb "$duckdb" --block-size 50000 \
-    --spline-df 3)
+    --spline-df 3 --run-id synthetic_enrichment_v1)
 [[ $task_count == 2 ]]
 
 real_rscript=$(command -v Rscript)
@@ -277,6 +278,33 @@ SELECT CASE WHEN NOT EXISTS (
     WHERE q_value_bh_all_jaspar IS NOT NULL
 ) THEN error('all-motif BH values were not calculated') END;
 SQL
+
+# A corrected publication identity can reuse the exact validated task outputs,
+# but must be published beside rather than over the original final package.
+bash "$repository_root/scripts/run_tp73_cofactor_enrichment_finalize.sh" \
+    --run-root "$run_root" --source "$repository_root" --duckdb "$duckdb" \
+    --finalization-source-commit "$commit" \
+    --publication-run-id synthetic_enrichment_corrected_v2 \
+    --final-name cofactor_enrichment_corrected
+python3 - "$run_root" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+original = json.loads(
+    (root / "final/cofactor_enrichment/manifest.json").read_text()
+)
+corrected = json.loads(
+    (root / "final/cofactor_enrichment_corrected/manifest.json").read_text()
+)
+assert original["run_id"] == original["plan_run_id"] == "synthetic_enrichment_v1"
+assert not original["publication_identity_overrides_plan"]
+assert corrected["run_id"] == "synthetic_enrichment_corrected_v2"
+assert corrected["plan_run_id"] == "synthetic_enrichment_v1"
+assert corrected["publication_identity_overrides_plan"]
+assert corrected["row_counts"] == original["row_counts"]
+PY
 
 [[ ! -e "$run_root/tasks/task-000000-M_ENRICHED/cofactor_maxima.parquet" ]]
 echo "I: TP73 cofactor enrichment manager test passed." >&2
