@@ -121,7 +121,11 @@ CREATE TABLE motif_hit (
 INSERT INTO motif_hit VALUES
     ('genome1', 'motifs1', '1', 55, 60, 'M1', '+', 1.0, 'log_odds', 1.0, 0.90),
     ('genome1', 'motifs1', '1', 70, 75, 'M2', '+', 2.0, 'log_odds', 1.0, 0.85),
-    ('genome1', 'motifs1', '1', 55, 60, 'M1', '+', 3.0, 'log2_relative_risk', 1.0, 0.88);
+    ('genome1', 'motifs1', '1', 55, 60, 'M1', '+', 3.0, 'log2_relative_risk', 1.0, 0.88),
+    -- Positive overlap across the promoter end must be retained.
+    ('genome1', 'motifs1', '1', 95, 105, 'M2', '-', 1.5, 'log_odds', 1.0, 0.80),
+    -- Half-open abutment at the promoter end must not be retained.
+    ('genome1', 'motifs1', '1', 100, 105, 'M2', '-', 1.4, 'log_odds', 1.0, 0.79);
 
 CREATE TABLE motif_architecture (
     motif_set_id VARCHAR,
@@ -225,8 +229,20 @@ SQL
 
     cat <<'SQL'
 SELECT CASE
-    WHEN (SELECT COUNT(*) FROM promoter_motif_hit) <> 3
+    WHEN (SELECT COUNT(*) FROM promoter_motif_hit) <> 4
     THEN error('promoter_motif_hit multiplied hits by transcript count')
+END;
+
+SELECT CASE
+    WHEN NOT EXISTS (
+        SELECT 1 FROM promoter_motif_hit
+        WHERE gene_id = 'G1' AND start = 95 AND "end" = 105
+          AND n_overlapping_transcripts = 2
+    ) OR EXISTS (
+        SELECT 1 FROM promoter_motif_hit
+        WHERE gene_id = 'G1' AND start = 100 AND "end" = 105
+    )
+    THEN error('promoter membership does not use positive half-open overlap')
 END;
 
 SELECT CASE
@@ -251,7 +267,7 @@ SELECT CASE
 END;
 
 SELECT CASE
-    WHEN (SELECT SUM(n_hits) FROM promoter_arch_feature WHERE gene_id = 'G1') <> 3
+    WHEN (SELECT SUM(n_hits) FROM promoter_arch_feature WHERE gene_id = 'G1') <> 4
     THEN error('promoter architecture hit counts are inflated')
 END;
 
@@ -262,7 +278,7 @@ END;
 
 SELECT CASE
     WHEN (SELECT n_motif_hits FROM promoter_card
-          WHERE gene_id = 'G1' AND score_mode = 'log_odds' AND pseudocount = 1.0) <> 2
+          WHERE gene_id = 'G1' AND score_mode = 'log_odds' AND pseudocount = 1.0) <> 3
     THEN error('promoter_card mixed or miscounted log-odds features')
 END;
 

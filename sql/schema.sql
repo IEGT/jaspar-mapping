@@ -849,7 +849,7 @@ FROM read_parquet('tables/jaspar2026/expression_differential/*.parquet');
 -- Materialized joins and summaries that we never want to recompute per query.
 -- ===========================================================================
 
--- Bridge: which motif hits fall inside which gene's promoter set, with
+-- Bridge: which motif hits overlap which gene's promoter set, with
 -- strand-aware TSS distance. A hit can overlap several transcript promoters
 -- for one gene, but appears here only once per gene and scoring configuration.
 -- The closest transcript supplies the signed distance; the overlap count keeps
@@ -882,8 +882,10 @@ WITH transcript_overlap AS (
     JOIN motif_hit h
       ON  h.genome_id = p.genome_id
       AND h.chrom = p.chrom
-      AND h.start >= p.promoter_start
-      AND h."end" <= p.promoter_end
+      -- BED half-open overlap: retain boundary-straddling hits, but not hits
+      -- that merely abut a promoter without sharing a base.
+      AND h.start < p.promoter_end
+      AND h."end" > p.promoter_start
 ),
 ranked_overlap AS (
     SELECT

@@ -191,6 +191,13 @@ lookup). `ml_ta_vs_dn`, `ml_ta_vs_dn_pair`, and
 `ml_ta_vs_dn_motif_pair` join the corresponding sequence-only feature tables
 to the label without mixing their grains.
 
+Promoter membership uses positive overlap between BED 0-based half-open
+intervals in both `promoter_motif_hit` and `tp73_anchor_promoter`. A motif-model
+span that crosses a promoter boundary is therefore associated with that
+promoter, while a span that merely abuts the boundary is not. The TP73-specific
+bridge additionally records whether the complete motif-model span lies within
+the promoter.
+
 ## Dense Chr1 Calibration
 
 Before choosing a genome-wide storage threshold, run a dense chromosome-1
