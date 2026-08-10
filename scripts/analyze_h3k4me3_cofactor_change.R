@@ -29,6 +29,8 @@ usage <- function(status = 0L) {
         "  --minimum-class-count N   Per-class minimum (default: 100)",
         "  --minimum-interaction-cell-count N  Four-cell minimum (default: 100)",
         "  --duckdb PATH             DuckDB CLI (default: duckdb)",
+        "  --analysis-role TEXT      Development/validation role for provenance",
+        "                            (default: unspecified)",
         "  -h, --help                Show this help"
     ), con = stream)
     quit(status = status)
@@ -46,14 +48,15 @@ values <- list(
     minimum_class_fraction = 0.005,
     minimum_class_count = 100L,
     minimum_interaction_cell_count = 100L,
-    duckdb = "duckdb"
+    duckdb = "duckdb",
+    analysis_role = "unspecified"
 )
 value_options <- c(
     "--signal", "--tp73-evidence", "--cofactor-maxima", "--thresholds",
     "--window", "--output-prefix", "--series", "--negative-references",
     "--pseudocount", "--block-size", "--spline-df",
     "--minimum-class-fraction", "--minimum-class-count",
-    "--minimum-interaction-cell-count", "--duckdb"
+    "--minimum-interaction-cell-count", "--duckdb", "--analysis-role"
 )
 index <- 1L
 while (index <= length(arguments)) {
@@ -122,6 +125,9 @@ if (length(negative_references) == 0L || any(!is.finite(negative_references))) {
 }
 if (any(!nzchar(values$series)) || anyDuplicated(values$series)) {
     stop("--series values must be unique and non-empty", call. = FALSE)
+}
+if (!nzchar(values$analysis_role) || grepl("[\r\n]", values$analysis_role)) {
+    stop("--analysis-role must be non-empty and single-line", call. = FALSE)
 }
 duckdb_path <- Sys.which(values$duckdb)
 if (!nzchar(duckdb_path)) stop("DuckDB CLI not found: ", values$duckdb, call. = FALSE)
@@ -712,6 +718,8 @@ fwrite(occurrence, paste0(values$output_prefix, "_occurrence_summary.tsv"),
 run_config <- data.table(
     schema_version = 1L,
     analysis = "gfp_referenced_h3k4me3_cofactor_change",
+    analysis_role = values$analysis_role,
+    chromosomes = paste(sort(unique(wide$chrom)), collapse = ","),
     signal = values$signal,
     tp73_evidence = values$tp73_evidence,
     cofactor_maxima = values$cofactor_maxima,

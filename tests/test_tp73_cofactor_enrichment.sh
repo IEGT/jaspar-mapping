@@ -93,6 +93,7 @@ Rscript "$repository_root/scripts/analyze_tp73_cofactor_enrichment.R" \
     --cofactor-maxima "$temporary/maxima.parquet" \
     --thresholds "$temporary/thresholds.tsv" \
     --output-prefix "$temporary/result" \
+    --inference-status synthetic_held_out_validation \
     --block-size 50000 --spline-df 3
 
 "$duckdb" -batch :memory: >/dev/null <<SQL
@@ -170,6 +171,8 @@ SELECT CASE WHEN NOT EXISTS (
       AND context_geometry = 'signed_interval_edge_distance'
       AND evidence_column_scheme = 'supported_tp73_and_negative_control'
       AND sample_count = 2
+      AND chromosomes = '1'
+      AND inference_status = 'synthetic_held_out_validation'
 ) THEN error('run provenance omits comparison semantics') END;
 SQL
 

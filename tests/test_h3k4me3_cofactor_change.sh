@@ -204,6 +204,7 @@ Rscript "$repository_root/scripts/analyze_h3k4me3_cofactor_change.R" \
     --window central_20 --output-prefix "$temporary/result" \
     --series series_a --series series_b \
     --negative-references "-1,0" --pseudocount 1 --block-size 500 \
+    --analysis-role synthetic_held_out_validation \
     --spline-df 1 --minimum-class-fraction 0.01 --minimum-class-count 2 \
     --minimum-interaction-cell-count 2 --duckdb "$duckdb"
 
@@ -257,6 +258,8 @@ SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM config
     WHERE all_zero_anchor_policy = 'retained'
       AND tp73_interaction_interpretation = 'secondary_descriptive_post_treatment'
+      AND chromosomes = '1'
+      AND analysis_role = 'synthetic_held_out_validation'
 ) THEN error('analysis provenance omits the agreed estimand safeguards') END;
 SQL
 

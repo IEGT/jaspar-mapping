@@ -42,6 +42,8 @@ usage <- function(status = 0L) {
         "                          (default: unknown)",
         "  --source-dirty BOOL     Whether tracked/staged source differed",
         "                          (default: false)",
+        "  --inference-status TEXT Scientific status/caveat written verbatim",
+        "                          to run provenance",
         "  -h, --help              Show this help"
     ), con = stream)
     quit(status = status)
@@ -62,7 +64,11 @@ values <- list(
     minimum_class_fraction = 0.01,
     duckdb = "duckdb",
     source_commit = "unknown",
-    source_dirty = "false"
+    source_dirty = "false",
+    inference_status = paste(
+        "exploratory chr1; selected thresholds; missing GC/mappability/repeat/",
+        "accessibility/GFP and independent validation", sep = ""
+    )
 )
 known <- c(
     "--anchor-evidence", "--cofactor-maxima", "--thresholds",
@@ -70,7 +76,7 @@ known <- c(
     "--primary-negative-reference", "--tp73-score-breaks",
     "--depth-quantiles", "--block-size", "--spline-df",
     "--minimum-class-fraction", "--duckdb", "--source-commit",
-    "--source-dirty"
+    "--source-dirty", "--inference-status"
 )
 index <- 1L
 while (index <= length(arguments)) {
@@ -162,6 +168,9 @@ if (!values$source_dirty %in% c("true", "false")) {
     stop("--source-dirty must be true or false", call. = FALSE)
 }
 values$source_dirty <- values$source_dirty == "true"
+if (!nzchar(values$inference_status) || grepl("[\r\n]", values$inference_status)) {
+    stop("--inference-status must be non-empty and single-line", call. = FALSE)
+}
 
 suppressPackageStartupMessages(library(data.table))
 
@@ -964,10 +973,8 @@ run_config <- data.table(
     source_commit = values$source_commit,
     source_dirty = values$source_dirty,
     source_dirty_scope = "tracked_and_staged_files_only",
-    inference_status = paste(
-        "exploratory chr1; selected thresholds; missing GC/mappability/repeat/",
-        "accessibility/GFP and independent validation", sep = ""
-    )
+    chromosomes = paste(sort(unique(anchors$chrom)), collapse = ","),
+    inference_status = values$inference_status
 )
 fwrite(run_config, paste0(output_prefix, "_run_config.tsv"), sep = "\t")
 

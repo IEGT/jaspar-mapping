@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Build and publish the chromosome-1 TP73/H3K4me3 production analysis."""
+"""Build and publish one chromosome's TP73/H3K4me3 production analysis."""
 
 from __future__ import annotations
 
@@ -58,6 +58,25 @@ def set_phase(name: str) -> None:
     global CURRENT_PHASE
     CURRENT_PHASE = name
     progress()
+
+
+def analysis_role(chrom: str) -> str:
+    if chrom == "1":
+        return "chromosome_1_development_analysis"
+    return "held_out_chromosome_validation_thresholds_fixed_on_chr1"
+
+
+def occupancy_inference_status(chrom: str) -> str:
+    if chrom == "1":
+        scope = "development analysis on chromosome 1; selected thresholds"
+    else:
+        scope = (
+            f"held-out chromosome {chrom} validation; cofactor thresholds fixed "
+            "on chromosome 1"
+        )
+    return (
+        f"{scope}; missing GC/mappability/repeat/accessibility/GFP covariates"
+    )
 
 
 def run(command: list[str]) -> None:
@@ -120,23 +139,24 @@ def read_panel(path: Path) -> list[str]:
     return motifs
 
 
-def resolve_anchor(duckdb: Path, annotation_run: Path) -> Path:
+def resolve_anchor(duckdb: Path, annotation_run: Path, chrom: str) -> Path:
     database = absolute(annotation_run / "final" / "context.duckdb", "annotation catalog")
     rows = query_json(
         duckdb,
         database,
-        """
+        f"""
 SELECT absolute_path
 FROM context_file_inventory
 WHERE dataset = 'tp73_context_anchor'
-  AND CAST(chrom AS VARCHAR) = '1'
+  AND CAST(chrom AS VARCHAR) = {sql_string(chrom)}
   AND is_parquet
 ORDER BY absolute_path;
 """,
     )
     if len(rows) != 1:
         raise ProductionError(
-            f"expected one chromosome-1 tp73_context_anchor file, found {len(rows)}"
+            f"expected one chromosome-{chrom} tp73_context_anchor file, "
+            f"found {len(rows)}"
         )
     return absolute(Path(str(rows[0]["absolute_path"])), "TP73 anchor source")
 
@@ -154,13 +174,16 @@ def check_free_space(path: Path, minimum_gb: float, label: str) -> None:
 
 
 def stage_scan_inputs(arguments: argparse.Namespace, motifs: list[str]) -> Path:
-    output = arguments.run_root / "input" / "chr1_cofactor_panel"
+    label = "chr1_cofactor_panel" if arguments.chrom == "1" else (
+        f"chrom-{arguments.chrom}_cofactor_panel"
+    )
+    output = arguments.run_root / "input" / label
     command = [
         sys.executable,
         str(arguments.source / "scripts" / "stage_motif_context_inputs.py"),
         "--package", str(arguments.scan_package),
         "--output", str(output),
-        "--chrom", "1",
+        "--chrom", arguments.chrom,
         "--duckdb", str(arguments.duckdb),
     ]
     for motif in motifs:
@@ -200,7 +223,7 @@ def build_contract(arguments: argparse.Namespace, anchor: Path, stage: Path,
     stage_manifest = absolute(stage / "input_manifest.json", "staging manifest")
     return {
         "format_version": 1,
-        "analysis": "tp73_h3k4me3_change_chr1",
+        "analysis": f"tp73_h3k4me3_change_chr{arguments.chrom}",
         "source": str(arguments.source),
         "source_commit": source_commit,
         "annotation_run": str(arguments.annotation_run),
@@ -216,7 +239,7 @@ def build_contract(arguments: argparse.Namespace, anchor: Path, stage: Path,
         "cofactor_thresholds": str(arguments.thresholds),
         "cofactor_thresholds_sha256": sha256(arguments.thresholds),
         "cofactor_motifs": motifs,
-        "chrom": "1",
+        "chrom": arguments.chrom,
         "chrom_length": arguments.chrom_length,
         "minimum_anchor_score": arguments.minimum_anchor_score,
         "source_score_floor": arguments.source_score_floor,
@@ -227,6 +250,8 @@ def build_contract(arguments: argparse.Namespace, anchor: Path, stage: Path,
         "negative_reference_thresholds": [-1, 0],
         "integrated_signal_pseudocount": arguments.pseudocount,
         "genomic_block_size_bp": arguments.block_size,
+        "include_occupancy_analysis": arguments.include_occupancy_analysis,
+        "analysis_role": analysis_role(arguments.chrom),
     }
 
 
@@ -284,7 +309,7 @@ SELECT
         raise ProductionError("cofactor maxima cardinality is incomplete")
     if values["below_anchor_floor"] != 0 or values["excluded_signal_rows"] != 0:
         raise ProductionError("anchor floor or excluded-series invariant failed")
-    prefix = attempt / "analysis" / "h3k4me3_chr1"
+    prefix = attempt / "analysis" / f"h3k4me3_chr{arguments.chrom}"
     for suffix in (
         "_intensity_effect.tsv", "_tp73_interaction.tsv",
         "_series_summary.tsv", "_binding_state_summary.tsv",
@@ -293,6 +318,21 @@ SELECT
         path = Path(str(prefix) + suffix)
         if not path.is_file() or path.stat().st_size == 0:
             raise ProductionError(f"analysis output is absent or empty: {path}")
+    if arguments.include_occupancy_analysis:
+        occupancy_prefix = (
+            attempt / "analysis" /
+            f"tp73_cofactor_enrichment_chr{arguments.chrom}"
+        )
+        for suffix in (
+            "_class_counts.tsv", "_depth_tier_manifest.tsv",
+            "_descriptive.tsv", "_macro_summary.tsv",
+            "_primary_occupancy.tsv", "_run_config.tsv",
+        ):
+            path = Path(str(occupancy_prefix) + suffix)
+            if not path.is_file() or path.stat().st_size == 0:
+                raise ProductionError(
+                    f"occupancy analysis output is absent or empty: {path}"
+                )
     return values
 
 
@@ -313,7 +353,7 @@ def argument_parser() -> argparse.ArgumentParser:
     source = Path(__file__).resolve().parent.parent
     parser = argparse.ArgumentParser(
         description=(
-            "Build a restart-safe chromosome-1 TP73/CUT&RUN/H3K4me3 package "
+            "Build a restart-safe single-chromosome TP73/CUT&RUN/H3K4me3 package "
             "from schema-7 local-peak anchors and an exact finalized scan inventory."
         )
     )
@@ -332,7 +372,8 @@ def argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rscript", required=True, type=Path)
     parser.add_argument("--bigwig-python", required=True, type=Path)
     parser.add_argument("--scratch-root", type=Path)
-    parser.add_argument("--chrom-length", type=int, default=248956422)
+    parser.add_argument("--chrom", default="1")
+    parser.add_argument("--chrom-length", type=int)
     parser.add_argument("--minimum-anchor-score", type=float, default=-1.0)
     parser.add_argument("--source-score-floor", type=float, default=-1.0)
     parser.add_argument("--context-flank", type=int, default=150)
@@ -344,6 +385,10 @@ def argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-temp-size", default="100GB")
     parser.add_argument("--minimum-free-run-gb", type=float, default=10.0)
     parser.add_argument("--minimum-free-scratch-gb", type=float, default=30.0)
+    parser.add_argument(
+        "--include-occupancy-analysis", action="store_true",
+        help="also fit the matched anti-p73/control cofactor analysis",
+    )
     return parser
 
 
@@ -372,6 +417,13 @@ def validate_arguments(arguments: argparse.Namespace) -> None:
     arguments.run_root = arguments.run_root.expanduser().resolve()
     if not str(arguments.run_root).startswith("/data/sm718/"):
         raise ProductionError("--run-root must be below /data/sm718")
+    if re.fullmatch(r"[A-Za-z0-9_.-]+", arguments.chrom) is None:
+        raise ProductionError("--chrom contains unsafe characters")
+    if arguments.chrom_length is None:
+        if arguments.chrom == "1":
+            arguments.chrom_length = 248956422
+        else:
+            raise ProductionError("--chrom-length is required when --chrom is not 1")
     if arguments.chrom_length <= 0 or arguments.context_flank < 0 or arguments.threads <= 0:
         raise ProductionError("chromosome length/flank/threads are invalid")
     if re.fullmatch(r"[0-9a-f]{40}", arguments.source_commit) is None:
@@ -393,7 +445,9 @@ def main() -> int:
         check_free_space(arguments.run_root, arguments.minimum_free_run_gb, "durable")
 
         set_phase("resolve-schema7-anchor")
-        anchor = resolve_anchor(arguments.duckdb, arguments.annotation_run)
+        anchor = resolve_anchor(
+            arguments.duckdb, arguments.annotation_run, arguments.chrom
+        )
         stage = stage_scan_inputs(arguments, motifs)
         contract = build_contract(
             arguments, anchor, stage, motifs, arguments.source_commit
@@ -436,7 +490,7 @@ def main() -> int:
         CURRENT_SCRATCH = scratch
 
         set_phase("copy-inputs-to-scratch")
-        scratch_anchor = scratch / "tp73_context_anchor_chr1.parquet"
+        scratch_anchor = scratch / f"tp73_context_anchor_chr{arguments.chrom}.parquet"
         shutil.copy2(anchor, scratch_anchor)
         cofactor_paths = copy_scan_inputs(stage, scratch)
 
@@ -453,7 +507,8 @@ def main() -> int:
             "--tp73-output", str(evidence),
             "--signal-output", str(signal_output),
             "--profile-output", str(profile),
-            "--chrom", "1", "--chrom-length", str(arguments.chrom_length),
+            "--chrom", arguments.chrom,
+            "--chrom-length", str(arguments.chrom_length),
             "--minimum-anchor-score", str(arguments.minimum_anchor_score),
             "--profile-sample-size", "100000",
             "--threads", str(arguments.threads),
@@ -494,7 +549,7 @@ def main() -> int:
 
         analysis = attempt / "analysis"
         analysis.mkdir()
-        prefix = analysis / "h3k4me3_chr1"
+        prefix = analysis / f"h3k4me3_chr{arguments.chrom}"
         set_phase("fit-gfp-referenced-h3k4me3-change")
         run([
             str(arguments.rscript),
@@ -510,7 +565,32 @@ def main() -> int:
             "--pseudocount", str(arguments.pseudocount),
             "--block-size", str(arguments.block_size),
             "--duckdb", str(arguments.duckdb),
+            "--analysis-role", analysis_role(arguments.chrom),
         ])
+
+        if arguments.include_occupancy_analysis:
+            occupancy_prefix = (
+                analysis / f"tp73_cofactor_enrichment_chr{arguments.chrom}"
+            )
+            set_phase("fit-tp73-cofactor-occupancy")
+            run([
+                str(arguments.rscript),
+                str(
+                    arguments.source /
+                    "scripts/analyze_tp73_cofactor_enrichment.R"
+                ),
+                "--anchor-evidence", str(evidence),
+                "--cofactor-maxima", str(maxima),
+                "--thresholds", str(arguments.thresholds),
+                "--output-prefix", str(occupancy_prefix),
+                "--negative-reference-thresholds", "-1,0",
+                "--primary-negative-reference", "-1",
+                "--block-size", str(arguments.block_size),
+                "--duckdb", str(arguments.duckdb),
+                "--source-commit", arguments.source_commit,
+                "--source-dirty", "false",
+                "--inference-status", occupancy_inference_status(arguments.chrom),
+            ])
 
         set_phase("validate-and-publish")
         validation = validate_outputs(arguments, attempt, anchor, len(motifs))
