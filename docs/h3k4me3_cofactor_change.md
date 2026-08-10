@@ -206,3 +206,40 @@ before a per-motif all-JASPAR Slurm run is designed.
 Full builds report separate timed phases for strict TP73/control evidence and
 H3K4me3/input window aggregation. Outputs are promoted from temporary scratch
 only after the corresponding DuckDB validation succeeds.
+
+## Schema-7 production run
+
+The production driver resolves the chromosome-1 `tp73_context_anchor` Parquet
+from the finalized annotation catalog rather than from a filename pattern. The
+partition's chromosome is supplied explicitly as `--chrom 1`; it is not
+assumed to be redundantly stored inside the Parquet payload. The selected
+schema-7 input contains 305,528 strand-aware records representing 305,492
+physical motif-alignment spans, all marked `anchor_selection_class =
+'local_peak'` and all at score `>= -1`.
+
+The same job builds the strict TP73/negative-control evidence, the complete
+H3K4me3/input signal factorial, and the nine-cofactor maxima before fitting the
+predeclared `flank_150_1000` analysis. Motif Parquets are selected through the
+scan catalog and copied to local scratch. BigWig conversion is scratch-only.
+`skmel29_1` remains excluded by the source-controlled track manifest.
+
+```sh
+SOURCE=/data/sm718/GitHub/jaspar-mapping
+ANNOTATION=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_tp73_annotation_v2
+SCAN=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_sparse_v3/package
+TRACKS=$SOURCE/cutandrun_20250602_noDuplicates
+RUNTIME=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_context_thresholds_v1/runtime
+RUN=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_h3k4me3_production_v1
+
+"$SOURCE/scripts/submit_h3k4me3_chr1_production_slurm.sh" \
+  --run-root "$RUN" --annotation-run "$ANNOTATION" \
+  --scan-package "$SCAN" --track-root "$TRACKS" \
+  --runtime-prefix "$RUNTIME" --partition requeue \
+  --cpus 4 --memory 32G --time 08:00:00
+```
+
+The worker handles `SIGUSR1` without terminating and reports the current phase,
+elapsed time, durable bytes, and scratch bytes. Attempts are immutable. Only a
+validated attempt is atomically promoted to `$RUN/final`, whose `manifest.json`
+pins the annotation catalog, anchor file, scan inventory, track manifest,
+cofactor thresholds, source commit, output checksums, and cardinality checks.

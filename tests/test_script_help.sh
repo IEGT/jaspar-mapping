@@ -51,6 +51,7 @@ scripts/run_chr1_patz1_tp73_dry_run.sh
 scripts/run_genome_scan_slurm_chromosome.sh
 scripts/run_genome_scan_slurm_finalize.sh
 scripts/run_genome_scan_slurm_task.sh
+scripts/run_h3k4me3_chr1_production.py
 scripts/run_motif_context_slurm_task.sh
 scripts/run_motif_density_calibration_finalize.sh
 scripts/run_motif_density_calibration_slurm.sh
@@ -67,6 +68,7 @@ scripts/shift_bed.awk
 scripts/stage_fasta_region.py
 scripts/stage_motif_context_inputs.py
 scripts/submit_genome_scan_slurm.sh
+scripts/submit_h3k4me3_chr1_production_slurm.sh
 scripts/submit_motif_context_slurm.sh
 scripts/submit_motif_density_calibration_slurm.sh
 scripts/submit_motif_threshold_calibration_slurm.sh

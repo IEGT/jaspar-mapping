@@ -343,7 +343,9 @@ association and is recorded in
 The separate GFP-referenced H3K4me3 change analysis uses condition-matched
 input, predeclared motif-centred windows, and per-series models without a
 persistent BED intermediate. Its contract and chromosome-1 pilot are recorded
-in [`docs/h3k4me3_cofactor_change.md`](docs/h3k4me3_cofactor_change.md).
+in [`docs/h3k4me3_cofactor_change.md`](docs/h3k4me3_cofactor_change.md). The
+same document gives the restart-safe Slurm production command using schema-7
+TP73 local-peak anchors and node-local scratch.
 
 ## Automated reference checks
 
