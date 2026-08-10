@@ -62,7 +62,9 @@ cat > "$temporary/duckdb" <<'EOF'
 #!/usr/bin/env bash
 case "$*" in
     *motif_context_run_config*) printf '%s\n' "${FAKE_CONFIG_COUNT:-1}" ;;
-    *anchor_motif_band_feature*) printf '0\n' ;;
+    *"neighbor_motif_id <> 'MA0861.2'"*) printf '0\n' ;;
+    *"neighbor_motif_id NOT IN"*) printf '0\n' ;;
+    *anchor_motif_band_feature*) printf '1\n' ;;
     *) exit 2 ;;
 esac
 EOF

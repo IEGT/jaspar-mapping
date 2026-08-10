@@ -221,7 +221,7 @@ for motif in "${cofactor_motifs[@]:1}"; do
     sql_motif_list+="'$motif'"
 done
 if [[ $task_kind == anchor_annotation ]]; then
-    unexpected_feature_sql="SELECT count(*) FROM anchor_motif_band_feature;"
+    unexpected_feature_sql="SELECT count(*) FROM anchor_motif_band_feature WHERE neighbor_motif_id <> 'MA0861.2';"
 else
     unexpected_feature_sql="SELECT count(*) FROM anchor_motif_band_feature WHERE neighbor_motif_id NOT IN ($sql_motif_list);"
 fi
