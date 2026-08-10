@@ -229,7 +229,7 @@ ANNOTATION=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_tp73_annotation_v2
 SCAN=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_sparse_v3/package
 TRACKS=$SOURCE/cutandrun_20250602_noDuplicates
 RUNTIME=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_context_thresholds_v1/runtime
-RUN=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_h3k4me3_production_v2
+RUN=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_h3k4me3_production_v3
 
 "$SOURCE/scripts/submit_h3k4me3_chr1_production_slurm.sh" \
   --run-root "$RUN" --annotation-run "$ANNOTATION" \

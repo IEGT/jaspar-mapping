@@ -127,7 +127,8 @@ submission=(
     "$source/scripts/run_h3k4me3_chr1_production.py"
     --run-root "$run_root" --annotation-run "$annotation_run"
     --scan-package "$scan_package" --track-root "$track_root"
-    --source "$source" --duckdb "$duckdb" --rscript "$rscript"
+    --source "$source" --source-commit "$source_commit"
+    --duckdb "$duckdb" --rscript "$rscript"
     --bigwig-python "$bigwig_python" --scratch-root "$scratch_root"
     --threads "$cpus" --memory-limit 28GB --minimum-free-scratch-gb 30
 )

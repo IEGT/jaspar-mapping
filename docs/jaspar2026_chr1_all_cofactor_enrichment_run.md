@@ -121,7 +121,7 @@ the fixed positive operating-point contract:
 SOURCE=/data/sm718/GitHub/jaspar-mapping
 SCAN=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_sparse_v3/package
 OLD=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_context_thresholds_v1
-EVIDENCE=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_h3k4me3_production_v2/final/tp73_anchor_evidence.parquet
+EVIDENCE=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_h3k4me3_production_v3/final/tp73_anchor_evidence.parquet
 LOCALPEAK=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_localpeak_thresholds_v2
 ENRICH=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_localpeak_enrichment_v3
 REGISTRY=$OLD/final/threshold_calibration/tables/jaspar2026/motif_score_threshold/part-000000.parquet

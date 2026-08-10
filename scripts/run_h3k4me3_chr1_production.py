@@ -9,6 +9,7 @@ import csv
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -99,27 +100,6 @@ def absolute(path: Path, label: str, *, directory: bool = False) -> Path:
         kind = "directory" if directory else "file"
         raise ProductionError(f"{label} {kind} is missing: {resolved}")
     return resolved
-
-
-def git_value(source: Path, *arguments: str) -> str:
-    process = subprocess.run(
-        ["git", "-C", str(source), *arguments],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if process.returncode != 0:
-        raise ProductionError(process.stderr.strip() or "git query failed")
-    return process.stdout.strip()
-
-
-def git_success(source: Path, *arguments: str) -> bool:
-    return subprocess.run(
-        ["git", "-C", str(source), *arguments],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    ).returncode == 0
 
 
 def read_panel(path: Path) -> list[str]:
@@ -342,6 +322,10 @@ def argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scan-package", required=True, type=Path)
     parser.add_argument("--track-root", required=True, type=Path)
     parser.add_argument("--source", type=Path, default=source)
+    parser.add_argument(
+        "--source-commit", required=True,
+        help="clean 40-character Git commit captured on the submission host",
+    )
     parser.add_argument("--track-manifest", type=Path)
     parser.add_argument("--thresholds", type=Path)
     parser.add_argument("--duckdb", required=True, type=Path)
@@ -390,6 +374,8 @@ def validate_arguments(arguments: argparse.Namespace) -> None:
         raise ProductionError("--run-root must be below /data/sm718")
     if arguments.chrom_length <= 0 or arguments.context_flank < 0 or arguments.threads <= 0:
         raise ProductionError("chromosome length/flank/threads are invalid")
+    if re.fullmatch(r"[0-9a-f]{40}", arguments.source_commit) is None:
+        raise ProductionError("--source-commit must be a 40-character lowercase hash")
     if arguments.minimum_free_run_gb < 0 or arguments.minimum_free_scratch_gb < 0:
         raise ProductionError("minimum free-space limits cannot be negative")
 
@@ -400,14 +386,6 @@ def main() -> int:
     try:
         validate_arguments(arguments)
         signal.signal(signal.SIGUSR1, progress)
-        source_commit = git_value(arguments.source, "rev-parse", "HEAD")
-        if not git_success(
-            arguments.source, "diff", "--quiet", "--ignore-submodules", "--"
-        ) or not git_success(
-            arguments.source, "diff", "--cached", "--quiet",
-            "--ignore-submodules", "--"
-        ):
-            raise ProductionError("production execution requires a tracked-clean source tree")
         motifs = read_panel(arguments.thresholds)
         arguments.run_root.mkdir(parents=True, exist_ok=True)
         (arguments.run_root / "input").mkdir(exist_ok=True)
@@ -417,7 +395,9 @@ def main() -> int:
         set_phase("resolve-schema7-anchor")
         anchor = resolve_anchor(arguments.duckdb, arguments.annotation_run)
         stage = stage_scan_inputs(arguments, motifs)
-        contract = build_contract(arguments, anchor, stage, motifs, source_commit)
+        contract = build_contract(
+            arguments, anchor, stage, motifs, arguments.source_commit
+        )
         fingerprint = contract_sha256(contract)
         final = arguments.run_root / "final"
         if final.is_dir():
