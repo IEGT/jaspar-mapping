@@ -352,7 +352,7 @@ submission rejects tracked changes and copies the three required Python programs
 into an immutable source snapshot below the run root. Compute workers verify the
 snapshot's plain-text commit marker and do not need Git. Motif batches are
 ordered before chromosomes so each array chunk contains a mixture of long and
-short sequence regions. Schema-6 selected/summary plans additionally pin the GTF
+short sequence regions. Schema-7 selected/summary plans additionally pin the GTF
 byte size and SHA-256; every worker verifies both before annotation starts.
 
 Submission always adds a small `afterany` finalizer after the last array. It
@@ -413,6 +413,38 @@ avoids an otherwise very large global sort before context formation. Direct or
 ad hoc builder use keeps the default `deduplicate` mode; the selected mode is
 recorded in `context_run_config` and must not be changed merely for speed when
 input uniqueness has not been established.
+
+### Shared TP73 annotation layer
+
+Use an explicit anchor-only summary run to materialize the shared schema-7
+TP73, TSS, transcript, promoter, and anchor-to-promoter relationships once per
+chromosome. `--anchor-only` forbids cofactor motifs and requires
+`--output-tier summary`; the immutable task plan records
+`task_kind=anchor_annotation` and the literal `none` cofactor field. This is
+not a zero-hit cofactor package and must not be combined with the 3,300
+annotation-free cofactor-band tasks.
+
+```sh
+scripts/submit_motif_context_slurm.sh \
+  --run-root /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_tp73_annotation_v1 \
+  --scan-package /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_sparse_v3/package \
+  --gtf /data/sm718/resources/ensembl/113/gtf/homo_sapiens/Homo_sapiens.GRCh38.113.gtf.gz \
+  --anchor-only --output-tier summary \
+  --chrom-file /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_tp73_annotation_v1/plan/chromosomes.txt \
+  --annotation-release ensembl_113 \
+  --promoter-definition tss_upstream_2000_downstream_500_v1 \
+  --promoter-upstream-bp 2000 --promoter-downstream-bp 500 \
+  --account cluster --partition requeue --max-concurrent 20 \
+  --cpus 4 --memory 32G --memory-limit 24GB --max-temp-size 100GB \
+  --time 0-02:00:00 --dry-run
+```
+
+The worker stages only the two TP73 orientation files for its chromosome to
+node-local scratch. The finalizer refuses completion unless every package
+contains the normalized physical TSS, transcript-to-TSS, promoter,
+promoter-to-gene, nearest-TSS, anchor-to-promoter, and TP73-anchor Parquet
+payloads. Legacy task plans without `task_kind` remain
+`cofactor_context` plans.
 
 The package contains:
 

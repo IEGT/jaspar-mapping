@@ -252,6 +252,22 @@ SELECT CAST(chrom AS VARCHAR) AS chrom, anchor_start, anchor_end, anchor_score
 FROM read_parquet({sql_string(source)}, hive_partitioning=false)
 ORDER BY anchor_start, anchor_end;
 """.strip()
+    if arguments.anchor_source is not None:
+        return f"""
+CREATE TABLE anchors AS
+SELECT {sql_string(arguments.chrom)}::VARCHAR AS chrom,
+       start::BIGINT AS anchor_start, "end"::BIGINT AS anchor_end,
+       max(score)::FLOAT AS anchor_score
+FROM read_parquet(
+    {sql_string(arguments.anchor_source)}, hive_partitioning=false)
+WHERE motif_id = 'MA0861.2'
+  AND regexp_replace(lower(CAST(chrom AS VARCHAR)), '^chr', '') =
+      {sql_string(arguments.chrom)}
+  AND anchor_selection_class = 'local_peak'
+GROUP BY start, "end"
+HAVING max(score) >= {arguments.minimum_anchor_score:.17g}
+ORDER BY anchor_start, anchor_end;
+""".strip()
     return f"""
 CREATE TABLE anchors AS
 SELECT {sql_string(arguments.chrom)}::VARCHAR AS chrom,
@@ -560,6 +576,14 @@ def write_sidecars(base: Path, arguments: argparse.Namespace, tracks: list[Track
         "chrom": arguments.chrom,
         "chrom_length": arguments.chrom_length,
         "minimum_anchor_score": arguments.minimum_anchor_score,
+        "anchor_source_mode": (
+            "schema7_local_peak_context_anchor"
+            if arguments.anchor_source is not None
+            else "orientation_sparse_pair"
+        ),
+        "anchor_source": (
+            str(arguments.anchor_source) if arguments.anchor_source else None
+        ),
         "included_series": sorted({track.series_id for track in tracks
                                     if track.included}),
         "excluded_series": sorted({track.series_id for track in tracks
@@ -596,8 +620,15 @@ def parser() -> argparse.ArgumentParser:
             "is created."
         )
     )
-    result.add_argument("--anchor-plus", type=Path, required=True)
-    result.add_argument("--anchor-minus", type=Path, required=True)
+    result.add_argument(
+        "--anchor-source", type=Path,
+        help=(
+            "schema-7 tp73_context_anchor Parquet already selected as local "
+            "peaks; mutually exclusive with --anchor-plus/--anchor-minus"
+        ),
+    )
+    result.add_argument("--anchor-plus", type=Path)
+    result.add_argument("--anchor-minus", type=Path)
     result.add_argument("--track-manifest", type=Path, required=True)
     result.add_argument("--track-root", type=Path, required=True)
     result.add_argument("--tp73-output", type=Path)
@@ -631,8 +662,19 @@ def parser() -> argparse.ArgumentParser:
 
 
 def validate_arguments(arguments: argparse.Namespace) -> None:
-    for path in (arguments.anchor_plus, arguments.anchor_minus,
-                 arguments.track_manifest):
+    source_mode = arguments.anchor_source is not None
+    pair_mode = arguments.anchor_plus is not None or arguments.anchor_minus is not None
+    if source_mode == pair_mode:
+        raise SignalBuildError(
+            "provide exactly --anchor-source or both --anchor-plus and --anchor-minus"
+        )
+    if pair_mode and (arguments.anchor_plus is None or arguments.anchor_minus is None):
+        raise SignalBuildError("--anchor-plus and --anchor-minus must be provided together")
+    anchor_inputs = (
+        (arguments.anchor_source,)
+        if source_mode else (arguments.anchor_plus, arguments.anchor_minus)
+    )
+    for path in (*anchor_inputs, arguments.track_manifest):
         if not path.is_file():
             raise SignalBuildError(f"input not found: {path}")
     if not arguments.track_root.is_dir():
@@ -710,10 +752,17 @@ def main() -> int:
                     f"{len(coverage) // 2} TP73/control tracks",
                     file=sys.stderr,
                 )
+                anchor_arguments = (
+                    ["--anchor-source", str(arguments.anchor_source)]
+                    if arguments.anchor_source is not None
+                    else [
+                        "--anchor-plus", str(arguments.anchor_plus),
+                        "--anchor-minus", str(arguments.anchor_minus),
+                    ]
+                )
                 run([
                     str(arguments.anchor_builder),
-                    "--anchor-plus", str(arguments.anchor_plus),
-                    "--anchor-minus", str(arguments.anchor_minus),
+                    *anchor_arguments,
                     *coverage,
                     "--output", str(staged_tp73),
                     "--chrom", arguments.chrom,

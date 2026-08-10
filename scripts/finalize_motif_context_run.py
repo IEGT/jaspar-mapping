@@ -104,7 +104,7 @@ def parse_task_plan(path: Path) -> tuple[list[dict[str, Any]], str]:
         chrom = row["chrom"]
         output_tier = row["output_tier"]
         source_commit = row["builder_source_commit"]
-        cofactors = row["cofactor_motif_ids"].split(",")
+        task_kind = row.get("task_kind") or "cofactor_context"
         if (not SAFE_IDENTIFIER.fullmatch(chrom)
                 or not SAFE_IDENTIFIER.fullmatch(source_commit)):
             raise ContextFinalizationError(f"unsafe task identity at index {task_index}")
@@ -112,12 +112,25 @@ def parse_task_plan(path: Path) -> tuple[list[dict[str, Any]], str]:
             raise ContextFinalizationError(
                 f"unsupported output tier at task {task_index}: {output_tier}"
             )
-        if (not cofactors or any(
-            not SAFE_IDENTIFIER.fullmatch(motif) or motif == ANCHOR_MOTIF
-            for motif in cofactors
-        ) or len(cofactors) != len(set(cofactors))):
+        if task_kind == "anchor_annotation":
+            if row["cofactor_motif_ids"] != "none" or output_tier != "summary":
+                raise ContextFinalizationError(
+                    f"anchor-annotation task {task_index} must have no "
+                    "cofactors and use summary tier"
+                )
+            cofactors: list[str] = []
+        elif task_kind == "cofactor_context":
+            cofactors = row["cofactor_motif_ids"].split(",")
+            if (not cofactors or any(
+                not SAFE_IDENTIFIER.fullmatch(motif) or motif == ANCHOR_MOTIF
+                for motif in cofactors
+            ) or len(cofactors) != len(set(cofactors))):
+                raise ContextFinalizationError(
+                    f"invalid cofactor list at task {task_index}"
+                )
+        else:
             raise ContextFinalizationError(
-                f"invalid cofactor list at task {task_index}"
+                f"unsupported task kind at task {task_index}: {task_kind}"
             )
 
         schema_text = row.get("context_schema_version") or "5"
@@ -189,6 +202,7 @@ def parse_task_plan(path: Path) -> tuple[list[dict[str, Any]], str]:
 
         tasks.append({
             "task_index": task_index,
+            "task_kind": task_kind,
             "chrom": chrom,
             "cofactor_motif_ids": cofactors,
             "output_tier": output_tier,
@@ -202,7 +216,10 @@ def parse_task_plan(path: Path) -> tuple[list[dict[str, Any]], str]:
             "promoter_downstream_bp": promoter_downstream_bp,
         })
 
-    for field in ("output_tier", "builder_source_commit", "context_schema_version"):
+    for field in (
+        "task_kind", "output_tier", "builder_source_commit",
+        "context_schema_version",
+    ):
         values = {task[field] for task in tasks}
         if len(values) != 1:
             raise ContextFinalizationError(
@@ -346,6 +363,15 @@ def package_files(run_root: Path, package: Path,
         required.add(
             "tables/jaspar2026/anchor_motif_band_feature/data.parquet"
         )
+    else:
+        required.update({
+            "tables/jaspar2026/transcription_start_site.parquet",
+            "tables/jaspar2026/transcript_tss.parquet",
+            "tables/jaspar2026/promoter.parquet",
+            "tables/jaspar2026/promoter_gene.parquet",
+            "tables/jaspar2026/tp73_anchor_nearest_tss.parquet",
+            "tables/jaspar2026/tp73_anchor_promoter.parquet",
+        })
     observed: set[str] = set()
     rows: list[dict[str, Any]] = []
     for root, directories, filenames in os.walk(package):
@@ -377,6 +403,13 @@ def package_files(run_root: Path, package: Path,
     if missing:
         raise ContextFinalizationError(
             f"{package}: required package files are missing: {missing}"
+        )
+    if task["output_tier"] != "band" and not any(
+        path.startswith("tables/jaspar2026/tp73_context_anchor/")
+        and path.endswith(".parquet") for path in observed
+    ):
+        raise ContextFinalizationError(
+            f"{package}: TP73 context-anchor Parquet payload is missing"
         )
     return rows
 
@@ -469,7 +502,7 @@ SELECT * FROM read_json_auto({sql_string(task_json)}, format='newline_delimited'
 CREATE TABLE context_file_inventory AS
 SELECT * FROM read_json_auto({sql_string(file_json)}, format='newline_delimited');
 CREATE VIEW context_feature_file_inventory AS
-SELECT f.*, t.cofactor_motif_ids, t.output_tier,
+SELECT f.*, t.task_kind, t.cofactor_motif_ids, t.output_tier,
        t.context_schema_version, t.builder_source_commit
 FROM context_file_inventory f
 JOIN context_task_inventory t USING (task_index, chrom);
@@ -623,6 +656,7 @@ def finalize(arguments: argparse.Namespace) -> None:
             "parquet_file_count": sum(row["is_parquet"] for row in file_rows),
             "package_bytes": sum(row["package_bytes"] for row in task_rows),
             "output_tier": task_rows[0]["output_tier"],
+            "task_kind": task_rows[0]["task_kind"],
             "context_schema_version": task_rows[0]["context_schema_version"],
             "builder_source_commit": task_rows[0]["builder_source_commit"],
             "source_scan_manifest_sha256": next(iter(scan_manifest_ids)),

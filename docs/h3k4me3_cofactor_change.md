@@ -113,6 +113,15 @@ Strict TP73 support retains the established rule: one merged positive-coverage
 component must start before and end after the complete motif-alignment span.
 H3K4me3 is summarized over a window and is not subjected to strict immersion.
 
+Production builds pass the schema-7 `tp73_context_anchor` Parquet to both
+builders with `--anchor-source`. Those rows have already passed the declared
+TP73 local-peak selection. Tied orientation records at one alignment span are
+collapsed to one physical anchor using their maximum score, but the source
+selection is not recomputed. The evidence sidecar identifies this as
+`schema7_local_peak_context_anchor` and pins the exact source checksum.
+`--anchor-plus`/`--anchor-minus` remains available for reproducing older
+score-floor pilots; the two input modes are mutually exclusive.
+
 ## TP73 binding state
 
 Condition-specific confirmed TP73 support is

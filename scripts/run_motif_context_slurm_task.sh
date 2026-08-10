@@ -108,8 +108,9 @@ task_row=$(awk -F '\t' -v task="$global_task_index" \
 IFS=$'\t' read -r task_index chromosome cofactor_motif_ids output_tier \
     builder_source_commit context_schema_version gtf_size_bytes gtf_sha256 \
     task_annotation_release task_promoter_definition_id \
-    task_promoter_upstream_bp task_promoter_downstream_bp \
+    task_promoter_upstream_bp task_promoter_downstream_bp task_kind \
     <<< "$task_row"
+task_kind=${task_kind:-cofactor_context}
 [[ $task_index == "$global_task_index" ]]
 [[ $chromosome =~ ^[A-Za-z0-9._-]+$ ]]
 [[ $output_tier == selected || $output_tier == summary || $output_tier == band ]]
@@ -139,14 +140,31 @@ if [[ $builder_source_commit != unknown ]]; then
         exit 1
     }
 fi
-IFS=',' read -ra cofactor_motifs <<< "$cofactor_motif_ids"
-[[ ${#cofactor_motifs[@]} -gt 0 ]]
-for motif in "${cofactor_motifs[@]}"; do
-    [[ $motif =~ ^[A-Za-z0-9._-]+$ && $motif != MA0861.2 ]] || {
-        echo "E: Unsafe or anchor motif in task $task_index: $motif" >&2
+cofactor_motifs=(__jaspar_context_array_sentinel__)
+case $task_kind in
+    anchor_annotation)
+        [[ $cofactor_motif_ids == none && $output_tier == summary ]] || {
+            echo "E: Anchor-annotation task $task_index must use no cofactors and summary tier." >&2
+            exit 2
+        }
+        ;;
+    cofactor_context)
+        IFS=',' read -ra parsed_cofactor_motifs <<< "$cofactor_motif_ids"
+        [[ ${#parsed_cofactor_motifs[@]} -gt 0 ]]
+        for motif in "${parsed_cofactor_motifs[@]}"; do
+            [[ $motif =~ ^[A-Za-z0-9._-]+$ && $motif != MA0861.2 ]] || {
+                echo "E: Unsafe or anchor motif in task $task_index: $motif" >&2
+                exit 2
+            }
+            cofactor_motifs+=("$motif")
+        done
+        ;;
+    *)
+        echo "E: Unsupported task kind at task $task_index: $task_kind" >&2
         exit 2
-    }
-done
+        ;;
+esac
+cofactor_count=$((${#cofactor_motifs[@]} - 1))
 if [[ $output_tier != band ]]; then
     [[ -n $gtf && -f $gtf ]] || {
         echo "E: Task tier $output_tier requires --gtf." >&2
@@ -194,14 +212,19 @@ stage_arguments=(
     --package "$scan_package" --output "$input"
     --motif MA0861.2 --chrom "$chromosome" --duckdb "$duckdb"
 )
-for motif in "${cofactor_motifs[@]}"; do stage_arguments+=(--motif "$motif"); done
+for motif in "${cofactor_motifs[@]:1}"; do stage_arguments+=(--motif "$motif"); done
 "${stage_arguments[@]}"
 
 sql_motif_list=""
-for motif in "${cofactor_motifs[@]}"; do
+for motif in "${cofactor_motifs[@]:1}"; do
     if [[ -n $sql_motif_list ]]; then sql_motif_list+=","; fi
     sql_motif_list+="'$motif'"
 done
+if [[ $task_kind == anchor_annotation ]]; then
+    unexpected_feature_sql="SELECT count(*) FROM anchor_motif_band_feature;"
+else
+    unexpected_feature_sql="SELECT count(*) FROM anchor_motif_band_feature WHERE neighbor_motif_id NOT IN ($sql_motif_list);"
+fi
 if [[ $output_tier == band ]]; then
     gtf_validation_sql="AND gtf_source IS NULL AND gtf_sha256 IS NULL AND gtf_size_bytes IS NULL"
 else
@@ -240,8 +263,7 @@ WHERE schema_version = $context_schema_version
     unexpected=$(
         cd "$package"
         "$duckdb" -light-mode -readonly -csv -noheader context.duckdb -c "
-SELECT count(*) FROM anchor_motif_band_feature
-WHERE neighbor_motif_id NOT IN ($sql_motif_list);"
+$unexpected_feature_sql"
     ) || return 1
     [[ $unexpected == 0 ]]
 }
@@ -295,7 +317,7 @@ esac
 }
 temp_kib=$((temp_number * temp_multiplier))
 minimum_kib=$((input_kib + temp_kib + 10 * 1024 * 1024))
-echo "I: Task $task_index: chromosome $chromosome, ${#cofactor_motifs[@]} cofactors, tier $output_tier" >&2
+echo "I: Task $task_index: chromosome $chromosome, kind $task_kind, $cofactor_count cofactors, tier $output_tier" >&2
 echo "I: Input size: $input_kib KiB; scratch available: $available_kib KiB" >&2
 if (( available_kib < minimum_kib )); then
     echo "E: Scratch preflight failed; need at least $minimum_kib KiB before copying input." >&2

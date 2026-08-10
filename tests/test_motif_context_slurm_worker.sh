@@ -17,11 +17,23 @@ cat > "$source_tree/scripts/stage_motif_context_inputs.py" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 output=""
+chrom=""
+motifs=()
 while [[ $# -gt 0 ]]; do
-    if [[ $1 == --output ]]; then output=$2; shift 2; else shift; fi
+    case $1 in
+        --output) output=$2; shift 2 ;;
+        --chrom) chrom=$2; shift 2 ;;
+        --motif) motifs+=("$2"); shift 2 ;;
+        *) shift ;;
+    esac
 done
 mkdir -p "$output"
-printf '{"motifs":["MA0861.2","MA0001.1","MA0002.1"],"chromosomes":["X"]}\n' \
+joined=""
+for motif in "${motifs[@]}"; do
+    [[ -z $joined ]] || joined+=","
+    joined+="\"$motif\""
+done
+printf '{"motifs":[%s],"chromosomes":["%s"]}\n' "$joined" "$chrom" \
     > "$output/input_manifest.json"
 EOF
 cat > "$source_tree/scripts/build_motif_context.py" <<'EOF'
@@ -57,11 +69,13 @@ EOF
 chmod +x "$temporary/duckdb"
 
 {
-    printf 'task_index\tchrom\tcofactor_motif_ids\toutput_tier\tbuilder_source_commit\tcontext_schema_version\tgtf_size_bytes\tgtf_sha256\tannotation_release\tpromoter_definition_id\tpromoter_upstream_bp\tpromoter_downstream_bp\n'
-    printf '107\tX\tMA0001.1,MA0002.1\tband\tabc123\t7\t0\tnone\tensembl_113\ttss_upstream_2000_downstream_500_v1\t2000\t500\n'
-    printf '108\tX\tMA0001.1,MA0002.1\tband\tabc123\t7\t0\tnone\tensembl_113\ttss_upstream_2000_downstream_500_v1\t2000\t500\n'
-    printf '109\tX\tMA0001.1,MA0002.1\tband\tabc123\t7\t0\tnone\tensembl_113\ttss_upstream_2000_downstream_500_v1\t2000\t500\n'
-    printf '110\tX\tMA0001.1,MA0002.1\tselected\tabc123\t7\t%s\t%s\tensembl_113\ttss_upstream_2000_downstream_500_v1\t2000\t500\n' \
+    printf 'task_index\tchrom\tcofactor_motif_ids\toutput_tier\tbuilder_source_commit\tcontext_schema_version\tgtf_size_bytes\tgtf_sha256\tannotation_release\tpromoter_definition_id\tpromoter_upstream_bp\tpromoter_downstream_bp\ttask_kind\n'
+    printf '107\tX\tMA0001.1,MA0002.1\tband\tabc123\t7\t0\tnone\tensembl_113\ttss_upstream_2000_downstream_500_v1\t2000\t500\tcofactor_context\n'
+    printf '108\tX\tMA0001.1,MA0002.1\tband\tabc123\t7\t0\tnone\tensembl_113\ttss_upstream_2000_downstream_500_v1\t2000\t500\tcofactor_context\n'
+    printf '109\tX\tMA0001.1,MA0002.1\tband\tabc123\t7\t0\tnone\tensembl_113\ttss_upstream_2000_downstream_500_v1\t2000\t500\tcofactor_context\n'
+    printf '110\tX\tMA0001.1,MA0002.1\tselected\tabc123\t7\t%s\t%s\tensembl_113\ttss_upstream_2000_downstream_500_v1\t2000\t500\tcofactor_context\n' \
+        "$gtf_size" "$gtf_sha256"
+    printf '111\tX\tnone\tsummary\tabc123\t7\t%s\t%s\tensembl_113\ttss_upstream_2000_downstream_500_v1\t2000\t500\tanchor_annotation\n' \
         "$gtf_size" "$gtf_sha256"
 } > "$run_root/plan/context_tasks.tsv"
 touch "$run_root/packages/chrom-X/task-107/context.duckdb"
@@ -127,6 +141,21 @@ selected_output=$(
         --gtf "$temporary/annotation.gtf" 2>&1
 )
 grep -Fq 'Reusing completed context task 110' <<< "$selected_output"
+
+mkdir -p "$temporary/scratch-anchor"
+anchor_output=$(
+    SLURM_ARRAY_TASK_ID=11 JASPAR_CONTEXT_TASK_OFFSET=100 \
+    SLURM_TMPDIR="$temporary/scratch-anchor" \
+    "$repository_root/scripts/run_motif_context_slurm_task.sh" \
+        --run-root "$run_root" --scan-package "$scan_package" \
+        --task-file "$run_root/plan/context_tasks.tsv" \
+        --source "$source_tree" --duckdb "$temporary/duckdb" \
+        --gtf "$temporary/annotation.gtf" --max-temp-size 1MB 2>&1
+)
+grep -Fq 'kind anchor_annotation, 0 cofactors' <<< "$anchor_output"
+grep -Fq 'Completed context task 111' <<< "$anchor_output"
+grep -Fq '"motifs":["MA0861.2"]' \
+    "$run_root/packages/chrom-X/task-111/input_manifest.json"
 if SLURM_ARRAY_TASK_ID=10 JASPAR_CONTEXT_TASK_OFFSET=100 \
     "$repository_root/scripts/run_motif_context_slurm_task.sh" \
         --run-root "$run_root" --scan-package "$scan_package" \

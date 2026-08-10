@@ -120,13 +120,18 @@ def coverage_ctes(index: int, sample_id: str, path: Path, chrom: str,
 
 
 def build_sql(arguments: argparse.Namespace, staging_output: Path) -> str:
-    anchor_statement = f"""
-CREATE TABLE anchors AS
-    SELECT {sql_string(arguments.chrom)}::VARCHAR AS chrom,
-           start::BIGINT AS anchor_start,
-           \"end\"::BIGINT AS anchor_end,
-           max(score)::FLOAT AS anchor_score
-    FROM (
+    if arguments.anchor_source is not None:
+        anchor_rows = f"""
+        SELECT start, \"end\", score
+        FROM read_parquet({sql_string(arguments.anchor_source)},
+                          hive_partitioning=false)
+        WHERE motif_id = 'MA0861.2'
+          AND regexp_replace(lower(CAST(chrom AS VARCHAR)), '^chr', '') =
+              {sql_string(arguments.chrom)}
+          AND anchor_selection_class = 'local_peak'
+""".strip()
+    else:
+        anchor_rows = f"""
         SELECT start, \"end\", score
         FROM read_parquet({sql_string(arguments.anchor_plus)},
                           hive_partitioning=false)
@@ -134,6 +139,15 @@ CREATE TABLE anchors AS
         SELECT start, \"end\", score
         FROM read_parquet({sql_string(arguments.anchor_minus)},
                           hive_partitioning=false)
+""".strip()
+    anchor_statement = f"""
+CREATE TABLE anchors AS
+    SELECT {sql_string(arguments.chrom)}::VARCHAR AS chrom,
+           start::BIGINT AS anchor_start,
+           \"end\"::BIGINT AS anchor_end,
+           max(score)::FLOAT AS anchor_score
+    FROM (
+        {anchor_rows}
     )
     GROUP BY start, \"end\"
     HAVING max(score) >= {arguments.minimum_anchor_score:.17g};
@@ -241,8 +255,11 @@ def build(arguments: argparse.Namespace) -> None:
     if duckdb is None:
         raise AnchorEvidenceError(f"DuckDB executable not found: {arguments.duckdb}")
 
-    arguments.anchor_plus = arguments.anchor_plus.expanduser().resolve()
-    arguments.anchor_minus = arguments.anchor_minus.expanduser().resolve()
+    if arguments.anchor_source is not None:
+        arguments.anchor_source = arguments.anchor_source.expanduser().resolve()
+    else:
+        arguments.anchor_plus = arguments.anchor_plus.expanduser().resolve()
+        arguments.anchor_minus = arguments.anchor_minus.expanduser().resolve()
     normalized_coverage: list[tuple[str, Path, int]] = []
     seen_samples: set[str] = set()
     for sample_id, path in arguments.coverage:
@@ -254,9 +271,12 @@ def build(arguments: argparse.Namespace) -> None:
             sample_id, resolved, leading_metadata_lines(resolved)
         ))
     arguments.coverage = normalized_coverage
-    for path in [arguments.anchor_plus, arguments.anchor_minus] + [
-        path for _, path, _ in arguments.coverage
-    ]:
+    anchor_inputs = (
+        [arguments.anchor_source]
+        if arguments.anchor_source is not None
+        else [arguments.anchor_plus, arguments.anchor_minus]
+    )
+    for path in anchor_inputs + [path for _, path, _ in arguments.coverage]:
         if not path.is_file():
             raise AnchorEvidenceError(f"input file not found: {path}")
 
@@ -284,18 +304,29 @@ def build(arguments: argparse.Namespace) -> None:
     write_tsv_atomic(
         run_config,
         [
-            "schema_version", "chrom", "anchor_motif_id", "anchor_score_rule",
+            "schema_version", "chrom", "anchor_motif_id", "anchor_source_mode",
+            "anchor_score_rule",
             "minimum_anchor_score", "strict_immersion_rule", "effective_depth_rule",
             "anchor_count",
             "observed_minimum_score", "observed_maximum_score", "anchor_plus",
             "anchor_plus_sha256", "anchor_minus", "anchor_minus_sha256",
+            "anchor_source", "anchor_source_sha256",
             "coverage_track_count", "duckdb",
         ],
         [{
-            "schema_version": 2,
+            "schema_version": 3,
             "chrom": arguments.chrom,
             "anchor_motif_id": "MA0861.2",
-            "anchor_score_rule": "maximum_score_across_orientation_records_at_same_span",
+            "anchor_source_mode": (
+                "schema7_local_peak_context_anchor"
+                if arguments.anchor_source is not None
+                else "orientation_sparse_pair"
+            ),
+            "anchor_score_rule": (
+                "maximum_score_across_preselected_orientation_records_at_same_span"
+                if arguments.anchor_source is not None
+                else "maximum_score_across_orientation_records_at_same_span"
+            ),
             "minimum_anchor_score": arguments.minimum_anchor_score,
             "strict_immersion_rule": "component_start < anchor_start AND component_end > anchor_end",
             "effective_depth_rule": (
@@ -305,10 +336,18 @@ def build(arguments: argparse.Namespace) -> None:
             "anchor_count": summary[0]["anchors"],
             "observed_minimum_score": summary[0]["minimum_score"],
             "observed_maximum_score": summary[0]["maximum_score"],
-            "anchor_plus": arguments.anchor_plus,
-            "anchor_plus_sha256": sha256(arguments.anchor_plus),
-            "anchor_minus": arguments.anchor_minus,
-            "anchor_minus_sha256": sha256(arguments.anchor_minus),
+            "anchor_plus": arguments.anchor_plus or "",
+            "anchor_plus_sha256": (
+                sha256(arguments.anchor_plus) if arguments.anchor_plus else ""
+            ),
+            "anchor_minus": arguments.anchor_minus or "",
+            "anchor_minus_sha256": (
+                sha256(arguments.anchor_minus) if arguments.anchor_minus else ""
+            ),
+            "anchor_source": arguments.anchor_source or "",
+            "anchor_source_sha256": (
+                sha256(arguments.anchor_source) if arguments.anchor_source else ""
+            ),
             "coverage_track_count": len(arguments.coverage),
             "duckdb": duckdb,
         }],
@@ -335,13 +374,20 @@ def build(arguments: argparse.Namespace) -> None:
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
         description=(
-            "Collapse plus/minus sparse TP73 records by alignment span, label "
+            "Collapse TP73 records by alignment span, label "
             "strict immersion in merged positive-depth CUT&RUN components, and "
             "record maximum effective bedGraph depth within each anchor span."
         )
     )
-    result.add_argument("--anchor-plus", type=Path, required=True)
-    result.add_argument("--anchor-minus", type=Path, required=True)
+    result.add_argument(
+        "--anchor-source", type=Path,
+        help=(
+            "schema-7 tp73_context_anchor Parquet already selected as local "
+            "peaks; mutually exclusive with --anchor-plus/--anchor-minus"
+        ),
+    )
+    result.add_argument("--anchor-plus", type=Path)
+    result.add_argument("--anchor-minus", type=Path)
     result.add_argument(
         "--coverage", action="append", type=parse_coverage, required=True,
         metavar="COLUMN_ID=FILE",
@@ -358,6 +404,14 @@ def parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     arguments = parser().parse_args()
+    source_mode = arguments.anchor_source is not None
+    pair_mode = arguments.anchor_plus is not None or arguments.anchor_minus is not None
+    if source_mode == pair_mode:
+        parser().error(
+            "provide exactly --anchor-source or both --anchor-plus and --anchor-minus"
+        )
+    if pair_mode and (arguments.anchor_plus is None or arguments.anchor_minus is None):
+        parser().error("--anchor-plus and --anchor-minus must be provided together")
     if arguments.threads <= 0:
         parser().error("--threads must be positive")
     if not (-1e100 < arguments.minimum_anchor_score < 1e100):

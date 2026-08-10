@@ -89,4 +89,41 @@ grep -Fq $'effective_depth_rule\t' \
 grep -Fq $'support_column\tdepth_column\t' \
     "$temporary/anchors.parquet.coverage_manifest.tsv"
 
+"$duckdb" -batch :memory: >/dev/null <<SQL
+COPY (
+    SELECT * FROM (VALUES
+        ('1', 10::BIGINT, 16::BIGINT, 'MA0861.2', '+', 3.0::FLOAT,
+         'local_peak'),
+        ('1', 10::BIGINT, 16::BIGINT, 'MA0861.2', '-', 2.0::FLOAT,
+         'local_peak'),
+        ('1', 30::BIGINT, 36::BIGINT, 'MA0861.2', '+', -0.5::FLOAT,
+         'local_peak'),
+        ('2', 40::BIGINT, 46::BIGINT, 'MA0861.2', '+', 8.0::FLOAT,
+         'local_peak')
+    ) AS v(chrom, start, "end", motif_id, strand, score,
+           anchor_selection_class)
+) TO '$temporary/context-anchor.parquet' (FORMAT PARQUET);
+SQL
+"$repository_root/scripts/build_tp73_anchor_evidence.py" \
+    --anchor-source "$temporary/context-anchor.parquet" \
+    --coverage supported_anti="$temporary/anti.bedGraph" \
+    --output "$temporary/selected-anchors.parquet" --chrom 1 \
+    --minimum-anchor-score -1 --duckdb "$duckdb"
+"$duckdb" -batch :memory: >/dev/null <<SQL
+CREATE VIEW selected AS
+SELECT * FROM read_parquet('$temporary/selected-anchors.parquet');
+SELECT CASE WHEN (SELECT count(*) FROM selected) <> 2
+    THEN error('schema-7 anchor source was not selected by chromosome/span') END;
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM selected
+    WHERE anchor_start = 10 AND anchor_score = 3 AND supported_anti
+) THEN error('schema-7 tied orientations were not collapsed') END;
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM selected
+    WHERE anchor_start = 30 AND anchor_score = -0.5
+) THEN error('negative local-peak anchor was lost') END;
+SQL
+grep -Fq $'schema7_local_peak_context_anchor\t' \
+    "$temporary/selected-anchors.parquet.run_config.tsv"
+
 echo "TP73 anchor-evidence tests passed."

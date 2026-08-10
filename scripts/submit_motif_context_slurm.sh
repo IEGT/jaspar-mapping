@@ -5,7 +5,8 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage: submit_motif_context_slurm.sh --run-root DIR --scan-package DIR
-       (--motif ID [--motif ID ...] | --motif-file FILE) [OPTIONS]
+       (--anchor-only | --motif ID [--motif ID ...] | --motif-file FILE)
+       [OPTIONS]
 
 Create an immutable chromosome/motif-batch plan and submit requeue-enabled
 Slurm arrays. Each task builds one independently reusable context package.
@@ -18,6 +19,8 @@ Options:
   --promoter-definition ID Versioned promoter definition
   --promoter-upstream-bp N Upstream promoter extent (default: 2000)
   --promoter-downstream-bp N Downstream promoter extent (default: 500)
+  --anchor-only           Build one TP73 annotation package per chromosome;
+                          requires --output-tier summary and forbids cofactors
   --motif ID              Cofactor motif accession; repeat or comma-separate
   --motif-file FILE       Cofactor accessions, one per line; comments allowed
   --chrom NAME            Chromosome; repeat/comma-separate (default: 1)
@@ -49,6 +52,7 @@ annotation_release=ensembl_113
 promoter_definition_id=tss_upstream_2000_downstream_500_v1
 promoter_upstream_bp=2000
 promoter_downstream_bp=500
+anchor_only=0
 # Bash 3 treats an empty array expansion as unbound under `set -u`. Sentinels
 # keep the command usable on the macOS system Bash used by the local tests.
 motif_values=(__jaspar_context_array_sentinel__)
@@ -80,6 +84,7 @@ while [[ $# -gt 0 ]]; do
         --promoter-definition) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; promoter_definition_id=$2; shift 2 ;;
         --promoter-upstream-bp) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; promoter_upstream_bp=$2; shift 2 ;;
         --promoter-downstream-bp) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; promoter_downstream_bp=$2; shift 2 ;;
+        --anchor-only) anchor_only=1; shift ;;
         --motif) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; motif_values+=("$2"); shift 2 ;;
         --motif-file) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; motif_files+=("$2"); shift 2 ;;
         --chrom) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; chrom_values+=("$2"); shift 2 ;;
@@ -180,10 +185,21 @@ for file in "${motif_files[@]:1}"; do append_file_values motif "$file"; done
 for file in "${chrom_files[@]:1}"; do append_file_values chrom "$file"; done
 motif_values=("${motif_values[@]:1}")
 chrom_values=("${chrom_values[@]:1}")
-[[ ${#motif_values[@]} -gt 0 ]] || {
-    echo "E: At least one --motif or --motif-file entry is required." >&2
-    exit 2
-}
+if [[ $anchor_only -eq 1 ]]; then
+    [[ ${#motif_values[@]} -eq 0 ]] || {
+        echo "E: --anchor-only cannot be combined with cofactor motifs." >&2
+        exit 2
+    }
+    [[ $output_tier == summary ]] || {
+        echo "E: --anchor-only requires --output-tier summary." >&2
+        exit 2
+    }
+else
+    [[ ${#motif_values[@]} -gt 0 ]] || {
+        echo "E: Provide --anchor-only or at least one cofactor motif." >&2
+        exit 2
+    }
+fi
 
 split_unique() {
     local value item existing duplicate
@@ -206,8 +222,12 @@ split_unique() {
     collected=("${collected[@]:1}")
 }
 
-split_unique "${motif_values[@]}"
-motifs=("${collected[@]}")
+if [[ $anchor_only -eq 1 ]]; then
+    motifs=(__jaspar_context_anchor_only__)
+else
+    split_unique "${motif_values[@]}"
+    motifs=("${collected[@]}")
+fi
 if [[ ${#chrom_values[@]} -eq 0 ]]; then chrom_values=(1); fi
 split_unique "${chrom_values[@]}"
 chromosomes=("${collected[@]}")
@@ -277,27 +297,38 @@ fi
 task_file="$run_root/plan/context_tasks.tsv"
 candidate=$(mktemp "$run_root/plan/.context_tasks.XXXXXX")
 trap 'rm -f "$candidate"' EXIT HUP INT TERM
-printf 'task_index\tchrom\tcofactor_motif_ids\toutput_tier\tbuilder_source_commit\tcontext_schema_version\tgtf_size_bytes\tgtf_sha256\tannotation_release\tpromoter_definition_id\tpromoter_upstream_bp\tpromoter_downstream_bp\n' \
+printf 'task_index\tchrom\tcofactor_motif_ids\toutput_tier\tbuilder_source_commit\tcontext_schema_version\tgtf_size_bytes\tgtf_sha256\tannotation_release\tpromoter_definition_id\tpromoter_upstream_bp\tpromoter_downstream_bp\ttask_kind\n' \
     > "$candidate"
 task_index=0
-motif_offset=0
-while (( motif_offset < ${#motifs[@]} )); do
-    batch=("${motifs[@]:motif_offset:motifs_per_task}")
-    joined=""
-    for motif in "${batch[@]}"; do
-        if [[ -n $joined ]]; then joined+=","; fi
-        joined+=$motif
-    done
+if [[ $anchor_only -eq 1 ]]; then
     for chromosome in "${chromosomes[@]}"; do
-        printf '%d\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\t%d\t%d\n' \
-            "$task_index" "$chromosome" "$joined" "$output_tier" \
+        printf '%d\t%s\tnone\t%s\t%s\t%d\t%s\t%s\t%s\t%s\t%d\t%d\tanchor_annotation\n' \
+            "$task_index" "$chromosome" "$output_tier" \
             "$source_commit" "$context_schema_version" "$gtf_size_bytes" \
             "$gtf_sha256" "$annotation_release" "$promoter_definition_id" \
             "$promoter_upstream_bp" "$promoter_downstream_bp" >> "$candidate"
         task_index=$((task_index + 1))
     done
-    motif_offset=$((motif_offset + motifs_per_task))
-done
+else
+    motif_offset=0
+    while (( motif_offset < ${#motifs[@]} )); do
+        batch=("${motifs[@]:motif_offset:motifs_per_task}")
+        joined=""
+        for motif in "${batch[@]}"; do
+            if [[ -n $joined ]]; then joined+=","; fi
+            joined+=$motif
+        done
+        for chromosome in "${chromosomes[@]}"; do
+            printf '%d\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\t%d\t%d\tcofactor_context\n' \
+                "$task_index" "$chromosome" "$joined" "$output_tier" \
+                "$source_commit" "$context_schema_version" "$gtf_size_bytes" \
+                "$gtf_sha256" "$annotation_release" "$promoter_definition_id" \
+                "$promoter_upstream_bp" "$promoter_downstream_bp" >> "$candidate"
+            task_index=$((task_index + 1))
+        done
+        motif_offset=$((motif_offset + motifs_per_task))
+    done
+fi
 if [[ -f $task_file ]]; then
     cmp -s "$candidate" "$task_file" || {
         echo "E: Existing immutable task plan differs: $task_file" >&2

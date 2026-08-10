@@ -35,7 +35,7 @@ cmp -s "$repository_root/scripts/finalize_motif_context_run.py" \
 snapshot=$(cd "$temporary/run/source" && pwd)
 grep -Fq -- "--source $snapshot" <<< "$rendered"
 grep -Fq -- 'tp73_context_finalize' <<< "$rendered"
-grep -Eq $'\t7\t[0-9]+\t[0-9a-f]{64}\tensembl_113\ttss_upstream_2000_downstream_500_v1\t2000\t500$' \
+grep -Eq $'\t7\t[0-9]+\t[0-9a-f]{64}\tensembl_113\ttss_upstream_2000_downstream_500_v1\t2000\t500\tcofactor_context$' \
     "$temporary/run/plan/context_tasks.tsv"
 
 # An identical dry run reuses the plan; changing it is rejected.
@@ -88,7 +88,33 @@ grep -Fq $'5\tX\tMA0005.1\tband' \
 awk -F '\t' 'NR > 1 && ($6 != 7 || $7 != 0 || $8 != "none" \
     || $9 != "ensembl_113" \
     || $10 != "tss_upstream_2000_downstream_500_v1" \
-    || $11 != 2000 || $12 != 500) { exit 1 }' \
+    || $11 != 2000 || $12 != 500 || $13 != "cofactor_context") { exit 1 }' \
     "$temporary/batched/plan/context_tasks.tsv"
+
+anchor_rendered=$("$repository_root/scripts/submit_motif_context_slurm.sh" \
+    --run-root "$temporary/anchor" --scan-package "$temporary/scan" \
+    --gtf "$temporary/annotation.gtf" --anchor-only \
+    --chrom 1 --chrom X --output-tier summary --dry-run)
+[[ $(wc -l < "$temporary/anchor/plan/context_tasks.tsv") -eq 3 ]]
+grep -Fq $'0\t1\tnone\tsummary' "$temporary/anchor/plan/context_tasks.tsv"
+grep -Fq $'1\tX\tnone\tsummary' "$temporary/anchor/plan/context_tasks.tsv"
+awk -F '\t' 'NR > 1 && $13 != "anchor_annotation" { exit 1 }' \
+    "$temporary/anchor/plan/context_tasks.tsv"
+grep -Fq -- '--array=0-1%8' <<< "$anchor_rendered"
+
+if "$repository_root/scripts/submit_motif_context_slurm.sh" \
+    --run-root "$temporary/invalid-anchor" --scan-package "$temporary/scan" \
+    --gtf "$temporary/annotation.gtf" --anchor-only --motif MA0001.1 \
+    --output-tier summary --dry-run >/dev/null 2>&1; then
+    echo "E: Anchor-only submission accepted a cofactor motif." >&2
+    exit 1
+fi
+if "$repository_root/scripts/submit_motif_context_slurm.sh" \
+    --run-root "$temporary/invalid-anchor-tier" --scan-package "$temporary/scan" \
+    --gtf "$temporary/annotation.gtf" --anchor-only \
+    --output-tier selected --dry-run >/dev/null 2>&1; then
+    echo "E: Anchor-only submission accepted a non-summary tier." >&2
+    exit 1
+fi
 
 echo "Motif-context Slurm submission tests passed."
