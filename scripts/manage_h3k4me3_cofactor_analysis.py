@@ -529,8 +529,9 @@ WITH h AS (
   SELECT chrom, anchor_start, anchor_end
   FROM read_parquet({sql_string(evidence)}, hive_partitioning=false)
 ), a AS (
-  SELECT CAST(chrom AS VARCHAR) AS chrom, start AS anchor_start,
-         "end" AS anchor_end,
+  SELECT CAST(annotation.chrom AS VARCHAR) AS chrom,
+         annotation.start AS anchor_start,
+         annotation."end" AS anchor_end,
          count(DISTINCT primary_genomic_context) AS context_values,
          count(DISTINCT strict_intergenic) AS intergenic_values,
          count(DISTINCT nearest_tss_distance_bp) AS tss_values,
@@ -541,8 +542,13 @@ WITH h AS (
          count(DISTINCT nearest_cds_has_mixed_strands) AS cds_mixed_values,
          count(DISTINCT nearest_tss_relation) AS tss_relation_values,
          count(DISTINCT nearest_cds_relation) AS cds_relation_values
-  FROM read_parquet({sql_path_list(annotations)}, hive_partitioning=false)
-  GROUP BY chrom, start, "end"
+  -- tp73_context_anchor is partitioned by genome_id/chrom. DuckDB omits those
+  -- columns from the Parquet payload and recovers them from the directory path.
+  FROM read_parquet(
+    {sql_path_list(annotations)}, hive_partitioning=true
+  ) AS annotation
+  GROUP BY CAST(annotation.chrom AS VARCHAR), annotation.start,
+           annotation."end"
 )
 SELECT
   (SELECT count(*) FROM e)::BIGINT AS evidence_anchors,
@@ -768,8 +774,14 @@ def run_batch(arguments: argparse.Namespace) -> None:
         for row in fixed:
             source = verify_file_row(row, checksum=False)
             directory = scratch / row["kind"]
-            directory.mkdir(exist_ok=True)
-            target = directory / f"chrom-{safe_label(row['chrom'])}.parquet"
+            if row["kind"] == "schema8_annotation":
+                # The partitioned annotation payload omits chrom physically.
+                # Preserve it as a Hive path while staging to node-local scratch.
+                directory /= f"chrom={safe_label(row['chrom'])}"
+                target = directory / "data.parquet"
+            else:
+                target = directory / f"chrom-{safe_label(row['chrom'])}.parquet"
+            directory.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
             if sha256(target) != row["sha256"]:
                 raise AnalysisError(f"staged input checksum differs: {target}")

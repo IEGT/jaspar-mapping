@@ -425,8 +425,9 @@ if (nrow(wide) == 0L || wide[, anyNA(confirmed_GFP)]) {
 annotation_available <- length(values$annotation) > 0L
 if (annotation_available) {
     annotation <- duckdb_fread(paste0(
-        "SELECT CAST(chrom AS VARCHAR) AS chrom, start AS anchor_start, ",
-        "\"end\" AS anchor_end, min(primary_genomic_context) AS ",
+        "SELECT CAST(annotation.chrom AS VARCHAR) AS chrom, ",
+        "annotation.start AS anchor_start, annotation.\"end\" AS anchor_end, ",
+        "min(primary_genomic_context) AS ",
         "primary_genomic_context, count(DISTINCT primary_genomic_context) ",
         "AS context_values, bool_or(strict_intergenic) AS strict_intergenic, ",
         "count(DISTINCT strict_intergenic) AS intergenic_values, ",
@@ -449,8 +450,11 @@ if (annotation_available) {
         "count(DISTINCT nearest_cds_has_mixed_strands) AS cds_mixed_values, ",
         "min(nearest_cds_relation) AS nearest_cds_relation, ",
         "count(DISTINCT nearest_cds_relation) AS cds_relation_values ",
-        "FROM read_parquet(", sql_parquet_paths(values$annotation), ") ",
-        "GROUP BY chrom, start, \"end\" ORDER BY chrom, start, \"end\";"
+        "FROM read_parquet(", sql_parquet_paths(values$annotation), ", ",
+        "hive_partitioning=true) ",
+        "AS annotation GROUP BY CAST(annotation.chrom AS VARCHAR), ",
+        "annotation.start, annotation.\"end\" ORDER BY chrom, anchor_start, ",
+        "anchor_end;"
     ))
     if (nrow(annotation) == 0L || annotation[, any(
         context_values != 1L | intergenic_values != 1L |

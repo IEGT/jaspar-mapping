@@ -107,12 +107,11 @@ SQL
         >> "$h3/chromosome_file_inventory.tsv"
 
     package="$temporary/annotation-packages/chrom-$chrom"
-    annotation_path="$package/tables/jaspar2026/tp73_context_anchor/data.parquet"
+    annotation_path="$package/tables/jaspar2026/tp73_context_anchor/genome_id=GRCh38/chrom=$chrom/data.parquet"
     mkdir -p "$(dirname "$annotation_path")"
     "$duckdb" -batch :memory: >/dev/null <<SQL
 COPY (
-  SELECT '$chrom'::VARCHAR AS chrom,
-         (100 + i * 1000000)::BIGINT AS start,
+  SELECT (100 + i * 1000000)::BIGINT AS start,
          (116 + i * 1000000)::BIGINT AS "end",
          CASE WHEN i % 5 < 2 THEN 'strict_intergenic' ELSE 'promoter_only' END
            ::VARCHAR AS primary_genomic_context,
