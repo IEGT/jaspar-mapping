@@ -21,7 +21,10 @@ aliasing is applied to autosomes or sex chromosomes.
 ## Stage 1: TP73/control evidence
 
 `submit_tp73_genome_evidence_slurm.sh` plans one restartable task per finalized
-scan sequence region. Each task resolves exactly one schema-7
+scan sequence region represented in `scan_file_inventory`. Every admitted
+region must have exactly one finalized file per catalog motif and strand;
+FASTA-catalog contigs that were not part of the completed scan are not silently
+promoted into evidence tasks. Each task resolves exactly one schema-7
 `tp73_context_anchor` file and retains physical TP73 local peaks at score
 `>= -1`. It exports only TP73 and matched negative-control tracks for SaOS-2
 and SkMel-29 series 2 in GFP, TA, and DN conditions. SkMel-29 series 1 remains

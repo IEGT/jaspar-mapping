@@ -216,15 +216,54 @@ def prepare(arguments: argparse.Namespace) -> None:
         raise GenomeEvidenceError(f"DuckDB is unavailable: {arguments.duckdb}")
 
     scan_database = package_database(scan_package)
+    motif_summary = run_json([
+        duckdb, "-readonly", "-json", str(scan_database), "-c",
+        "SELECT count(*)::BIGINT AS motifs, "
+        "count(DISTINCT motif_id)::BIGINT AS distinct_motifs "
+        "FROM motif_metadata;",
+    ], cwd=scan_package)
+    if (len(motif_summary) != 1
+            or int(motif_summary[0]["motifs"]) <= 0
+            or motif_summary[0]["motifs"] != motif_summary[0]["distinct_motifs"]):
+        raise GenomeEvidenceError("scan motif catalog is empty or non-unique")
+    motif_count = int(motif_summary[0]["motifs"])
     regions = run_json([
         duckdb, "-readonly", "-json", str(scan_database), "-c",
-        "SELECT sequence_order::INTEGER AS sequence_order, "
-        "CAST(chrom AS VARCHAR) AS chrom, length::BIGINT AS chrom_length, "
-        "sequence_sha256::VARCHAR AS sequence_sha256 "
-        "FROM sequence_region ORDER BY sequence_order;",
+        "SELECT s.sequence_order::INTEGER AS sequence_order, "
+        "CAST(i.chrom AS VARCHAR) AS chrom, s.length::BIGINT AS chrom_length, "
+        "s.sequence_sha256::VARCHAR AS sequence_sha256, "
+        "count(*)::BIGINT AS files, "
+        "count(DISTINCT i.motif_id)::BIGINT AS motifs, "
+        "count(DISTINCT i.strand)::BIGINT AS strands, "
+        "count(*) FILTER (WHERE i.strand = '+')::BIGINT AS plus_files, "
+        "count(*) FILTER (WHERE i.strand = '-')::BIGINT AS minus_files, "
+        "count(*) - count(DISTINCT (i.motif_id, i.strand))::BIGINT "
+        "AS duplicate_motif_strands "
+        "FROM scan_file_inventory i "
+        "LEFT JOIN sequence_region s "
+        "ON CAST(s.chrom AS VARCHAR) = CAST(i.chrom AS VARCHAR) "
+        "GROUP BY s.sequence_order, i.chrom, s.length, s.sequence_sha256 "
+        "ORDER BY s.sequence_order;",
     ], cwd=scan_package)
     if not regions:
-        raise GenomeEvidenceError("scan package has no sequence regions")
+        raise GenomeEvidenceError("scan package has no finalized hit regions")
+    invalid_regions = [
+        str(row["chrom"]) for row in regions
+        if row.get("sequence_order") is None
+        or row.get("chrom_length") is None
+        or row.get("sequence_sha256") is None
+        or int(row["files"]) != motif_count * 2
+        or int(row["motifs"]) != motif_count
+        or int(row["strands"]) != 2
+        or int(row["plus_files"]) != motif_count
+        or int(row["minus_files"]) != motif_count
+        or int(row["duplicate_motif_strands"]) != 0
+    ]
+    if invalid_regions:
+        raise GenomeEvidenceError(
+            "scan hit inventory is not motif-by-strand complete for: "
+            + ", ".join(invalid_regions)
+        )
     chromosomes = [str(row["chrom"]) for row in regions]
     if len(chromosomes) != len(set(chromosomes)):
         raise GenomeEvidenceError("scan sequence regions contain duplicates")
@@ -297,6 +336,11 @@ def prepare(arguments: argparse.Namespace) -> None:
         ),
         "scan_package": str(scan_package),
         "scan_manifest_sha256": sha256(scan_package / "manifest.json"),
+        "scan_region_selection": (
+            "distinct sequence regions in scan_file_inventory; each requires "
+            "one file per catalog motif and strand"
+        ),
+        "scan_motif_count": motif_count,
         "track_root": str(track_root),
         "track_manifest": str(track_manifest),
         "track_manifest_sha256": sha256(track_manifest),

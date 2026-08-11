@@ -31,11 +31,20 @@ for index in "${!chromosomes[@]}"; do
     [[ $chrom == 25 ]] && annotation_chrom=MT
     annotation_values+="('tp73_context_anchor', '$annotation_chrom', true, '/synthetic/chr${annotation_chrom}.parquet')$separator"
 done
+sequence_values+=",(25, 'KI_TEST_UNSCANNED', 500, repeat('b', 64))"
 
 "$duckdb" -batch "$scan/scan.duckdb" >/dev/null <<SQL
 CREATE TABLE sequence_region AS
 SELECT * FROM (VALUES $sequence_values)
     AS v(sequence_order, chrom, length, sequence_sha256);
+CREATE TABLE motif_metadata AS
+SELECT * FROM (VALUES ('M1'), ('M2')) AS v(motif_id);
+CREATE TABLE scan_file_inventory AS
+SELECT m.motif_id, r.chrom, s.strand
+FROM motif_metadata m
+CROSS JOIN sequence_region r
+CROSS JOIN (VALUES ('+'), ('-')) AS s(strand)
+WHERE r.chrom <> 'KI_TEST_UNSCANNED';
 SQL
 printf '{"database":"scan.duckdb"}\n' > "$scan/manifest.json"
 
@@ -59,9 +68,13 @@ task_count=$(
         --minimum-free-scratch-gb 0
 )
 [[ $task_count -eq 25 ]] || {
-    echo "E: Expected 25 sequence-region tasks, found $task_count." >&2
+    echo "E: Expected 25 fully scanned region tasks, found $task_count." >&2
     exit 1
 }
+if grep -Fq 'KI_TEST_UNSCANNED' "$run_root/plan/chromosome_tasks.tsv"; then
+    echo "E: Unscanned FASTA contig entered the evidence task plan." >&2
+    exit 1
+fi
 
 read -r -d '' evidence_columns <<'SQL' || true
 false::BOOLEAN AS supported_tp73_saos2_GFP,
