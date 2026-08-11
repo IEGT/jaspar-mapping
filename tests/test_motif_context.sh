@@ -26,6 +26,7 @@ COPY (
         ('1', 400::BIGINT, 416::BIGINT, 'MA0861.2', 'TP73', '+', 5.0,  'log2_relative_risk', 1.0, 0.81),
         ('1', 600::BIGINT, 616::BIGINT, 'MA0861.2', 'TP73', '+', -2.0, 'log2_relative_risk', 1.0, 0.30),
         ('1', 620::BIGINT, 636::BIGINT, 'MA0861.2', 'TP73', '+', -0.5, 'log2_relative_risk', 1.0, 0.45),
+        ('1', 780::BIGINT, 796::BIGINT, 'MA0861.2', 'TP73', '+', 3.0, 'log2_relative_risk', 1.0, 0.70),
         ('1', 1000::BIGINT, 1016::BIGINT, 'MA0861.2', 'TP73', '+', 4.0, 'log2_relative_risk', 1.0, 0.79),
         ('1', 130::BIGINT, 139::BIGINT, 'MA0079.5', 'SP1',  '+', 6.0,  'log2_relative_risk', 1.0, 0.85),
         ('1', 410::BIGINT, 419::BIGINT, 'MA0079.5', 'SP1',  '+', 4.0,  'log2_relative_risk', 1.0, 0.80),
@@ -76,19 +77,29 @@ cat > "$temporary/annotation.gtf" <<'EOF'
 ##gtf-version 3
 1	test	transcript	51	300	.	+	.	gene_id "G1"; transcript_id "T1"; gene_name "GENE1"; transcript_biotype "protein_coding";
 1	test	exon	51	120	.	+	.	gene_id "G1"; transcript_id "T1"; gene_name "GENE1"; exon_number "1";
+1	test	CDS	61	110	.	+	0	gene_id "G1"; transcript_id "T1"; gene_name "GENE1"; exon_number "1";
+1	test	start_codon	61	63	.	+	0	gene_id "G1"; transcript_id "T1"; gene_name "GENE1"; exon_number "1";
 1	test	exon	181	300	.	+	.	gene_id "G1"; transcript_id "T1"; gene_name "GENE1"; exon_number "2";
+1	test	CDS	200	280	.	+	2	gene_id "G1"; transcript_id "T1"; gene_name "GENE1"; exon_number "2";
+1	test	stop_codon	278	280	.	+	0	gene_id "G1"; transcript_id "T1"; gene_name "GENE1"; exon_number "2";
 1	test	transcript	251	409	.	-	.	gene_id "G2"; transcript_id "T2"; gene_name "GENE2"; transcript_biotype "protein_coding";
 1	test	exon	251	409	.	-	.	gene_id "G2"; transcript_id "T2"; gene_name "GENE2"; exon_number "1";
+1	test	CDS	300	380	.	-	0	gene_id "G2"; transcript_id "T2"; gene_name "GENE2"; exon_number "1";
 1	test	transcript	1009	1200	.	+	.	gene_id "G3"; transcript_id "T3"; gene_name "GENE3"; transcript_biotype "protein_coding";
 1	test	exon	1009	1200	.	+	.	gene_id "G3"; transcript_id "T3"; gene_name "GENE3"; exon_number "1";
+1	test	CDS	1050	1150	.	+	0	gene_id "G3"; transcript_id "T3"; gene_name "GENE3"; exon_number "1";
 1	test	transcript	900	1200	.	+	.	gene_id "G3"; transcript_id "T3_ALT"; gene_name "GENE3"; transcript_biotype "protein_coding";
 1	test	exon	900	1200	.	+	.	gene_id "G3"; transcript_id "T3_ALT"; gene_name "GENE3"; exon_number "1";
+1	test	CDS	1050	1150	.	+	0	gene_id "G3"; transcript_id "T3_ALT"; gene_name "GENE3"; exon_number "1";
 1	test	transcript	800	1009	.	-	.	gene_id "G4"; transcript_id "T4"; gene_name "GENE4"; transcript_biotype "protein_coding";
 1	test	exon	800	1009	.	-	.	gene_id "G4"; transcript_id "T4"; gene_name "GENE4"; exon_number "1";
+1	test	CDS	850	980	.	-	0	gene_id "G4"; transcript_id "T4"; gene_name "GENE4"; exon_number "1";
 1	test	transcript	1009	1250	.	+	.	gene_id "G5"; transcript_id "T5"; gene_name "GENE5"; transcript_biotype "protein_coding";
 1	test	exon	1009	1250	.	+	.	gene_id "G5"; transcript_id "T5"; gene_name "GENE5"; exon_number "1";
+1	test	CDS	1050	1150	.	+	0	gene_id "G5"; transcript_id "T5"; gene_name "GENE5"; exon_number "1";
 1	test	transcript	417	550	.	+	.	gene_id "G6"; transcript_id "T6"; gene_name "GENE6"; transcript_biotype "protein_coding";
 1	test	exon	417	550	.	+	.	gene_id "G6"; transcript_id "T6"; gene_name "GENE6"; exon_number "1";
+1	test	CDS	450	520	.	+	0	gene_id "G6"; transcript_id "T6"; gene_name "GENE6"; exon_number "1";
 EOF
 
 "$repository_root/scripts/build_motif_context.py" \
@@ -622,6 +633,65 @@ SELECT CASE WHEN NOT EXISTS (
 ) THEN error('per-transcript intron classification is missing') END;
 
 SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM motif_transcript_context
+    WHERE anchor_start = 200 AND transcript_id = 'T1'
+      AND fully_within_transcript AND overlaps_transcript
+      AND fully_within_exon AND overlaps_exon
+      AND fully_within_cds AND overlaps_cds
+      AND transcript_region = 'cds'
+) THEN error('per-transcript CDS classification is missing') END;
+
+-- The span at 400 overlaps but is not contained by the minus-strand G2
+-- transcript/exon. Boundary relationships must not disappear merely because
+-- the complete motif span is not contained.
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM motif_transcript_context
+    WHERE anchor_start = 400 AND transcript_id = 'T2'
+      AND NOT fully_within_transcript AND overlaps_transcript
+      AND NOT fully_within_exon AND overlaps_exon
+      AND transcript_region = 'exon_boundary'
+) THEN error('transcript/exon boundary overlap was lost') END;
+
+SELECT CASE WHEN (SELECT COUNT(*) FROM gene) <> 6
+    OR (SELECT COUNT(*) FROM exon) <> 8
+    OR (SELECT COUNT(*) FROM coding_sequence_segment) <> 6
+    OR (SELECT COUNT(*) FROM transcript_cds) <> 8
+    OR (SELECT COUNT(*) FROM transcript_coding_span) <> 7
+    OR (SELECT COUNT(*) FROM coding_landmark) <> 2
+THEN error('normalized gene/CDS annotation dimensions are incomplete') END;
+
+-- One physical coding segment is shared by three transcripts across two
+-- genes; the segment remains singular and ownership stays in transcript_cds.
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1
+    FROM coding_sequence_segment s
+    JOIN transcript_cds tc USING (genome_id, annotation_release, cds_segment_id)
+    WHERE s.start = 1049 AND s."end" = 1150 AND s.strand = '+'
+    GROUP BY s.cds_segment_id
+    HAVING COUNT(*) = 3 AND COUNT(DISTINCT tc.gene_id) = 2
+) THEN error('shared physical CDS ownership was collapsed or duplicated') END;
+
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM tp73_anchor_nearest_cds
+    WHERE anchor_start = 200 AND cds_start = 199 AND cds_end = 280
+      AND cds_interval_distance_bp = -16
+      AND cds_genomic_distance_bp = 0 AND cds_overlap_bp = 16
+      AND anchor_cds_relation = 'overlaps_cds'
+      AND nearest_cds_tie_count = 1
+) THEN error('overlapping nearest-CDS geometry is incorrect') END;
+
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM tp73_context_anchor
+    WHERE start = 780
+      AND strict_intergenic
+      AND NOT in_any_transcript
+      AND NOT overlaps_any_promoter
+      AND primary_genomic_context = 'strict_intergenic'
+      AND nearest_cds_start = 849
+      AND nearest_cds_genomic_distance_bp = 53
+) THEN error('strict-intergenic or nearest-CDS summary is incorrect') END;
+
+SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM motif_transcript_context_pair
     WHERE anchor_start = 140 AND anchor_strand = '+'
       AND neighbor_motif_id = 'MA0079.5' AND neighbor_start = 130
@@ -709,7 +779,7 @@ THEN error('many-to-many TP73 anchor/promoter membership is incorrect') END;
 
 SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM motif_context_run_config
-    WHERE schema_version = 7
+    WHERE schema_version = 8
       AND builder_source_commit = 'unknown'
       AND input_uniqueness = 'deduplicate'
       AND genome_id = 'synthetic_grch38_v1'
@@ -750,8 +820,14 @@ SELECT CASE WHEN NOT EXISTS (
       AND promoter_upstream_bp = 100 AND promoter_downstream_bp = 25
       AND tss_coordinate_rule = 'one_base_bed_start_plus_end_minus_1'
       AND nearest_tss_rule = 'all_physical_tss_at_minimum_center_distance'
+      AND nearest_cds_rule =
+          'physical_cds_segments_overlap_first_then_minimum_interval_gap'
+      AND cds_coordinate_rule =
+          'gtf_cds_1_based_inclusive_to_bed_half_open'
       AND promoter_membership_rule =
           'anchor_overlaps_resolved_promoter_interval'
+      AND strict_intergenic_rule =
+          'no_transcript_overlap_and_no_versioned_promoter_overlap'
       AND gtf_source IS NOT NULL
       AND length(gtf_sha256) = 64
       AND gtf_size_bytes > 0
@@ -1052,6 +1128,8 @@ fi
              SELECT 1 FROM tp73_context_anchor
              WHERE gene_annotation_available
                 OR primary_transcript_region <> 'not_assessed'
+                OR primary_genomic_context <> 'not_assessed'
+                OR strict_intergenic IS NOT NULL
          ) THEN error('missing GTF was represented as negative annotation') END;" \
         >/dev/null
 )

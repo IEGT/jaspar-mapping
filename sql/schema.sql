@@ -687,10 +687,33 @@ SELECT
     nearest_tss_distance_bp,
     nearest_tss_interval_distance_bp,
     nearest_tss_relation,
+    nearest_cds_segment_id,
+    nearest_cds_start,
+    nearest_cds_end,
+    nearest_cds_strand,
+    nearest_cds_tie_count,
+    nearest_cds_has_mixed_strands,
+    nearest_cds_genomic_distance_bp,
+    nearest_cds_interval_distance_bp,
+    nearest_cds_overlap_bp,
+    nearest_cds_distance_bp,
+    nearest_cds_relation,
+    nearest_cds_gene_id,
+    nearest_cds_gene_name,
+    nearest_cds_transcript_id,
     in_any_transcript,
+    fully_within_any_transcript,
+    in_any_exon,
+    overlaps_any_exon_boundary,
+    in_any_cds,
+    overlaps_any_cds_boundary,
     in_any_intron,
     overlaps_any_intron_boundary,
+    overlaps_any_promoter,
+    n_overlapping_promoters,
+    strict_intergenic,
     primary_transcript_region,
+    primary_genomic_context,
     capture_flank_bp,
     context_flank_bp,
     tandem_flank_bp
@@ -725,7 +748,7 @@ FROM read_parquet('tables/jaspar2026/cutandrun/*/*.parquet', hive_partitioning =
 CREATE OR REPLACE VIEW gene AS
 SELECT genome_id, gene_id, gene_name, chrom, strand, gene_start, gene_end,
        tss AS representative_tss, tss, biotype
-FROM read_parquet('tables/jaspar2026/gene/*.parquet');
+FROM read_parquet('tables/jaspar2026/gene.parquet');
 
 -- A TSS is a physical one-base BED interval. Gene/transcript ownership is a
 -- separate bridge because several transcripts or genes can share one start.
@@ -760,6 +783,33 @@ SELECT genome_id, gene_id, transcript_id, chrom, strand, transcript_start, trans
        tss, gene_name, biotype
 FROM read_parquet('tables/jaspar2026/transcript.parquet');
 
+CREATE OR REPLACE VIEW exon AS
+SELECT genome_id, annotation_release, gene_id, gene_name, transcript_id,
+       chrom, strand, start, "end", exon_number
+FROM read_parquet('tables/jaspar2026/exon.parquet');
+
+-- Physical CDS intervals are normalized separately from their transcript
+-- ownership and phase. This preserves shared segments and isoform ambiguity.
+CREATE OR REPLACE VIEW coding_sequence_segment AS
+SELECT cds_segment_id, genome_id, annotation_release, chrom, start, "end", strand
+FROM read_parquet('tables/jaspar2026/coding_sequence_segment.parquet');
+
+CREATE OR REPLACE VIEW transcript_cds AS
+SELECT genome_id, annotation_release, cds_segment_id, gene_id, gene_name,
+       transcript_id, exon_number, phase
+FROM read_parquet('tables/jaspar2026/transcript_cds.parquet');
+
+CREATE OR REPLACE VIEW transcript_coding_span AS
+SELECT genome_id, annotation_release, gene_id, gene_name, transcript_id,
+       chrom, strand, cds_start, cds_end, cds_five_prime_base,
+       cds_three_prime_base, n_cds_segments
+FROM read_parquet('tables/jaspar2026/transcript_coding_span.parquet');
+
+CREATE OR REPLACE VIEW coding_landmark AS
+SELECT coding_landmark_id, genome_id, annotation_release, landmark_type,
+       gene_id, gene_name, transcript_id, chrom, start, "end", strand
+FROM read_parquet('tables/jaspar2026/coding_landmark.parquet');
+
 CREATE OR REPLACE VIEW intron AS
 SELECT genome_id, gene_id, transcript_id, chrom, strand, start, "end", intron_number
 FROM read_parquet('tables/jaspar2026/intron.parquet');
@@ -790,6 +840,12 @@ FROM read_parquet('tables/jaspar2026/motif_transcript_context.parquet');
 CREATE OR REPLACE VIEW tp73_anchor_nearest_tss AS
 SELECT *
 FROM read_parquet('tables/jaspar2026/tp73_anchor_nearest_tss.parquet');
+
+-- Every physical CDS segment tied under the overlap-first/minimum-gap rule.
+-- Join transcript_cds to recover every associated gene/transcript.
+CREATE OR REPLACE VIEW tp73_anchor_nearest_cds AS
+SELECT *
+FROM read_parquet('tables/jaspar2026/tp73_anchor_nearest_cds.parquet');
 
 -- Canonical many-to-many TP73-anchor/promoter membership. Join promoter_gene
 -- for gene ownership and transcript_tss for the complete isoform provenance.

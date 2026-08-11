@@ -78,6 +78,71 @@ INSERT INTO tp73_anchor_nearest_tss VALUES
     ('H1_LO', 'genome1', 'motifs1', '1', 55, 60, 'S1', 'release1',
      50, 51, '+', 7.5, 7.5, 4, 'downstream', 1, false);
 
+CREATE TABLE tp73_anchor_nearest_cds (
+    anchor_hit_id VARCHAR,
+    genome_id VARCHAR,
+    motif_set_id VARCHAR,
+    chrom VARCHAR,
+    anchor_start BIGINT,
+    anchor_end BIGINT,
+    cds_segment_id VARCHAR,
+    annotation_release VARCHAR,
+    cds_start BIGINT,
+    cds_end BIGINT,
+    cds_strand VARCHAR,
+    genomic_center_offset_bp DOUBLE,
+    coding_oriented_center_offset_bp DOUBLE,
+    cds_interval_distance_bp BIGINT,
+    cds_genomic_distance_bp BIGINT,
+    cds_overlap_bp BIGINT,
+    anchor_cds_relation VARCHAR,
+    nearest_cds_tie_count BIGINT,
+    nearest_cds_has_mixed_strands BOOLEAN
+);
+INSERT INTO tp73_anchor_nearest_cds VALUES
+    ('H1_LO', 'genome1', 'motifs1', '1', 55, 60, 'C1', 'release1',
+     70, 80, '+', -17.5, -17.5, 10, 10, 0, 'upstream', 1, false);
+
+CREATE TABLE transcript_cds (
+    genome_id VARCHAR,
+    annotation_release VARCHAR,
+    cds_segment_id VARCHAR,
+    gene_id VARCHAR,
+    gene_name VARCHAR,
+    transcript_id VARCHAR,
+    exon_number INTEGER,
+    phase INTEGER
+);
+INSERT INTO transcript_cds VALUES
+    ('genome1', 'release1', 'C1', 'G1', 'GENE1', 'T1', 2, 0);
+
+CREATE TABLE tp73_context_anchor (
+    anchor_hit_id VARCHAR,
+    chrom VARCHAR,
+    start BIGINT,
+    "end" BIGINT,
+    nearest_tss_id VARCHAR,
+    nearest_tss_distance_bp DOUBLE,
+    nearest_tss_relation VARCHAR,
+    nearest_cds_segment_id VARCHAR,
+    nearest_cds_genomic_distance_bp BIGINT,
+    nearest_cds_interval_distance_bp BIGINT,
+    nearest_cds_distance_bp DOUBLE,
+    nearest_cds_relation VARCHAR,
+    in_any_transcript BOOLEAN,
+    in_any_exon BOOLEAN,
+    in_any_cds BOOLEAN,
+    in_any_intron BOOLEAN,
+    overlaps_any_promoter BOOLEAN,
+    n_overlapping_promoters BIGINT,
+    strict_intergenic BOOLEAN,
+    primary_genomic_context VARCHAR
+);
+INSERT INTO tp73_context_anchor VALUES
+    ('H1_LO', '1', 55, 60, 'S1', 7.5, 'downstream', 'C1', 10, 10,
+     -17.5, 'upstream', true, true, false, false, true, 1, false,
+     'promoter_and_transcribed');
+
 CREATE TABLE tp73_anchor_promoter (
     anchor_hit_id VARCHAR,
     genome_id VARCHAR,
@@ -392,6 +457,7 @@ PREPARE q21 AS
 SQL
     awk '
         /^-- Q21\./ { capture = 1 }
+        /^-- Q22\./ { capture = 0 }
         capture { print }
     ' "$repository_root/sql/queries.sql"
     cat <<'SQL'
@@ -399,6 +465,23 @@ EXECUTE q21(
     anchor_hit_id := 'H1_LO',
     promoter_definition_id := 'promoter_v1'
 );
+PREPARE q22 AS
+SQL
+    awk '
+        /^-- Q22\./ { capture = 1 }
+        /^-- Q23\./ { capture = 0 }
+        capture { print }
+    ' "$repository_root/sql/queries.sql"
+    cat <<'SQL'
+EXECUTE q22(anchor_hit_id := 'H1_LO');
+PREPARE q23 AS
+SQL
+    awk '
+        /^-- Q23\./ { capture = 1 }
+        capture { print }
+    ' "$repository_root/sql/queries.sql"
+    cat <<'SQL'
+EXECUTE q23(anchor_hit_id := 'H1_LO');
 SQL
 } >> "$test_sql"
 

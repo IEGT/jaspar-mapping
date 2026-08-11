@@ -10,8 +10,8 @@ mkdir -p "$run_root/plan" "$run_root/staging"
 
 {
     printf 'task_index\tchrom\tcofactor_motif_ids\toutput_tier\tbuilder_source_commit\tcontext_schema_version\tgtf_size_bytes\tgtf_sha256\tannotation_release\tpromoter_definition_id\tpromoter_upstream_bp\tpromoter_downstream_bp\n'
-    printf '0\t1\tMA0001.1\tband\tabc123\t7\t0\tnone\tensembl_113\ttss_upstream_2000_downstream_500_v1\t2000\t500\n'
-    printf '1\tX\tMA0002.1\tband\tabc123\t7\t0\tnone\tensembl_113\ttss_upstream_2000_downstream_500_v1\t2000\t500\n'
+    printf '0\t1\tMA0001.1\tband\tabc123\t8\t0\tnone\tensembl_113\ttss_upstream_2000_downstream_500_v1\t2000\t500\n'
+    printf '1\tX\tMA0002.1\tband\tabc123\t8\t0\tnone\tensembl_113\ttss_upstream_2000_downstream_500_v1\t2000\t500\n'
 } > "$run_root/plan/context_tasks.tsv"
 
 build_task() {
@@ -181,7 +181,7 @@ EOF
 cp "$anchor_input/input_manifest.json" "$anchor_package/input_manifest.json"
 {
     printf 'task_index\tchrom\tcofactor_motif_ids\toutput_tier\tbuilder_source_commit\tcontext_schema_version\tgtf_size_bytes\tgtf_sha256\tannotation_release\tpromoter_definition_id\tpromoter_upstream_bp\tpromoter_downstream_bp\ttask_kind\n'
-    printf '0\t1\tnone\tsummary\tabc123\t7\t%s\t%s\tensembl_113\ttss_upstream_2000_downstream_500_v1\t2000\t500\tanchor_annotation\n' \
+    printf '0\t1\tnone\tsummary\tabc123\t8\t%s\t%s\tensembl_113\ttss_upstream_2000_downstream_500_v1\t2000\t500\tanchor_annotation\n' \
         "$gtf_size" "$gtf_sha256"
 } > "$anchor_root/plan/context_tasks.tsv"
 "$repository_root/scripts/finalize_motif_context_run.py" \

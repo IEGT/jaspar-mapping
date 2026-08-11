@@ -254,20 +254,29 @@ qualifying member. `tp73_cofactor_pair_summary` is the compact nonduplicating
 feature surface. These are sequence-compatible pair architectures, not
 observations of protein oligomerisation.
 
-## Transcript and intron context
+## Gene, transcript, and coding context
 
 When `--gtf` is supplied, `build_motif_context.py` reads the pinned GTF directly
 through DuckDB and writes Parquet; no BED or TSV annotation intermediate is
 created. GTF 1-based inclusive coordinates are converted to BED coordinates.
-Transcript bounds come from transcript/exon records, and introns are the gaps
-between consecutive exons of each transcript.
+Transcript bounds come from the complete accepted transcript feature set, and
+introns are the gaps between consecutive exons of each transcript.
 
-Schema 7 represents a TSS as a physical one-base BED interval: transcript
+Schema 8 represents a TSS as a physical one-base BED interval: transcript
 `start` on `+`, and exclusive transcript `end - 1` on `-`. TSS identity is
 `(genome, annotation release, chromosome, position, strand)`; genes and
 transcripts attach through `transcript_tss`, so shared starts are not collapsed.
 Promoter intervals are resolved from that TSS under the versioned
 `promoter_definition_id` recorded in `context_run_config`.
+
+CDS identity is physical in `coding_sequence_segment`; transcript, gene,
+reading-phase, and exon-number ownership remain normalized in `transcript_cds`.
+`tp73_anchor_nearest_cds` retains every physical CDS segment tied under an
+overlap-first, then minimum interval-gap rule. The compact anchor table carries
+one deterministic representative plus tie and mixed-strand flags. As for TSSs,
+use the normalized nearest-CDS table whenever a tie matters.
+The `exon` and `intron` tables remain transcript-specific: unlike physical CDS
+identity, their purpose here is to retain isoform-specific interval context.
 
 The output deliberately preserves transcript and promoter ambiguity:
 
@@ -285,7 +294,9 @@ The output deliberately preserves transcript and promoter ambiguity:
   is 0 and a motif spanning the one-base TSS has distance -1. The separate
   transcription-oriented centre offset determines upstream/downstream, so a
   distance-0 motif remains directional.
-- `motif_transcript_context` has one row per anchor and containing transcript.
+- `motif_transcript_context` has one row per positively overlapping transcript
+  and distinguishes full containment from transcript, exon, CDS, and intron
+  boundary overlap.
 - `motif_transcript_context_pair` derives cofactor direction in each
   transcript's frame, signed TSS distances for both spans, and whether either
   scored span crosses the TSS. It is a view and does not multiply the primary
@@ -295,6 +306,9 @@ The output deliberately preserves transcript and promoter ambiguity:
 - `in_any_intron` is a convenient anchor-level summary, but does not erase the
   fact that the same locus can be intronic for one isoform and non-intronic for
   another.
+- `strict_intergenic` means no positive overlap with any transcript and no
+  overlap with the package's versioned promoter definition. It does not mean
+  distant from a gene; nearest-TSS and nearest-CDS distances remain available.
 
 ## Building the Parquet package
 
@@ -416,21 +430,23 @@ input uniqueness has not been established.
 
 ### Shared TP73 annotation layer
 
-Use an explicit anchor-only summary run to materialize the shared schema-7
-TP73, TSS, transcript, promoter, and anchor-to-promoter relationships once per
-chromosome. `--anchor-only` forbids cofactor motifs and requires
+Use an explicit anchor-only summary run to materialize the shared schema-8
+TP73, gene, TSS, transcript, exon, CDS, promoter, and anchor relationships once
+per chromosome. `--anchor-only` forbids cofactor motifs and requires
 `--output-tier summary`; the immutable task plan records
 `task_kind=anchor_annotation` and the literal `none` cofactor field. This is
 not a zero-hit cofactor package and must not be combined with the 3,300
 annotation-free cofactor-band tasks.
 
 ```sh
-scripts/submit_motif_context_slurm.sh \
-  --run-root /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_tp73_annotation_v1 \
+SOURCE=/data/sm718/GitHub/jaspar-mapping
+
+"$SOURCE/scripts/submit_motif_context_slurm.sh" \
+  --run-root /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_tp73_annotation_v3_schema8 \
   --scan-package /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_sparse_v3/package \
   --gtf /data/sm718/resources/ensembl/113/gtf/homo_sapiens/Homo_sapiens.GRCh38.113.gtf.gz \
   --anchor-only --output-tier summary \
-  --chrom-file /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_tp73_annotation_v1/plan/chromosomes.txt \
+  --chrom-file "$SOURCE/config/grch38_primary_nuclear_chromosomes.txt" \
   --annotation-release ensembl_113 \
   --promoter-definition tss_upstream_2000_downstream_500_v1 \
   --promoter-upstream-bp 2000 --promoter-downstream-bp 500 \
@@ -440,10 +456,11 @@ scripts/submit_motif_context_slurm.sh \
 ```
 
 The worker stages only the two TP73 orientation files for its chromosome to
-node-local scratch. The finalizer refuses completion unless every package
-contains the normalized physical TSS, transcript-to-TSS, promoter,
-promoter-to-gene, nearest-TSS, anchor-to-promoter, and TP73-anchor Parquet
-payloads. Legacy task plans without `task_kind` remain
+node-local scratch. The finalizer refuses completion unless every schema-8
+package contains normalized gene/exon/CDS dimensions and bridges, physical TSS,
+transcript-to-TSS, promoter, promoter-to-gene, nearest-TSS, nearest-CDS,
+anchor-to-promoter, and TP73-anchor Parquet payloads. Legacy task plans without
+`task_kind` remain
 `cofactor_context` plans.
 
 The package contains:
@@ -476,6 +493,10 @@ The package contains:
 - `tables/jaspar2026/transcription_start_site.parquet`,
   `transcript_tss.parquet`, `promoter.parquet`, and `promoter_gene.parquet`:
   normalized shared annotation dimensions and bridges;
+- `gene.parquet`, `exon.parquet`, `coding_sequence_segment.parquet`,
+  `transcript_cds.parquet`, `transcript_coding_span.parquet`, and
+  `coding_landmark.parquet`: normalized coding annotation and ownership;
+- `tp73_anchor_nearest_cds.parquet`: every tied nearest physical CDS segment;
 - `tables/jaspar2026/motif_transcript_context.parquet`: per-transcript location;
 - regenerated `tables/jaspar2026/transcript.parquet` and
   `tables/jaspar2026/intron.parquet` annotation dimensions;

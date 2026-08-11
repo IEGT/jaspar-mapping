@@ -280,7 +280,7 @@ if [[ -n $gtf ]]; then
     gtf_directory=$(cd "$(dirname "$gtf")" && pwd)
     gtf="$gtf_directory/$(basename "$gtf")"
 fi
-context_schema_version=7
+context_schema_version=8
 gtf_size_bytes=0
 gtf_sha256=none
 if [[ $output_tier != band ]]; then
@@ -361,7 +361,7 @@ while (( task_offset < task_index )); do
     if (( remaining < chunk_tasks )); then chunk_tasks=$remaining; fi
     submission=(
         sbatch --parsable --account="$account" --partition="$partition" --requeue
-        --job-name=tp73_context_v7
+        --job-name=tp73_context_v8
         --array="0-$((chunk_tasks - 1))%${max_concurrent}"
         --export="ALL,JASPAR_CONTEXT_TASK_OFFSET=$task_offset"
         --nodes=1 --ntasks=1 --cpus-per-task="$cpus" --mem="$memory" --time="$wall_time"

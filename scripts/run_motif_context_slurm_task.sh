@@ -114,7 +114,7 @@ task_kind=${task_kind:-cofactor_context}
 [[ $task_index == "$global_task_index" ]]
 [[ $chromosome =~ ^[A-Za-z0-9._-]+$ ]]
 [[ $output_tier == selected || $output_tier == summary || $output_tier == band ]]
-[[ $context_schema_version == 7 ]] || {
+[[ $context_schema_version == 8 ]] || {
     echo "E: Task $task_index requests unsupported context schema $context_schema_version." >&2
     exit 2
 }

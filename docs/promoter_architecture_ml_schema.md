@@ -150,14 +150,21 @@ implemented by `scripts/query_genome_scan.py`. Optional synteny bridges are in
   is not restricted to promoters.
 - **`tp73_context_anchor`** — one feature-ready row per TP73 occurrence with
   tandem summary, local motif counts, a convenient representative nearest-TSS
-  annotation with explicit tie/mixed-strand flags, and transcript/intron
-  indicators. It never replaces the pair or nearest-TSS tables.
+  and nearest-CDS annotation with explicit tie/mixed-strand flags, plus
+  transcript/exon/CDS/intron/promoter indicators and a strict-intergenic class.
+  It never replaces the normalized pair or nearest-feature tables.
 - **`transcription_start_site / transcript_tss`** — physical one-base TSS
   intervals and their many-to-many transcript/gene ownership. A shared TSS is
   not duplicated merely because several transcripts or genes use it.
 - **`tp73_anchor_nearest_tss`** — every physical TSS tied for the minimum
   distance from a TP73 anchor. This is authoritative when the compact anchor
   summary reports a tie.
+- **`coding_sequence_segment / transcript_cds / transcript_coding_span`** —
+  physical CDS intervals, their transcript/gene/phase ownership, and per-
+  transcript coding extents. Shared CDS intervals remain singular.
+- **`tp73_anchor_nearest_cds`** — every physical CDS segment tied under the
+  overlap-first/minimum-gap rule. It is authoritative when the compact anchor
+  summary reports a tie or mixed strands.
 - **`promoter / promoter_gene / tp73_anchor_promoter`** — resolved,
   strand-aware intervals under a versioned promoter definition, gene ownership,
   and canonical many-to-many TP73-anchor membership. Nearest-TSS annotation and
@@ -171,9 +178,10 @@ implemented by `scripts/query_genome_scan.py`. Optional synteny bridges are in
   adjacent intervals are merged for motif-immersion labels; depth remains a
   separate signal.
 - **`cutandrun`** — `chrom, start, end, cell_line, isoform, antibody, replicate, signal`. The sample facets are columns, so a TA-vs-DN contrast is a `GROUP BY`, not a filename parse.
-- **`gene / transcript / intron / gene_set`** — remaining annotation
-  dimensions regenerated from the pinned GTF. Transcript-level intron state is
-  kept in `motif_transcript_context` because isoforms can classify one locus
+- **`gene / transcript / exon / intron / coding_landmark / gene_set`** —
+  remaining annotation dimensions regenerated from the pinned GTF.
+  Transcript-level exon/CDS/intron state is kept in
+  `motif_transcript_context` because isoforms can classify one locus
   differently.
 - **`expression_differential`** — `gene_id, cell_line, log2fc_ta_vs_dn, padj, …`. **This is the ML label.**
 
@@ -336,6 +344,11 @@ free-form access to raw genome-wide files:
   physical TSS and all transcript/gene associations.
 - `get_tp73_promoters(anchor_hit_id, promoter_definition_id)` -> query Q21,
   returning every overlapping versioned promoter and associated gene.
+- `get_tp73_nearest_cds(anchor_hit_id)` -> query Q22, returning every tied
+  physical CDS segment and all transcript/gene associations.
+- `get_tp73_annotation_covariates(anchor_hit_id)` -> query Q23, returning the
+  deterministic compact overlap flags, strict-intergenic state, and nearest
+  TSS/CDS summaries used by statistical models.
 - `get_cutandrun_promoter_signal(gene_name, cell_line)` -> query Q4.
 - `export_ml_matrix(cell_line, score_mode, pseudocount, feature_set)` -> query
   Q3, pivot its bound long result in the client, or read a pinned Parquet export
@@ -346,7 +359,7 @@ parameters are typed, and no agent needs to discover table joins on the fly.
 
 ## Open questions to settle before building the exporter
 
-- **Promoter window comparison** — schema 7 no longer depends on the historical
+- **Promoter window comparison** — schema 8 no longer depends on the historical
   GeneLists `*.promoter.bed` files: it resolves strand-aware intervals directly
   from the pinned GTF and records `promoter_definition_id`, upstream extent,
   downstream extent, and coordinate convention. The default

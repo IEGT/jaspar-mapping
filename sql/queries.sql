@@ -624,3 +624,65 @@ JOIN promoter_gene pg
 WHERE ap.anchor_hit_id = $anchor_hit_id
   AND ap.promoter_definition_id = $promoter_definition_id
 ORDER BY ap.tss_start, ap.tss_strand, pg.gene_id;
+
+-- Q22. Every physical CDS segment tied as nearest to one TP73 anchor. The
+--      transcript bridge preserves isoform ambiguity and coding phase.
+--      Params: $anchor_hit_id
+SELECT
+    n.anchor_hit_id,
+    n.chrom,
+    n.anchor_start,
+    n.anchor_end,
+    n.cds_segment_id,
+    n.cds_start,
+    n.cds_end,
+    n.cds_strand,
+    n.cds_genomic_distance_bp,
+    n.cds_interval_distance_bp,
+    n.cds_overlap_bp,
+    n.genomic_center_offset_bp,
+    n.coding_oriented_center_offset_bp,
+    n.anchor_cds_relation,
+    n.nearest_cds_tie_count,
+    n.nearest_cds_has_mixed_strands,
+    tc.gene_id,
+    tc.gene_name,
+    tc.transcript_id,
+    tc.exon_number,
+    tc.phase
+FROM tp73_anchor_nearest_cds n
+LEFT JOIN transcript_cds tc
+  ON tc.genome_id = n.genome_id
+ AND tc.annotation_release = n.annotation_release
+ AND tc.cds_segment_id = n.cds_segment_id
+WHERE n.anchor_hit_id = $anchor_hit_id
+ORDER BY n.cds_start, n.cds_end, n.cds_strand,
+         tc.gene_id, tc.transcript_id;
+
+-- Q23. Compact annotation covariates for one TP73 anchor. strict_intergenic
+--      means no overlap with any transcript or promoter under the package's
+--      versioned promoter definition; it does not mean distant from a gene.
+--      Params: $anchor_hit_id
+SELECT
+    anchor_hit_id,
+    chrom,
+    start,
+    "end",
+    nearest_tss_id,
+    nearest_tss_distance_bp,
+    nearest_tss_relation,
+    nearest_cds_segment_id,
+    nearest_cds_genomic_distance_bp,
+    nearest_cds_interval_distance_bp,
+    nearest_cds_distance_bp,
+    nearest_cds_relation,
+    in_any_transcript,
+    in_any_exon,
+    in_any_cds,
+    in_any_intron,
+    overlaps_any_promoter,
+    n_overlapping_promoters,
+    strict_intergenic,
+    primary_genomic_context
+FROM tp73_context_anchor
+WHERE anchor_hit_id = $anchor_hit_id;

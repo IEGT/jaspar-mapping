@@ -140,7 +140,7 @@ def parse_task_plan(path: Path) -> tuple[list[dict[str, Any]], str]:
             raise ContextFinalizationError(
                 f"invalid context schema at task {task_index}: {schema_text}"
             ) from error
-        if schema_version not in {5, 6, 7}:
+        if schema_version not in {5, 6, 7, 8}:
             raise ContextFinalizationError(
                 f"unsupported context schema at task {task_index}: {schema_version}"
             )
@@ -339,6 +339,20 @@ def validate_package_config(config: dict[str, Any], task: dict[str, Any],
             config, "promoter_membership_rule",
             "anchor_overlaps_resolved_promoter_interval", package,
         )
+    if task["context_schema_version"] >= 8:
+        require_equal(
+            config, "nearest_cds_rule",
+            "physical_cds_segments_overlap_first_then_minimum_interval_gap",
+            package,
+        )
+        require_equal(
+            config, "cds_coordinate_rule",
+            "gtf_cds_1_based_inclusive_to_bed_half_open", package,
+        )
+        require_equal(
+            config, "strict_intergenic_rule",
+            "no_transcript_overlap_and_no_versioned_promoter_overlap", package,
+        )
 
 
 def dataset_name(relative: Path) -> str:
@@ -372,6 +386,16 @@ def package_files(run_root: Path, package: Path,
             "tables/jaspar2026/tp73_anchor_nearest_tss.parquet",
             "tables/jaspar2026/tp73_anchor_promoter.parquet",
         })
+        if task["context_schema_version"] >= 8:
+            required.update({
+                "tables/jaspar2026/gene.parquet",
+                "tables/jaspar2026/exon.parquet",
+                "tables/jaspar2026/coding_sequence_segment.parquet",
+                "tables/jaspar2026/transcript_cds.parquet",
+                "tables/jaspar2026/transcript_coding_span.parquet",
+                "tables/jaspar2026/coding_landmark.parquet",
+                "tables/jaspar2026/tp73_anchor_nearest_cds.parquet",
+            })
     observed: set[str] = set()
     rows: list[dict[str, Any]] = []
     for root, directories, filenames in os.walk(package):
