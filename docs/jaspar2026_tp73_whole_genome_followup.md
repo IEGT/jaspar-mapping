@@ -3,7 +3,9 @@
 This document defines the production extension of the chromosome-1 TP73
 analysis to the finalized JASPAR 2026 GRCh38 scan. It covers TP73/control
 CUT&RUN evidence, convenient-threshold context counts, and all-motif
-enrichment/depletion. GFP-referenced H3K4me3 change is deliberately deferred.
+enrichment/depletion. The schema-8 annotation rebuild and GFP-referenced
+H3K4me3 change extension are defined as subsequent, independently restartable
+stages.
 
 ## Scientific partitions
 
@@ -149,8 +151,14 @@ scripts/submit_tp73_genome_context_maxima_slurm.sh \
 After the context finalizer succeeds, pass that context run as
 `--source-threshold-run` and the autosomal evidence Parquet as
 `--anchor-evidence` to `submit_tp73_cofactor_enrichment_slurm.sh`. Its default
-two-motif batches request 2 CPUs, 32 GB, and one hour. H3K4me3 production is a
-later, separate stage and must not be added to these jobs.
+two-motif batches request 2 CPUs, 32 GB, and one hour.
+
+Stages 4 and 5 rebuild the shared nuclear annotation at schema 8, extract
+H3K4me3/input signal in five fixed windows by reusing the finalized TP73 anchor
+evidence, and fit the all-JASPAR GFP-referenced change models. Their exact
+inputs, Slurm commands, restart contract, genomic-context covariates, and
+global multiple-testing family are specified in
+[`h3k4me3_whole_genome_production.md`](h3k4me3_whole_genome_production.md).
 
 ## Local contract tests
 

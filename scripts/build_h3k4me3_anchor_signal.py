@@ -165,6 +165,53 @@ def read_manifest(path: Path) -> list[Track]:
     return tracks
 
 
+def read_track_file_inventory(
+    path: Path,
+) -> dict[tuple[str, str, str], dict[str, str]]:
+    required = {
+        "series_id", "condition", "channel", "resolved_source", "bytes",
+        "mtime_ns", "sha256",
+    }
+    with path.open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        missing = required - set(reader.fieldnames or ())
+        if missing:
+            raise SignalBuildError(
+                "track file inventory lacks columns: " +
+                ", ".join(sorted(missing))
+            )
+        rows = list(reader)
+    result: dict[tuple[str, str, str], dict[str, str]] = {}
+    for row in rows:
+        key = (row["series_id"], row["condition"], row["channel"])
+        if key in result:
+            raise SignalBuildError(f"duplicate track file inventory key: {key}")
+        if re.fullmatch(r"[0-9a-f]{64}", row["sha256"]) is None:
+            raise SignalBuildError(f"invalid track file checksum: {key}")
+        result[key] = row
+    if not result:
+        raise SignalBuildError("track file inventory is empty")
+    return result
+
+
+def pinned_track_digest(
+    track: Track, source: Path,
+    inventory: dict[tuple[str, str, str], dict[str, str]],
+) -> str:
+    key = (track.series_id, track.condition, track.channel)
+    record = inventory.get(key)
+    if record is None:
+        raise SignalBuildError(f"track file inventory lacks used track: {key}")
+    stat = source.stat()
+    if (Path(record["resolved_source"]).resolve() != source.resolve()
+            or int(record["bytes"]) != stat.st_size
+            or int(record["mtime_ns"]) != stat.st_mtime_ns):
+        raise SignalBuildError(
+            f"track differs from pinned file inventory: {source}"
+        )
+    return record["sha256"]
+
+
 def leading_metadata_lines(path: Path) -> int:
     count = 0
     with path.open(encoding="utf-8") as handle:
@@ -234,10 +281,19 @@ def stage_track(track: Track, root: Path, scratch: Path, chrom: str,
     return source, output
 
 
-def coverage_table_sql(index: int, path: Path, chrom: str) -> str:
+def coverage_table_sql(index: int, path: Path, chrom: str,
+                       allow_empty: bool = False) -> str:
     skip = leading_metadata_lines(path)
     name = f"coverage_{index}"
     requested_chrom = canonical_chrom(chrom)
+    nonempty_check = (
+        "SELECT true;"
+        if allow_empty else f"""
+SELECT CASE WHEN count(*) = 0
+    THEN error('no positive chromosome {chrom} rows in {path.name}')
+    ELSE true END FROM {name};
+""".strip()
+    )
     return f"""
 CREATE OR REPLACE TEMP TABLE {name} AS
 WITH text_rows AS (
@@ -275,9 +331,7 @@ WHERE CASE
       THEN error('overlapping or unsorted signal rows in {path.name}')
     ELSE true
 END;
-SELECT CASE WHEN count(*) = 0
-    THEN error('no positive chromosome {chrom} rows in {path.name}')
-    ELSE true END FROM {name};
+{nonempty_check}
 """.strip()
 
 
@@ -378,7 +432,11 @@ CREATE TABLE profile_long (
 """.strip(),
     ]
     for index, (track, path) in enumerate(tracks):
-        statements.append(coverage_table_sql(index, path, arguments.chrom))
+        # A series can legitimately lack positive intervals on a chromosome
+        # (notably chrY). The LEFT JOIN below then emits explicit zero signal.
+        statements.append(coverage_table_sql(
+            index, path, arguments.chrom, allow_empty=True
+        ))
         statements.append(f"""
 INSERT INTO profile_long
 WITH observed AS (
@@ -496,7 +554,11 @@ CREATE TABLE signal_long (
 """.strip(),
     ]
     for index, (track, path) in enumerate(signal_tracks):
-        statements.append(coverage_table_sql(index, path, arguments.chrom))
+        # Preserve the factorial signal grid even when one chromosome has no
+        # positive intervals in an included track.
+        statements.append(coverage_table_sql(
+            index, path, arguments.chrom, allow_empty=True
+        ))
         statements.append(f"""
 INSERT INTO signal_long
 WITH observed AS (
@@ -566,7 +628,10 @@ COPY (
 
 def write_sidecars(base: Path, arguments: argparse.Namespace, tracks: list[Track],
                    used: list[tuple[Track, Path, Path]],
-                   windows: tuple[tuple[str, int, int], ...], mode: str) -> None:
+                   windows: tuple[tuple[str, int, int], ...], mode: str,
+                   track_file_inventory: dict[
+                       tuple[str, str, str], dict[str, str]
+                   ] | None = None) -> None:
     used_keys = {(track.series_id, track.condition, track.channel)
                  for track, _, _ in used}
     manifest_path = Path(str(base) + ".track_manifest.tsv")
@@ -587,6 +652,14 @@ def write_sidecars(base: Path, arguments: argparse.Namespace, tracks: list[Track
             key = (track.series_id, track.condition, track.channel)
             source = source_by_key.get(key)
             stat = source.stat() if source else None
+            digest = ""
+            if source is not None:
+                if track_file_inventory is None:
+                    digest = sha256(source)
+                else:
+                    digest = pinned_track_digest(
+                        track, source, track_file_inventory
+                    )
             writer.writerow({
                 "series_id": track.series_id,
                 "cell_line": track.cell_line,
@@ -600,7 +673,7 @@ def write_sidecars(base: Path, arguments: argparse.Namespace, tracks: list[Track
                 "resolved_source": str(source) if source else "",
                 "bytes": stat.st_size if stat else "",
                 "mtime_ns": stat.st_mtime_ns if stat else "",
-                "sha256": sha256(source) if source else "",
+                "sha256": digest,
                 "reference_build": track.reference_build,
                 "signal_scale": track.signal_scale,
             })
@@ -616,12 +689,26 @@ def write_sidecars(base: Path, arguments: argparse.Namespace, tracks: list[Track
         "chrom_length": arguments.chrom_length,
         "minimum_anchor_score": arguments.minimum_anchor_score,
         "anchor_source_mode": (
-            "schema7_local_peak_context_anchor"
-            if arguments.anchor_source is not None
-            else "orientation_sparse_pair"
+            "prebuilt_tp73_cutandrun_anchor_evidence"
+            if arguments.tp73_evidence_input is not None else
+            "schema_local_peak_context_anchor"
+            if arguments.anchor_source is not None else
+            "orientation_sparse_pair"
         ),
         "anchor_source": (
             str(arguments.anchor_source) if arguments.anchor_source else None
+        ),
+        "tp73_evidence_input": (
+            str(arguments.tp73_evidence_input)
+            if arguments.tp73_evidence_input else None
+        ),
+        "tp73_evidence_input_bytes": (
+            arguments.tp73_evidence_input.stat().st_size
+            if arguments.tp73_evidence_input else None
+        ),
+        "tp73_evidence_input_sha256": (
+            sha256(arguments.tp73_evidence_input)
+            if arguments.tp73_evidence_input else None
         ),
         "included_series": sorted({track.series_id for track in tracks
                                     if track.included}),
@@ -643,6 +730,14 @@ def write_sidecars(base: Path, arguments: argparse.Namespace, tracks: list[Track
         },
         "persistent_intermediate_bedgraph": False,
         "track_manifest": str(arguments.track_manifest),
+        "track_file_inventory": (
+            str(arguments.track_file_inventory)
+            if arguments.track_file_inventory else None
+        ),
+        "track_file_inventory_sha256": (
+            sha256(arguments.track_file_inventory)
+            if arguments.track_file_inventory else None
+        ),
     }
     Path(str(base) + ".run_config.json").write_text(
         json.dumps(run_config, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -662,7 +757,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument(
         "--anchor-source", type=Path,
         help=(
-            "one-chromosome schema-7 tp73_context_anchor Parquet already "
+            "one-chromosome tp73_context_anchor Parquet already "
             "selected as local peaks; chromosome is supplied by --chrom "
             "because partition columns need not be stored in the file; "
             "mutually exclusive with --anchor-plus/--anchor-minus"
@@ -671,8 +766,24 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--anchor-plus", type=Path)
     result.add_argument("--anchor-minus", type=Path)
     result.add_argument("--track-manifest", type=Path, required=True)
+    result.add_argument(
+        "--track-file-inventory", type=Path,
+        help=(
+            "optional planning-time track path/size/mtime/SHA-256 inventory; "
+            "workers validate metadata and reuse its checksum in provenance"
+        ),
+    )
     result.add_argument("--track-root", type=Path, required=True)
     result.add_argument("--tp73-output", type=Path)
+    result.add_argument(
+        "--tp73-evidence-input", type=Path,
+        help=(
+            "reuse a completed one-chromosome TP73/control evidence Parquet as "
+            "the anchor set and build only H3K4me3/input signal; incompatible "
+            "with anchor inputs, --tp73-output, --profile-only, and "
+            "--evidence-only"
+        ),
+    )
     result.add_argument("--signal-output", type=Path)
     result.add_argument("--profile-output", type=Path)
     result.add_argument("--profile-only", action="store_true")
@@ -719,19 +830,37 @@ def parser() -> argparse.ArgumentParser:
 def validate_arguments(arguments: argparse.Namespace) -> None:
     source_mode = arguments.anchor_source is not None
     pair_mode = arguments.anchor_plus is not None or arguments.anchor_minus is not None
-    if source_mode == pair_mode:
-        raise SignalBuildError(
-            "provide exactly --anchor-source or both --anchor-plus and --anchor-minus"
+    reuse_evidence = arguments.tp73_evidence_input is not None
+    if reuse_evidence:
+        if source_mode or pair_mode:
+            raise SignalBuildError(
+                "--tp73-evidence-input does not accept separate anchor inputs"
+            )
+        anchor_inputs = (arguments.tp73_evidence_input,)
+    else:
+        if source_mode == pair_mode:
+            raise SignalBuildError(
+                "provide exactly --anchor-source or both --anchor-plus and "
+                "--anchor-minus"
+            )
+        if pair_mode and (
+            arguments.anchor_plus is None or arguments.anchor_minus is None
+        ):
+            raise SignalBuildError(
+                "--anchor-plus and --anchor-minus must be provided together"
+            )
+        anchor_inputs = (
+            (arguments.anchor_source,)
+            if source_mode else (arguments.anchor_plus, arguments.anchor_minus)
         )
-    if pair_mode and (arguments.anchor_plus is None or arguments.anchor_minus is None):
-        raise SignalBuildError("--anchor-plus and --anchor-minus must be provided together")
-    anchor_inputs = (
-        (arguments.anchor_source,)
-        if source_mode else (arguments.anchor_plus, arguments.anchor_minus)
-    )
     for path in (*anchor_inputs, arguments.track_manifest):
         if not path.is_file():
             raise SignalBuildError(f"input not found: {path}")
+    if (arguments.track_file_inventory is not None
+            and not arguments.track_file_inventory.is_file()):
+        raise SignalBuildError(
+            f"track file inventory not found: {arguments.track_file_inventory}"
+        )
     if not arguments.track_root.is_dir():
         raise SignalBuildError(f"track root not found: {arguments.track_root}")
     if arguments.chrom_length <= 0 or not math.isfinite(arguments.minimum_anchor_score):
@@ -743,7 +872,20 @@ def validate_arguments(arguments: argparse.Namespace) -> None:
         raise SignalBuildError("profile sample size and threads must be positive")
     if arguments.profile_only and arguments.evidence_only:
         raise SignalBuildError("--profile-only and --evidence-only are exclusive")
-    if arguments.profile_only:
+    if reuse_evidence:
+        if arguments.profile_only or arguments.evidence_only:
+            raise SignalBuildError(
+                "--tp73-evidence-input is a signal-only input"
+            )
+        if arguments.signal_output is None:
+            raise SignalBuildError(
+                "--tp73-evidence-input requires --signal-output"
+            )
+        if arguments.tp73_output is not None:
+            raise SignalBuildError(
+                "--tp73-evidence-input does not accept --tp73-output"
+            )
+    elif arguments.profile_only:
         if arguments.profile_output is None:
             raise SignalBuildError("--profile-only requires --profile-output")
     elif arguments.evidence_only:
@@ -773,6 +915,10 @@ def main() -> int:
     try:
         validate_arguments(arguments)
         tracks = read_manifest(arguments.track_manifest)
+        track_file_inventory = (
+            read_track_file_inventory(arguments.track_file_inventory)
+            if arguments.track_file_inventory else None
+        )
         windows = tuple(arguments.window or WINDOW_DEFAULTS)
         if len({name for name, _, _ in windows}) != len(windows):
             raise SignalBuildError("window names must be unique")
@@ -784,8 +930,17 @@ def main() -> int:
         elif arguments.evidence_only:
             required = [track for track in included
                         if track.channel in {"tp73", "negative_control"}]
+        elif arguments.tp73_evidence_input is not None:
+            required = [track for track in included
+                        if track.channel in {"h3k4me3", "input"}]
         else:
             required = included
+        if track_file_inventory is not None:
+            for track in required:
+                pinned_track_digest(
+                    track, (arguments.track_root / track.filename).resolve(),
+                    track_file_inventory,
+                )
         temp_parent = arguments.tmpdir.resolve() if arguments.tmpdir else None
         with tempfile.TemporaryDirectory(
             prefix="jaspar-h3k4me3-", dir=temp_parent
@@ -801,14 +956,18 @@ def main() -> int:
                 source, bedgraph = stage_track(
                     track, arguments.track_root, scratch, arguments.chrom,
                     arguments.rscript, arguments.bigwig_exporter,
-                    allow_empty=arguments.evidence_only,
+                    allow_empty=(
+                        arguments.evidence_only or
+                        arguments.tp73_evidence_input is not None
+                    ),
                     mitochondrial_aliases=arguments.mitochondrial_chromosome,
                 )
                 used.append((track, source, bedgraph))
 
-            anchor_source: Path | None = None
+            anchor_source: Path | None = arguments.tp73_evidence_input
             staged_tp73 = scratch / "tp73_anchor_evidence.parquet"
-            if not arguments.profile_only:
+            if (not arguments.profile_only and
+                    arguments.tp73_evidence_input is None):
                 coverage: list[str] = []
                 for track, _, bedgraph in used:
                     if track.channel not in {"tp73", "negative_control"}:
@@ -866,7 +1025,10 @@ def main() -> int:
                 promote_file(staged_profile, arguments.profile_output)
                 write_sidecars(
                     arguments.profile_output, arguments, tracks, used, windows,
-                    "profile_only" if arguments.profile_only else "full",
+                    "profile_only" if arguments.profile_only else (
+                        "signal_only" if arguments.tp73_evidence_input else "full"
+                    ),
+                    track_file_inventory,
                 )
 
             if arguments.evidence_only:
@@ -880,6 +1042,7 @@ def main() -> int:
                 write_sidecars(
                     arguments.tp73_output, arguments, tracks, used, windows,
                     "evidence_only",
+                    track_file_inventory,
                 )
             elif not arguments.profile_only:
                 staged_signal = scratch / "h3k4me3_anchor_signal.parquet"
@@ -899,7 +1062,7 @@ def main() -> int:
                 sql = signal_sql(
                     arguments,
                     [(track, bedgraph) for track, _, bedgraph in used],
-                    staged_tp73, staged_signal, windows,
+                    anchor_source, staged_signal, windows,
                 )
                 run([
                     arguments.duckdb, "-batch", str(arguments.scratch_database)
@@ -910,15 +1073,18 @@ def main() -> int:
                     file=sys.stderr,
                 )
                 promote_file(staged_signal, arguments.signal_output)
-                promote_file(staged_tp73, arguments.tp73_output)
-                for suffix in (".run_config.tsv", ".coverage_manifest.tsv"):
-                    source = Path(str(staged_tp73) + suffix)
-                    if source.exists():
-                        promote_file(
-                            source, Path(str(arguments.tp73_output) + suffix)
-                        )
+                if arguments.tp73_evidence_input is None:
+                    promote_file(staged_tp73, arguments.tp73_output)
+                    for suffix in (".run_config.tsv", ".coverage_manifest.tsv"):
+                        source = Path(str(staged_tp73) + suffix)
+                        if source.exists():
+                            promote_file(
+                                source, Path(str(arguments.tp73_output) + suffix)
+                            )
                 write_sidecars(
-                    arguments.signal_output, arguments, tracks, used, windows, "full"
+                    arguments.signal_output, arguments, tracks, used, windows,
+                    "signal_only" if arguments.tp73_evidence_input else "full",
+                    track_file_inventory,
                 )
         print("I: TP73/H3K4me3 anchor build completed.", file=sys.stderr)
         return 0

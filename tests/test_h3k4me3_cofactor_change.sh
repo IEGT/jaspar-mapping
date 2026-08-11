@@ -196,6 +196,124 @@ SELECT CASE WHEN NOT EXISTS (
 ) THEN error('strict TP73 support was not retained') END;
 SQL
 
+# Reusing completed TP73 evidence must stage only H3K4me3/input tracks and
+# retain a complete zero-filled factorial grid when one chromosome track is
+# empty.
+: > "$temporary/series_b_DN_h3k4me3_empty.bedGraph"
+awk 'BEGIN { FS = OFS = "\t" }
+     NR == 1 || !($1 == "series_b" && $3 == "DN" && $4 == "h3k4me3") { print; next }
+     { $6 = "series_b_DN_h3k4me3_empty.bedGraph"; print }' \
+    "$manifest" > "$temporary/signal-only-tracks.tsv"
+python3 - "$temporary/signal-only-tracks.tsv" "$temporary" \
+    "$temporary/signal-track-files.tsv" <<'PY'
+import csv
+import hashlib
+import pathlib
+import sys
+
+manifest, root, output = map(pathlib.Path, sys.argv[1:])
+with manifest.open(newline="") as stream:
+    rows = [row for row in csv.DictReader(stream, delimiter="\t")
+            if row["analysis_included"] == "true"
+            and row["channel"] in {"h3k4me3", "input"}]
+fields = [
+    "series_id", "condition", "channel", "filename", "resolved_source",
+    "bytes", "mtime_ns", "sha256",
+]
+with output.open("w", newline="") as stream:
+    writer = csv.DictWriter(stream, fieldnames=fields, delimiter="\t")
+    writer.writeheader()
+    for row in rows:
+        source = (root / row["filename"]).resolve()
+        stat = source.stat()
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        writer.writerow({
+            **{field: row[field] for field in (
+                "series_id", "condition", "channel", "filename"
+            )},
+            "resolved_source": source,
+            "bytes": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+            "sha256": digest,
+        })
+PY
+"$repository_root/scripts/build_h3k4me3_anchor_signal.py" \
+    --tp73-evidence-input "$temporary/evidence-only.parquet" \
+    --track-manifest "$temporary/signal-only-tracks.tsv" \
+    --track-file-inventory "$temporary/signal-track-files.tsv" \
+    --track-root "$temporary" \
+    --signal-output "$temporary/signal-only.parquet" \
+    --window central_20:0:20 --chrom 1 --chrom-length 10000 \
+    --threads 2 --memory-limit 1GB --duckdb "$duckdb"
+"$duckdb" -batch :memory: >/dev/null <<SQL
+CREATE VIEW reused AS SELECT * FROM read_parquet(
+    '$temporary/signal-only.parquet');
+SELECT CASE WHEN (SELECT count(*) FROM reused) <> 192
+    THEN error('signal-only output changed the factorial row count') END;
+SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM reused
+    WHERE series_id = 'series_b' AND condition = 'DN'
+      AND h3k4me3_area <> 0
+) THEN error('empty H3K4me3 chromosome track was not zero-filled') END;
+SELECT CASE WHEN (
+    SELECT count(DISTINCT (chrom, anchor_start, anchor_end)) FROM reused
+) <> 16 THEN error('signal-only mode changed the evidence anchor set') END;
+SQL
+grep -Fq '"mode": "signal_only"' \
+    "$temporary/signal-only.parquet.run_config.json"
+grep -Fq '"anchor_source_mode": "prebuilt_tp73_cutandrun_anchor_evidence"' \
+    "$temporary/signal-only.parquet.run_config.json"
+grep -Fq '"track_file_inventory_sha256":' \
+    "$temporary/signal-only.parquet.run_config.json"
+awk -F '\t' 'NR > 1 && $4 ~ /^(tp73|negative_control)$/ && $7 != "false" { exit 1 }' \
+    "$temporary/signal-only.parquet.track_manifest.tsv"
+python3 - "$temporary/signal-track-files.tsv" \
+    "$temporary/signal-only.parquet.track_manifest.tsv" <<'PY'
+import csv
+import pathlib
+import sys
+
+expected_path, observed_path = map(pathlib.Path, sys.argv[1:])
+with expected_path.open(newline="") as stream:
+    expected = {
+        (row["series_id"], row["condition"], row["channel"]): row["sha256"]
+        for row in csv.DictReader(stream, delimiter="\t")
+    }
+with observed_path.open(newline="") as stream:
+    observed = {
+        (row["series_id"], row["condition"], row["channel"]): row["sha256"]
+        for row in csv.DictReader(stream, delimiter="\t")
+        if row["used_in_run"] == "true"
+    }
+assert observed == expected
+PY
+python3 - "$temporary/signal-track-files.tsv" <<'PY'
+import csv
+import os
+import pathlib
+import sys
+
+with pathlib.Path(sys.argv[1]).open(newline="") as stream:
+    source = pathlib.Path(next(csv.DictReader(stream, delimiter="\t"))["resolved_source"])
+stat = source.stat()
+os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+PY
+if "$repository_root/scripts/build_h3k4me3_anchor_signal.py" \
+    --tp73-evidence-input "$temporary/evidence-only.parquet" \
+    --track-manifest "$temporary/signal-only-tracks.tsv" \
+    --track-file-inventory "$temporary/signal-track-files.tsv" \
+    --track-root "$temporary" \
+    --signal-output "$temporary/stale-inventory-signal.parquet" \
+    --window central_20:0:20 --chrom 1 --chrom-length 10000 \
+    --threads 2 --memory-limit 1GB --duckdb "$duckdb" \
+    >"$temporary/stale-inventory.stdout" \
+    2>"$temporary/stale-inventory.stderr"; then
+    echo "E: Changed source track was accepted by the pinned inventory." >&2
+    exit 1
+fi
+grep -Fq "track differs from pinned file inventory" \
+    "$temporary/stale-inventory.stderr"
+
 "$duckdb" -batch :memory: >/dev/null <<SQL
 COPY (
     SELECT '1'::VARCHAR AS chrom, (100 + i * 500)::BIGINT AS anchor_start,
@@ -273,7 +391,8 @@ SELECT CASE WHEN NOT EXISTS (
 ) THEN error('occurrence output does not flag an invalid comparison') END;
 SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM config
-    WHERE all_zero_anchor_policy = 'retained'
+    WHERE all_zero_anchor_policy =
+      'excluded_from_intensity_and_score_gradient_retained_for_occurrence'
       AND tp73_interaction_interpretation = 'secondary_descriptive_post_treatment'
       AND chromosomes = '1'
       AND analysis_role = 'synthetic_held_out_validation'
@@ -284,8 +403,137 @@ grep -Fq $'excluded_series\texcluded\t' \
     "$temporary/signal.parquet.track_manifest.tsv"
 grep -Fq $'excluded_series\texcluded\tGFP\th3k4me3\tR1\tfalse\tfalse\tunresolved_test_series' \
     "$temporary/signal.parquet.track_manifest.tsv"
-grep -Fq '"anchor_source_mode": "schema7_local_peak_context_anchor"' \
+grep -Fq '"anchor_source_mode": "schema_local_peak_context_anchor"' \
     "$temporary/signal.parquet.run_config.json"
+
+# The genome evaluator consumes the compact change table and collapses
+# orientation-duplicated schema-8 annotation only when physical-span fields
+# agree.
+"$duckdb" -batch :memory: >/dev/null <<SQL
+COPY (
+  WITH selected AS (
+    SELECT * FROM read_parquet('$temporary/signal.parquet')
+    WHERE window_name = 'central_20'
+  ), pivoted AS (
+    SELECT chrom, anchor_start, anchor_end, anchor_score, series_id, cell_line,
+           replicate, window_name, min(inner_bp)::BIGINT AS inner_bp,
+           max(outer_bp)::BIGINT AS outer_bp,
+           max(segment_count)::INTEGER AS segment_count,
+           max(effective_window_bp)::BIGINT AS effective_window_bp,
+           max(h3k4me3_area) FILTER (condition = 'GFP') AS gfp_h3k4me3_area,
+           max(input_area) FILTER (condition = 'GFP') AS gfp_input_area,
+           max(h3k4me3_max) FILTER (condition = 'GFP') AS gfp_h3k4me3_max,
+           max(input_max) FILTER (condition = 'GFP') AS gfp_input_max,
+           max(h3k4me3_area) FILTER (condition = 'TA') AS ta_h3k4me3_area,
+           max(input_area) FILTER (condition = 'TA') AS ta_input_area,
+           max(h3k4me3_max) FILTER (condition = 'TA') AS ta_h3k4me3_max,
+           max(input_max) FILTER (condition = 'TA') AS ta_input_max,
+           max(h3k4me3_area) FILTER (condition = 'DN') AS dn_h3k4me3_area,
+           max(input_area) FILTER (condition = 'DN') AS dn_input_area,
+           max(h3k4me3_max) FILTER (condition = 'DN') AS dn_h3k4me3_max,
+           max(input_max) FILTER (condition = 'DN') AS dn_input_max
+    FROM selected
+    GROUP BY chrom, anchor_start, anchor_end, anchor_score, series_id,
+             cell_line, replicate, window_name
+  ), normalized AS (
+    SELECT *, log2((gfp_h3k4me3_area + 1) / (gfp_input_area + 1))
+               AS gfp_log2_h3k4me3_input_ratio,
+           log2((ta_h3k4me3_area + 1) / (ta_input_area + 1))
+               AS ta_log2_h3k4me3_input_ratio,
+           log2((dn_h3k4me3_area + 1) / (dn_input_area + 1))
+               AS dn_log2_h3k4me3_input_ratio
+    FROM pivoted
+  )
+  SELECT *,
+         ta_log2_h3k4me3_input_ratio - gfp_log2_h3k4me3_input_ratio
+             AS delta_ta_vs_gfp,
+         dn_log2_h3k4me3_input_ratio - gfp_log2_h3k4me3_input_ratio
+             AS delta_dn_vs_gfp,
+         true AS has_any_h3k4me3_signal, true AS has_any_input_signal,
+         false AS uninformative_all_h3k4me3_zero
+  FROM normalized
+) TO '$temporary/change.parquet' (FORMAT PARQUET, COMPRESSION ZSTD);
+
+COPY (
+  SELECT '1'::VARCHAR AS chrom, (100 + i * 500)::BIGINT AS start,
+         (110 + i * 500)::BIGINT AS "end", strand,
+         CASE WHEN i % 2 = 0 THEN 'strict_intergenic' ELSE 'promoter_only' END
+             AS primary_genomic_context,
+         i % 2 = 0 AS strict_intergenic,
+         i % 2 = 1 AS overlaps_any_promoter,
+         false AS in_any_transcript, false AS in_any_exon, false AS in_any_cds,
+         (1000 + i * 100)::BIGINT AS nearest_tss_distance_bp,
+         (1000 + i * 100)::BIGINT AS nearest_tss_genomic_distance_bp,
+         i = 0 AS nearest_tss_has_mixed_strands,
+         'downstream'::VARCHAR AS nearest_tss_relation,
+         (2000 + i * 100)::BIGINT AS nearest_cds_distance_bp,
+         (2000 + i * 100)::BIGINT AS nearest_cds_genomic_distance_bp,
+         false AS nearest_cds_has_mixed_strands,
+         'downstream'::VARCHAR AS nearest_cds_relation
+  FROM range(16) AS r(i)
+  CROSS JOIN (VALUES ('+'), ('-')) AS s(strand)
+) TO '$temporary/schema8-annotation.parquet' (FORMAT PARQUET, COMPRESSION ZSTD);
+
+COPY (SELECT * FROM read_parquet('$temporary/change.parquet')
+      WHERE anchor_start % 1000 = 100)
+TO '$temporary/change-a.parquet' (FORMAT PARQUET, COMPRESSION ZSTD);
+COPY (SELECT * FROM read_parquet('$temporary/change.parquet')
+      WHERE anchor_start % 1000 = 600)
+TO '$temporary/change-b.parquet' (FORMAT PARQUET, COMPRESSION ZSTD);
+COPY (SELECT * FROM read_parquet('$temporary/schema8-annotation.parquet')
+      WHERE start % 1000 = 100)
+TO '$temporary/annotation-a.parquet' (FORMAT PARQUET, COMPRESSION ZSTD);
+COPY (SELECT * FROM read_parquet('$temporary/schema8-annotation.parquet')
+      WHERE start % 1000 = 600)
+TO '$temporary/annotation-b.parquet' (FORMAT PARQUET, COMPRESSION ZSTD);
+COPY (SELECT * FROM read_parquet('$temporary/maxima.parquet')
+      WHERE motif_id = 'M_EFFECT')
+TO '$temporary/maxima-effect.parquet' (FORMAT PARQUET, COMPRESSION ZSTD);
+COPY (SELECT * FROM read_parquet('$temporary/maxima.parquet')
+      WHERE motif_id = 'M_OVERLAP')
+TO '$temporary/maxima-overlap.parquet' (FORMAT PARQUET, COMPRESSION ZSTD);
+SQL
+
+Rscript "$repository_root/scripts/analyze_h3k4me3_cofactor_change.R" \
+    --change "$temporary/change-a.parquet" \
+    --change "$temporary/change-b.parquet" \
+    --tp73-evidence "$temporary/tp73.parquet" \
+    --cofactor-maxima "$temporary/maxima-effect.parquet" \
+    --cofactor-maxima "$temporary/maxima-overlap.parquet" \
+    --annotation "$temporary/annotation-a.parquet" \
+    --annotation "$temporary/annotation-b.parquet" \
+    --thresholds "$temporary/thresholds.tsv" \
+    --output-prefix "$temporary/context-result" \
+    --series series_a --series series_b --negative-references "-1,0" \
+    --block-size 500 --spline-df 1 --minimum-class-fraction 0.01 \
+    --minimum-class-count 2 --minimum-interaction-cell-count 2 \
+    --duckdb "$duckdb"
+"$duckdb" -batch :memory: >/dev/null <<SQL
+CREATE VIEW context_effect AS SELECT * FROM read_csv_auto(
+  '$temporary/context-result_context_stratified_intensity_effect.tsv',
+  delim='\t', header=true, nullstr='NA');
+CREATE VIEW score_gradient AS SELECT * FROM read_csv_auto(
+  '$temporary/context-result_score_gradient.tsv', delim='\t',
+  header=true, nullstr='NA');
+CREATE VIEW context_config AS SELECT * FROM read_csv_auto(
+  '$temporary/context-result_run_config.tsv', delim='\t', header=true,
+  nullstr='NA');
+SELECT CASE WHEN NOT EXISTS (
+  SELECT 1 FROM context_effect WHERE genomic_context_class = 'strict_intergenic'
+) THEN error('strict-intergenic context stratum was not emitted') END;
+SELECT CASE WHEN NOT EXISTS (
+  SELECT 1 FROM score_gradient
+  WHERE estimate_unit = 'one_SD_increase_in_clamped_cofactor_score'
+) THEN error('continuous cofactor-score sensitivity was not emitted') END;
+SELECT CASE WHEN NOT EXISTS (
+  SELECT 1 FROM context_config
+  WHERE input_mode = 'precomputed_change'
+    AND annotation_schema =
+      'schema8_tp73_context_anchor_collapsed_to_physical_span'
+    AND strict_intergenic_definition =
+      'no_transcript_overlap_and_no_versioned_promoter_overlap'
+) THEN error('genome inference provenance is incomplete') END;
+SQL
 
 "$duckdb" -batch :memory: >/dev/null <<SQL
 COPY (
@@ -296,7 +544,7 @@ COPY (
 SQL
 printf 'motif_id\tpositive_threshold\tfactor_name\nM_EFFECT\t4\tSynthetic effect\n' \
     > "$temporary/invalid-floor-thresholds.tsv"
-if Rscript "$repository_root/scripts/analyze_h3k4me3_cofactor_change.R" \
+Rscript "$repository_root/scripts/analyze_h3k4me3_cofactor_change.R" \
     --signal "$temporary/signal.parquet" \
     --tp73-evidence "$temporary/tp73.parquet" \
     --cofactor-maxima "$temporary/invalid-floor-maxima.parquet" \
@@ -305,11 +553,29 @@ if Rscript "$repository_root/scripts/analyze_h3k4me3_cofactor_change.R" \
     --series series_a --series series_b --negative-references "-1,0" \
     --minimum-class-count 2 --minimum-interaction-cell-count 2 \
     --duckdb "$duckdb" \
-    >"$temporary/invalid-floor.stdout" 2>"$temporary/invalid-floor.stderr"; then
-    echo "E: an unobservable negative class was accepted" >&2
-    exit 1
-fi
-grep -Fq "cofactor scan floor is above a requested negative reference" \
-    "$temporary/invalid-floor.stderr"
+    >"$temporary/invalid-floor.stdout" 2>"$temporary/invalid-floor.stderr"
+"$duckdb" -batch :memory: >/dev/null <<SQL
+CREATE VIEW floor_result AS SELECT * FROM read_csv_auto(
+  '$temporary/invalid-floor-result_intensity_effect.tsv', delim='\t',
+  header=true, nullstr='NA');
+CREATE VIEW floor_gradient AS SELECT * FROM read_csv_auto(
+  '$temporary/invalid-floor-result_score_gradient.tsv', delim='\t',
+  header=true, nullstr='NA');
+SELECT CASE WHEN NOT EXISTS (
+  SELECT 1 FROM floor_result
+  WHERE negative_reference_threshold = -1
+    AND evaluation_status = 'negative_reference_below_source_floor'
+    AND NOT negative_reference_observable
+) THEN error('censored negative reference was not retained as an explicit status') END;
+SELECT CASE WHEN NOT EXISTS (
+  SELECT 1 FROM floor_gradient
+  WHERE score_clamp_reference = -1
+    AND evaluation_status = 'negative_reference_below_source_floor'
+) THEN error('censored score gradient was not retained as an explicit status') END;
+SELECT CASE WHEN NOT EXISTS (
+  SELECT 1 FROM floor_result
+  WHERE negative_reference_threshold = 0 AND negative_reference_observable
+) THEN error('observable threshold was lost beside a censored threshold') END;
+SQL
 
 echo "I: H3K4me3 cofactor-change synthetic test passed."

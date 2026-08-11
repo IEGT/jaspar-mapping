@@ -26,9 +26,9 @@ For GFP-referenced H3K4me3 change at TP73 anchors, read
 [`docs/h3k4me3_cofactor_change.md`](docs/h3k4me3_cofactor_change.md). The
 completed chromosome-1 result is reported in
 [`docs/h3k4me3_chr1_production_20260810.md`](docs/h3k4me3_chr1_production_20260810.md).
-For GFP-referenced H3K4me3 change, H3K4me3/input window selection, or
-cofactor-by-confirmed-TP73 effect modification, also read
-[`docs/h3k4me3_cofactor_change.md`](docs/h3k4me3_cofactor_change.md).
+For the schema-8 annotation rebuild and restart-safe whole-genome H3K4me3
+signal and all-JASPAR cofactor analysis, also read
+[`docs/h3k4me3_whole_genome_production.md`](docs/h3k4me3_whole_genome_production.md).
 
 For TP73-local motif spacing, tandem TP73 sites, or transcript/intron context,
 also read [`docs/tp73_motif_context.md`](docs/tp73_motif_context.md).
@@ -59,6 +59,13 @@ as the draft query contract:
   many-to-many promoter membership, and always bind `promoter_definition_id`.
   Membership means positive half-open interval overlap; mere abutment is not
   membership.
+- Use Q22 with `tp73_anchor_nearest_cds` when all tied nearest physical CDS
+  segments and transcript/gene owners matter. Use Q23 only for the compact,
+  deterministic anchor annotation covariates used by statistical models.
+- Treat TSSs, promoters, and `coding_sequence_segment` rows as physical
+  dimensions. Recover their transcript/gene ownership and CDS phase through
+  the corresponding bridge tables; exon and intron rows remain
+  transcript-specific because isoforms can assign different boundaries.
 - Keep large generated data out of Git; package it as versioned Parquet plus a
   rebuildable DuckDB query index.
 - Prefer the materialized `promoter_card` for low-latency agent lookups, bind

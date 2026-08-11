@@ -116,14 +116,18 @@ Strict TP73 support retains the established rule: one merged positive-coverage
 component must start before and end after the complete motif-alignment span.
 H3K4me3 is summarized over a window and is not subjected to strict immersion.
 
-Production builds pass the schema-7 `tp73_context_anchor` Parquet to both
-builders with `--anchor-source`. Those rows have already passed the declared
-TP73 local-peak selection. Tied orientation records at one alignment span are
-collapsed to one physical anchor using their maximum score, but the source
-selection is not recomputed. The evidence sidecar identifies this as
-`schema7_local_peak_context_anchor` and pins the exact source checksum.
-`--anchor-plus`/`--anchor-minus` remains available for reproducing older
-score-floor pilots; the two input modes are mutually exclusive.
+The chromosome-1 production build passed its then-current schema-7
+`tp73_context_anchor` Parquet with `--anchor-source`. Those rows had already
+passed the declared TP73 local-peak selection. Tied orientation records at one
+alignment span were collapsed to one physical anchor using their maximum score,
+without recomputing source selection.
+
+The whole-genome signal build instead passes each completed chromosome's
+TP73/control evidence with `--tp73-evidence-input`. This signal-only mode keeps
+the exact physical anchor set and reads only H3K4me3/input tracks; it does not
+repeat the strict-immersion calculation. `--anchor-source` and
+`--anchor-plus`/`--anchor-minus` remain available for older full and score-floor
+pilots, and all source modes are mutually exclusive.
 
 ## TP73 binding state
 
@@ -152,17 +156,28 @@ cells satisfy the declared minimum support.
 - The primary negative class is absent or score `< -1`.
 - The historical comparison uses absent or score `< 0` only when it does not
   overlap the positive class.
-- The evaluator rejects a negative-reference request below the cofactor scan's
-  retained score floor. Comparisons whose positive and negative score classes
-  overlap are marked invalid in every output rather than summarized as if they
-  were disjoint.
+- Each negative reference is evaluated independently. A reference below the
+  cofactor scan's retained score floor is emitted as
+  `negative_reference_below_source_floor`; an observable reference in the same
+  run remains analyzable. Comparisons whose positive and negative score classes
+  overlap are marked invalid rather than summarized as disjoint.
 - Intermediate anchors are excluded from that comparison, not relabelled.
-- All-zero H3K4me3/input anchors are retained. Their lack of occurrence is part
-  of the secondary gained/lost outcome.
+- Anchors with H3K4me3 area zero in GFP, TA, and DN are omitted from intensity
+  and continuous-score fits because they carry no mark-intensity information.
+  They remain in the secondary gained/lost occurrence summaries.
 - Linear-model uncertainty is clustered by 5 Mb genomic block.
 - Models are fit separately for each included series and for TA and DN.
 - Benjamini-Hochberg correction is applied separately by series, isoform, and
   negative reference. TP73-interaction contrasts form separate families.
+
+With schema-8 annotation, the primary adjustment includes a TP73-score spline,
+chromosome, compact genomic context, unsigned genomic distances to the nearest
+TSS and CDS, and explicit upstream/downstream/overlap/mixed-strand direction
+classes. The evaluator also writes context-stratified intensity
+effects (including strict intergenic) and a continuous cofactor-score
+sensitivity. The deterministic nearest-feature summaries are adjustment
+covariates; the normalized tied-nearest tables remain authoritative for
+biological interpretation.
 
 The evaluator writes intensity effects, TP73 interactions, binding-state
 summaries, occurrence summaries, cross-series directional summaries, and the
@@ -210,7 +225,7 @@ Full builds report separate timed phases for strict TP73/control evidence and
 H3K4me3/input window aggregation. Outputs are promoted from temporary scratch
 only after the corresponding DuckDB validation succeeds.
 
-## Schema-7 production run
+## Chromosome-1 production run
 
 The production driver resolves the chromosome-1 `tp73_context_anchor` Parquet
 from the finalized annotation catalog rather than from a filename pattern. The
@@ -249,3 +264,18 @@ cofactor thresholds, source commit, output checksums, and cardinality checks.
 Scratch-to-`/data` publication copies first to a hidden file beside the durable
 target and renames that file atomically, because a direct cross-filesystem
 `rename(2)` is not valid.
+
+## Whole-genome production
+
+The restart-safe whole-genome measurement, schema-8 annotation dependency, and
+all-JASPAR inference commands are specified in
+[`h3k4me3_whole_genome_production.md`](h3k4me3_whole_genome_production.md).
+Autosomes are primary; X/Y are retained as sensitivity data; mitochondria are
+excluded. The evaluator accepts repeated exact `--change`, `--annotation`, and
+`--cofactor-maxima` files, so finalized inventories are consumed without a
+wildcard or copied aggregate.
+
+One-motif checkpoints necessarily have a one-motif local BH family. Their
+`q_value_bh` is diagnostic. The whole-genome finalizer retains it as
+`q_value_bh_task` and computes `q_value_bh_all_motifs` across every planned
+non-TP73 motif within each declared series/isoform/reference/result family.

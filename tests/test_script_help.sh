@@ -39,6 +39,8 @@ scripts/fix_missing_bidirect_gz.sh
 scripts/genelists.sh
 scripts/inspect_chr1_dense_dry_run.sh
 scripts/manage_genome_scan.py
+scripts/manage_h3k4me3_cofactor_analysis.py
+scripts/manage_h3k4me3_genome_signal.py
 scripts/manage_motif_density_calibration.py
 scripts/manage_motif_threshold_calibration.py
 scripts/manage_tp73_cofactor_enrichment.py
@@ -54,6 +56,8 @@ scripts/run_genome_scan_slurm_chromosome.sh
 scripts/run_genome_scan_slurm_finalize.sh
 scripts/run_genome_scan_slurm_task.sh
 scripts/run_h3k4me3_chr1_production.py
+scripts/run_h3k4me3_cofactor_analysis_finalize.sh
+scripts/run_h3k4me3_genome_signal_finalize.sh
 scripts/run_motif_context_slurm_task.sh
 scripts/run_motif_density_calibration_finalize.sh
 scripts/run_motif_density_calibration_slurm.sh
@@ -76,6 +80,8 @@ scripts/stage_fasta_region.py
 scripts/stage_motif_context_inputs.py
 scripts/submit_genome_scan_slurm.sh
 scripts/submit_h3k4me3_chr1_production_slurm.sh
+scripts/submit_h3k4me3_cofactor_analysis_slurm.sh
+scripts/submit_h3k4me3_genome_signal_slurm.sh
 scripts/submit_motif_context_slurm.sh
 scripts/submit_motif_density_calibration_slurm.sh
 scripts/submit_motif_threshold_calibration_slurm.sh
