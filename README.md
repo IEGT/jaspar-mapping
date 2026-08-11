@@ -345,6 +345,12 @@ including fixed cofactor thresholds, primary enrichment/depletion models,
 depth-tier behavior, and comparison with the historical anchor population, is
 reported in
 [`docs/jaspar2026_chr1_localpeak_enrichment_20260810.md`](docs/jaspar2026_chr1_localpeak_enrichment_20260810.md).
+The production extension to whole-genome TP73/control evidence, autosomal
+zero-complete context counts, and all-JASPAR enrichment is specified in
+[`docs/jaspar2026_tp73_whole_genome_followup.md`](docs/jaspar2026_tp73_whole_genome_followup.md).
+It keeps X/Y as a sensitivity partition, mitochondrial aliases as a bystander
+control only, and marks negative-reference contrasts as censored whenever a
+density-raised scan floor makes absence uninformative.
 The separate GFP-referenced H3K4me3 change analysis uses condition-matched
 input, predeclared motif-centred windows, and per-series models without a
 persistent BED intermediate. Its contract and chromosome-1 pilot are recorded

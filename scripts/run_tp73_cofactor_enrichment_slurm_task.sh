@@ -20,6 +20,7 @@ Options:
   --source DIR               Repository root (default: script parent)
   --duckdb FILE              DuckDB CLI (default: duckdb)
   --rscript FILE             Rscript executable (default: Rscript)
+  --pre-staged-anchor FILE   Reuse a checksum-verified node-local anchor file
   --task-offset N            Add N to SLURM_ARRAY_TASK_ID (default: 0)
   --block-size BP            Genomic uncertainty block (default: 5000000)
   --spline-df N              TP73 score spline degrees of freedom (default: 4)
@@ -38,6 +39,7 @@ run_config=""
 source=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 duckdb=duckdb
 rscript=Rscript
+pre_staged_anchor=""
 task_offset=0
 block_size=5000000
 spline_df=4
@@ -51,6 +53,7 @@ while [[ $# -gt 0 ]]; do
         --source) source=${2:?}; shift 2 ;;
         --duckdb) duckdb=${2:?}; shift 2 ;;
         --rscript) rscript=${2:?}; shift 2 ;;
+        --pre-staged-anchor) pre_staged_anchor=${2:?}; shift 2 ;;
         --task-offset) task_offset=${2:?}; shift 2 ;;
         --block-size) block_size=${2:?}; shift 2 ;;
         --spline-df) spline_df=${2:?}; shift 2 ;;
@@ -77,6 +80,10 @@ done
 for path in "$task_file" "$run_config"; do
     [[ -f $path ]] || { echo "E: File not found: $path" >&2; exit 1; }
 done
+if [[ -n $pre_staged_anchor && ! -f $pre_staged_anchor ]]; then
+    echo "E: Pre-staged anchor not found: $pre_staged_anchor" >&2
+    exit 1
+fi
 [[ -x $duckdb ]] || duckdb=$(command -v "$duckdb" || true)
 [[ -x $rscript ]] || rscript=$(command -v "$rscript" || true)
 [[ -x $duckdb && -x $rscript ]] || {
@@ -158,9 +165,13 @@ done
     exit 1
 }
 [[ $(sha256_file "$source_marker") == "$source_marker_sha" &&
-   $(sha256_file "$source_maxima") == "$source_maxima_sha" &&
-   $(sha256_file "$anchor") == "$anchor_sha" ]] || {
+   $(sha256_file "$source_maxima") == "$source_maxima_sha" ]] || {
     echo "E: Planned input checksum changed for $motif_id." >&2
+    exit 1
+}
+anchor_to_verify=${pre_staged_anchor:-$anchor}
+[[ $(sha256_file "$anchor_to_verify") == "$anchor_sha" ]] || {
+    echo "E: Planned anchor checksum changed for $motif_id." >&2
     exit 1
 }
 
@@ -225,7 +236,7 @@ run_child() {
 scratch_base=${SLURM_TMPDIR:-/scratch/${USER:-sm718}}
 scratch="$scratch_base/jaspar-enrichment-${SLURM_JOB_ID:-manual}-${task_index}-restart-${SLURM_RESTART_COUNT:-0}-pid-$$"
 mkdir -p "$scratch"
-staged_anchor="$scratch/tp73_anchor_evidence.parquet"
+staged_anchor=${pre_staged_anchor:-$scratch/tp73_anchor_evidence.parquet}
 staged_maxima="$scratch/cofactor_maxima.parquet"
 thresholds="$scratch/threshold.tsv"
 prefix="$scratch/enrichment"
@@ -235,7 +246,9 @@ echo "I: Source task $source_task_index: $source_task_relative" >&2
 echo "I: Node-local work: $scratch" >&2
 
 phase=staging_inputs
-run_child cp "$anchor" "$staged_anchor"
+if [[ -z $pre_staged_anchor ]]; then
+    run_child cp "$anchor" "$staged_anchor"
+fi
 run_child cp "$source_maxima" "$staged_maxima"
 python3 - "$task_file" "$task_index" "$thresholds" <<'PY'
 import csv

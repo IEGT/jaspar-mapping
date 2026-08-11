@@ -227,14 +227,14 @@ kill -0 "$worker_pid"
 wait "$worker_pid"
 [[ $(grep -c 'progress signal=SIGUSR1' "$progress_log") == 1 ]]
 
-mkdir -p "$temporary/scratch-1"
-SLURM_ARRAY_TASK_ID=1 SLURM_TMPDIR="$temporary/scratch-1" \
-    bash "$repository_root/scripts/run_tp73_cofactor_enrichment_slurm_task.sh" \
+mkdir -p "$temporary/scratch-batch"
+SLURM_ARRAY_TASK_ID=0 SLURM_TMPDIR="$temporary/scratch-batch" \
+    bash "$repository_root/scripts/run_tp73_cofactor_enrichment_slurm_batch.sh" \
     --run-root "$run_root" --source-threshold-run "$source_run" \
     --task-file "$run_root/plan/enrichment_tasks.tsv" \
     --run-config "$run_root/plan/run_config.json" \
     --source "$repository_root" --duckdb "$duckdb" --rscript Rscript \
-    --block-size 50000 --spline-df 3
+    --motifs-per-job 2 --block-size 50000 --spline-df 3
 
 reuse=$(SLURM_ARRAY_TASK_ID=0 SLURM_TMPDIR="$temporary/scratch-0" \
     bash "$repository_root/scripts/run_tp73_cofactor_enrichment_slurm_task.sh" \

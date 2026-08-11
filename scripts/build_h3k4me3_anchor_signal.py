@@ -54,6 +54,11 @@ def sql_string(value: str | Path) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
+def canonical_chrom(value: str) -> str:
+    normalized = value[3:] if value.lower().startswith("chr") else value
+    return "mt" if normalized.lower() in {"m", "mt"} else normalized.lower()
+
+
 def sql_identifier(value: str) -> str:
     if not IDENTIFIER.fullmatch(value):
         raise SignalBuildError(f"unsafe SQL identifier: {value}")
@@ -203,7 +208,9 @@ def promote_file(source: Path, target: Path) -> None:
 
 
 def stage_track(track: Track, root: Path, scratch: Path, chrom: str,
-                rscript: str, exporter: Path) -> tuple[Path, Path]:
+                rscript: str, exporter: Path,
+                allow_empty: bool = False,
+                mitochondrial_aliases: bool = False) -> tuple[Path, Path]:
     source = (root / track.filename).resolve()
     if not source.is_file():
         raise SignalBuildError(f"track not found: {source}")
@@ -215,16 +222,22 @@ def stage_track(track: Track, root: Path, scratch: Path, chrom: str,
     output = scratch / (
         f"{track.series_id}_{track.condition}_{track.channel}_chr{chrom}.bedGraph"
     )
-    run([
+    command = [
         rscript, str(exporter), "--input", str(source), "--output", str(output),
         "--chrom", chrom,
-    ])
+    ]
+    if allow_empty:
+        command.append("--allow-empty")
+    if mitochondrial_aliases:
+        command.append("--mitochondrial-aliases")
+    run(command)
     return source, output
 
 
 def coverage_table_sql(index: int, path: Path, chrom: str) -> str:
     skip = leading_metadata_lines(path)
     name = f"coverage_{index}"
+    requested_chrom = canonical_chrom(chrom)
     return f"""
 CREATE OR REPLACE TEMP TABLE {name} AS
 WITH text_rows AS (
@@ -242,7 +255,11 @@ WITH text_rows AS (
 ), selected AS (
     SELECT start, interval_end, signal
     FROM text_rows
-    WHERE regexp_replace(lower(chrom_text), '^chr', '') = {sql_string(chrom)}
+    WHERE CASE
+              WHEN regexp_replace(lower(chrom_text), '^chr', '') IN ('m', 'mt')
+                  THEN 'mt'
+              ELSE regexp_replace(lower(chrom_text), '^chr', '')
+          END = {sql_string(requested_chrom)}
 ), checked AS (
     SELECT *, lag(interval_end) OVER (ORDER BY start, interval_end) AS previous_end
     FROM selected
@@ -589,7 +606,11 @@ def write_sidecars(base: Path, arguments: argparse.Namespace, tracks: list[Track
             })
     run_config = {
         "schema_version": 1,
-        "analysis": "h3k4me3_gfp_referenced_tp73_anchor_signal",
+        "analysis": (
+            "tp73_cutandrun_anchor_evidence"
+            if mode == "evidence_only"
+            else "h3k4me3_gfp_referenced_tp73_anchor_signal"
+        ),
         "mode": mode,
         "chrom": arguments.chrom,
         "chrom_length": arguments.chrom_length,
@@ -606,14 +627,14 @@ def write_sidecars(base: Path, arguments: argparse.Namespace, tracks: list[Track
                                     if track.included}),
         "excluded_series": sorted({track.series_id for track in tracks
                                     if not track.included}),
-        "windows": [
+        "windows": [] if mode == "evidence_only" else [
             {"window_name": "motif_span", "geometry": "anchor_alignment_span"},
             *[
                 {"window_name": name, "inner_bp": inner, "outer_bp": outer}
                 for name, inner, outer in windows
             ],
         ],
-        "profile": {
+        "profile": None if mode == "evidence_only" else {
             "condition": "GFP",
             "flank_bp": arguments.profile_flank,
             "bin_size_bp": arguments.profile_bin_size,
@@ -632,8 +653,8 @@ def parser() -> argparse.ArgumentParser:
     repository = Path(__file__).resolve().parent
     result = argparse.ArgumentParser(
         description=(
-            "Build a GFP-only H3K4me3/input metaprofile and, in full mode, "
-            "strict TP73 support plus windowed H3K4me3/input Parquet. BigWig "
+            "Build strict TP73 evidence, a GFP-only H3K4me3/input metaprofile, "
+            "or the complete windowed H3K4me3/input package. BigWig "
             "is converted only in temporary scratch; no persistent BED layer "
             "is created."
         )
@@ -655,7 +676,21 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--signal-output", type=Path)
     result.add_argument("--profile-output", type=Path)
     result.add_argument("--profile-only", action="store_true")
+    result.add_argument(
+        "--evidence-only", action="store_true",
+        help=(
+            "build only TP73/negative-control strict-immersion evidence; "
+            "allows chromosome tracks with no positive coverage"
+        ),
+    )
     result.add_argument("--chrom", default="1")
+    result.add_argument(
+        "--mitochondrial-chromosome", action="store_true",
+        help=(
+            "the run plan identifies --chrom as mitochondrial; accept M, MT, "
+            "and 25 (with optional chr prefix) in BigWig/bedGraph inputs"
+        ),
+    )
     result.add_argument("--chrom-length", type=int, required=True)
     result.add_argument("--minimum-anchor-score", type=float, default=0.0)
     result.add_argument(
@@ -706,9 +741,18 @@ def validate_arguments(arguments: argparse.Namespace) -> None:
         raise SignalBuildError("profile bin size must divide twice the profile flank")
     if arguments.profile_sample_size <= 0 or arguments.threads <= 0:
         raise SignalBuildError("profile sample size and threads must be positive")
+    if arguments.profile_only and arguments.evidence_only:
+        raise SignalBuildError("--profile-only and --evidence-only are exclusive")
     if arguments.profile_only:
         if arguments.profile_output is None:
             raise SignalBuildError("--profile-only requires --profile-output")
+    elif arguments.evidence_only:
+        if arguments.tp73_output is None:
+            raise SignalBuildError("--evidence-only requires --tp73-output")
+        if arguments.signal_output is not None or arguments.profile_output is not None:
+            raise SignalBuildError(
+                "--evidence-only does not accept signal/profile outputs"
+            )
     elif arguments.tp73_output is None or arguments.signal_output is None:
         raise SignalBuildError("full mode requires --tp73-output and --signal-output")
     outputs = [path for path in (
@@ -737,6 +781,9 @@ def main() -> int:
             required = [track for track in included
                         if track.condition == "GFP" and
                         track.channel in {"h3k4me3", "input"}]
+        elif arguments.evidence_only:
+            required = [track for track in included
+                        if track.channel in {"tp73", "negative_control"}]
         else:
             required = included
         temp_parent = arguments.tmpdir.resolve() if arguments.tmpdir else None
@@ -754,6 +801,8 @@ def main() -> int:
                 source, bedgraph = stage_track(
                     track, arguments.track_root, scratch, arguments.chrom,
                     arguments.rscript, arguments.bigwig_exporter,
+                    allow_empty=arguments.evidence_only,
+                    mitochondrial_aliases=arguments.mitochondrial_chromosome,
                 )
                 used.append((track, source, bedgraph))
 
@@ -780,7 +829,7 @@ def main() -> int:
                         "--anchor-minus", str(arguments.anchor_minus),
                     ]
                 )
-                run([
+                anchor_command = [
                     str(arguments.anchor_builder),
                     *anchor_arguments,
                     *coverage,
@@ -790,7 +839,12 @@ def main() -> int:
                     "--threads", str(arguments.threads),
                     "--memory-limit", arguments.memory_limit,
                     "--duckdb", arguments.duckdb,
-                ])
+                ]
+                if arguments.evidence_only:
+                    anchor_command.append("--allow-empty-coverage")
+                if arguments.mitochondrial_chromosome:
+                    anchor_command.append("--mitochondrial-chromosome")
+                run(anchor_command)
                 print(
                     "I: phase strict-evidence finished: "
                     f"{time.monotonic() - phase_start:.1f} seconds",
@@ -815,7 +869,19 @@ def main() -> int:
                     "profile_only" if arguments.profile_only else "full",
                 )
 
-            if not arguments.profile_only:
+            if arguments.evidence_only:
+                promote_file(staged_tp73, arguments.tp73_output)
+                for suffix in (".run_config.tsv", ".coverage_manifest.tsv"):
+                    source = Path(str(staged_tp73) + suffix)
+                    if source.exists():
+                        promote_file(
+                            source, Path(str(arguments.tp73_output) + suffix)
+                        )
+                write_sidecars(
+                    arguments.tp73_output, arguments, tracks, used, windows,
+                    "evidence_only",
+                )
+            elif not arguments.profile_only:
                 staged_signal = scratch / "h3k4me3_anchor_signal.parquet"
                 arguments.scratch_database = scratch / "signal.duckdb"
                 (scratch / "duckdb_tmp").mkdir()
@@ -854,7 +920,7 @@ def main() -> int:
                 write_sidecars(
                     arguments.signal_output, arguments, tracks, used, windows, "full"
                 )
-        print("I: H3K4me3 anchor signal build completed.", file=sys.stderr)
+        print("I: TP73/H3K4me3 anchor build completed.", file=sys.stderr)
         return 0
     except (OSError, SignalBuildError, ValueError) as error:
         print(f"E: {error}", file=sys.stderr)

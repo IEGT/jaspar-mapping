@@ -204,6 +204,8 @@ check-duckdb: cutandrun_score_calibration pssm_scan_parquet
 	bash tests/test_h3k4me3_chromosome_production.sh
 	bash tests/test_tp73_cofactor_enrichment_setup.sh
 	bash tests/test_tp73_cofactor_enrichment_manager.sh
+	bash tests/test_tp73_genome_evidence_manager.sh
+	bash tests/test_tp73_genome_context_maxima.sh
 	bash tests/test_sparse_parquet.sh
 	bash tests/test_sparse_parquet_parity.sh
 	bash tests/test_genome_scan_manager.sh

@@ -320,6 +320,12 @@ if (min(anchors$anchor_score) < tp73_breaks[[1L]] ||
     max(anchors$anchor_score) >= tail(tp73_breaks, 1L)) {
     stop("TP73 score breaks do not cover all anchors", call. = FALSE)
 }
+multi_chromosome <- uniqueN(anchors$chrom) > 1L
+chromosome_adjustment <- if (multi_chromosome) {
+    "chromosome fixed effect"
+} else {
+    "none (single chromosome)"
+}
 for (sample_index in seq_len(nrow(samples))) {
     for (antibody in c("anti", "control")) {
         support_column <- samples[[paste0(antibody, "_support")]][[sample_index]]
@@ -379,13 +385,12 @@ source_floors <- maxima[, .(
     source_score_floor = suppressWarnings(min(source_score_floor))
 ), by = motif_id]
 if (source_floors[, any(n_source_floors != 1L)] ||
-    source_floors[, any(!is.finite(source_score_floor))] ||
-    source_floors[, any(source_score_floor > min(negative_references))]) {
+    source_floors[, any(!is.finite(source_score_floor))]) {
     stop(
-        "each motif needs one source floor no greater than the smallest ",
-        "negative reference", call. = FALSE
+        "each motif needs exactly one finite source score floor", call. = FALSE
     )
 }
+setkey(source_floors, motif_id)
 
 format_boundary <- function(value) {
     if (is.infinite(value)) "+Inf" else format(value, trim = TRUE, scientific = FALSE)
@@ -501,6 +506,10 @@ for (motif_index in seq_len(nrow(thresholds))) {
         thresholds$positive_threshold_source[[motif_index]]
     selection_semantics <- thresholds$selection_semantics[[motif_index]]
     motif_maxima <- maxima[motif_id == current_motif]
+    motif_source_floor <- source_floors[current_motif, source_score_floor]
+    if (length(motif_source_floor) != 1L || !is.finite(motif_source_floor)) {
+        stop("missing source score floor for ", current_motif, call. = FALSE)
+    }
     motif_features <- motif_maxima[anchors, on = .(chrom, anchor_start, anchor_end)]
     if (nrow(motif_features) != nrow(anchors)) {
         stop("cofactor join changed anchor cardinality for ", current_motif,
@@ -508,8 +517,14 @@ for (motif_index in seq_len(nrow(thresholds))) {
     }
     score <- motif_features$context_score
     for (negative_reference in negative_references) {
+        negative_reference_observable <-
+            motif_source_floor <= negative_reference
         positive <- !is.na(score) & score >= positive_threshold
-        negative <- is.na(score) | score < negative_reference
+        negative <- if (negative_reference_observable) {
+            is.na(score) | score < negative_reference
+        } else {
+            rep(FALSE, length(score))
+        }
         intermediate <- !(positive | negative)
         if (any(positive & negative)) {
             stop("positive and negative classes overlap for ", current_motif,
@@ -527,7 +542,15 @@ for (motif_index in seq_len(nrow(thresholds))) {
                 positive_threshold = positive_threshold,
                 positive_threshold_source = positive_threshold_source,
                 selection_semantics = selection_semantics,
+                source_score_floor = motif_source_floor,
                 negative_reference_threshold = negative_reference,
+                negative_reference_observable =
+                    negative_reference_observable,
+                classification_status = if (negative_reference_observable) {
+                    "observable"
+                } else {
+                    "negative_reference_below_source_floor"
+                },
                 comparison_label = score_comparison_label(
                     positive_threshold, negative_reference
                 ),
@@ -546,7 +569,10 @@ for (motif_index in seq_len(nrow(thresholds))) {
         if (negative_reference == values$primary_negative_reference) {
             primary_inputs[[current_motif]] <- list(
                 positive = positive, negative = negative,
-                positive_threshold = positive_threshold
+                positive_threshold = positive_threshold,
+                source_score_floor = motif_source_floor,
+                negative_reference_observable =
+                    negative_reference_observable
             )
         }
 
@@ -624,7 +650,9 @@ for (motif_index in seq_len(nrow(thresholds))) {
                     eligible <- n_positive + n_negative
                     class_fraction <- if (eligible == 0L) 0 else
                         min(n_positive, n_negative) / eligible
-                    status <- if (n_positive == 0L || n_negative == 0L) {
+                    status <- if (!negative_reference_observable) {
+                        "negative_reference_below_source_floor"
+                    } else if (n_positive == 0L || n_negative == 0L) {
                         "empty_anchor_class"
                     } else if (class_fraction < values$minimum_class_fraction) {
                         "underpowered_anchor_class"
@@ -638,7 +666,10 @@ for (motif_index in seq_len(nrow(thresholds))) {
                         positive_threshold = positive_threshold,
                         positive_threshold_source = positive_threshold_source,
                         selection_semantics = selection_semantics,
+                        source_score_floor = motif_source_floor,
                         negative_reference_threshold = negative_reference,
+                        negative_reference_observable =
+                            negative_reference_observable,
                         comparison_label = score_comparison_label(
                             positive_threshold, negative_reference
                         ),
@@ -732,7 +763,8 @@ macro <- descriptive[, .(
     }
 ), by = .(
     motif_id, factor_name, positive_threshold, positive_threshold_source,
-    selection_semantics, negative_reference_threshold, comparison_label,
+    selection_semantics, source_score_floor, negative_reference_threshold,
+    negative_reference_observable, comparison_label,
     negative_reference_rule, tp73_score_stratum, depth_tier, depth_tier_order
 )]
 macro[!is.finite(
@@ -772,6 +804,16 @@ clustered_retained_test <- function(input) {
         evaluation_status = status,
         evaluation_note = note
     )
+    if (!input$negative_reference_observable) {
+        return(status_row(
+            "negative_reference_below_source_floor",
+            paste0(
+                "negative reference ", values$primary_negative_reference,
+                " is below retained scan floor ", input$source_score_floor,
+                "; absent rows cannot define the requested negative class"
+            )
+        ))
+    }
     if (eligible_total == 0L ||
         min(positive_fraction, negative_fraction) <
             values$minimum_class_fraction) {
@@ -801,11 +843,18 @@ clustered_retained_test <- function(input) {
         ))
     }
     evidence[, sample_id := factor(sample_id, levels = samples$sample_id)]
+    if (multi_chromosome) {
+        evidence[, chromosome := factor(
+            chrom, levels = sort(unique(anchors$chrom))
+        )]
+    }
     evidence[, genomic_block := paste(
         chrom, floor(anchor_start / values$block_size), sep = ":"
     )]
     formula <- as.formula(paste0(
-        "outcome ~ sample_id + splines::ns(anchor_score, df = ",
+        "outcome ~ sample_id",
+        if (multi_chromosome) " + chromosome" else "",
+        " + splines::ns(anchor_score, df = ",
         values$spline_df, ") + retained"
     ))
     fit <- tryCatch(
@@ -878,7 +927,8 @@ clustered_retained_test <- function(input) {
 message("I: fitting one primary matched occupancy test per motif")
 primary_rows <- lapply(seq_len(nrow(thresholds)), function(motif_index) {
     motif_id <- thresholds$motif_id[[motif_index]]
-    result <- clustered_retained_test(primary_inputs[[motif_id]])
+    input <- primary_inputs[[motif_id]]
+    result <- clustered_retained_test(input)
     result[, `:=`(
         motif_id = motif_id,
         factor_name = thresholds$factor_name[[motif_index]],
@@ -886,7 +936,10 @@ primary_rows <- lapply(seq_len(nrow(thresholds)), function(motif_index) {
         positive_threshold_source =
             thresholds$positive_threshold_source[[motif_index]],
         selection_semantics = thresholds$selection_semantics[[motif_index]],
+        source_score_floor = input$source_score_floor,
         negative_reference_threshold = values$primary_negative_reference,
+        negative_reference_observable =
+            input$negative_reference_observable,
         comparison_label = score_comparison_label(
             thresholds$positive_threshold[[motif_index]],
             values$primary_negative_reference
@@ -895,7 +948,8 @@ primary_rows <- lapply(seq_len(nrow(thresholds)), function(motif_index) {
         outcome = "strict_immersion",
         matched_design = "anti_p73_vs_its_matched_control",
         adjustment = paste0(
-            "sample fixed effect + TP73 natural spline(df=",
+            "sample fixed effect + ", chromosome_adjustment,
+            " + TP73 natural spline(df=",
             values$spline_df, ")"
         ),
         unavailable_covariates = paste(
@@ -922,7 +976,8 @@ primary[, `:=`(
 setcolorder(primary, c(
     "motif_id", "factor_name", "positive_threshold",
     "positive_threshold_source", "selection_semantics",
-    "negative_reference_threshold", "comparison_label",
+    "source_score_floor", "negative_reference_threshold",
+    "negative_reference_observable", "comparison_label",
     "negative_reference_rule", "outcome", "matched_design", "adjustment",
     "anchors_total", "anchors_positive", "anchors_negative_reference",
     "anchors_intermediate", "discordant_observations", "genomic_blocks",
@@ -947,6 +1002,10 @@ run_config <- data.table(
     negative_reference_thresholds = paste(negative_references, collapse = ","),
     primary_negative_reference = values$primary_negative_reference,
     negative_reference_semantics = "strict context_score < N or absent",
+    negative_reference_observability = paste(
+        "absence is classifiable as score<N only when",
+        "source_score_floor<=N; otherwise that contrast is non-estimable"
+    ),
     positive_semantics = "inclusive context_score >= T",
     intermediate_semantics = "excluded N <= context_score < T",
     context_flank_bp = 150,
@@ -964,9 +1023,12 @@ run_config <- data.table(
         "conditioning"
     ),
     primary_formula = paste0(
-        "outcome ~ sample_id + ns(anchor_score,df=", values$spline_df,
+        "outcome ~ sample_id",
+        if (multi_chromosome) " + chromosome" else "",
+        " + ns(anchor_score,df=", values$spline_df,
         ") + retained"
     ),
+    chromosome_adjustment = chromosome_adjustment,
     block_size_bp = values$block_size,
     spline_df = values$spline_df,
     minimum_class_fraction = values$minimum_class_fraction,

@@ -33,6 +33,7 @@ SCIENTIFIC_SOURCE_FILES = (
     "scripts/manage_tp73_cofactor_enrichment.py",
     "scripts/run_tp73_cofactor_enrichment_finalize.sh",
     "scripts/run_tp73_cofactor_enrichment_setup.sh",
+    "scripts/run_tp73_cofactor_enrichment_slurm_batch.sh",
     "scripts/run_tp73_cofactor_enrichment_slurm_task.sh",
     "scripts/submit_tp73_cofactor_enrichment_slurm.sh",
 )
@@ -243,12 +244,16 @@ def prepare(arguments: argparse.Namespace) -> None:
     )
     if not anchor.is_file():
         raise EnrichmentError(f"TP73 anchor evidence is missing: {anchor}")
-    registry = (
-        arguments.threshold_registry.expanduser().resolve()
-        if arguments.threshold_registry is not None
-        else source_run / "final" / "threshold_calibration" / "tables" /
-        "jaspar2026" / "motif_score_threshold" / "part-000000.parquet"
-    )
+    configured_registry = source_config.get("threshold_registry")
+    if arguments.threshold_registry is not None:
+        registry = arguments.threshold_registry.expanduser().resolve()
+    elif configured_registry:
+        registry = Path(str(configured_registry)).expanduser().resolve()
+    else:
+        registry = (
+            source_run / "final" / "threshold_calibration" / "tables" /
+            "jaspar2026" / "motif_score_threshold" / "part-000000.parquet"
+        )
     if not registry.is_file():
         raise EnrichmentError(f"final threshold registry is missing: {registry}")
 
@@ -317,11 +322,29 @@ def prepare(arguments: argparse.Namespace) -> None:
             or int(anchor_validation[0]["support_depth_mismatches"]) != 0):
         raise EnrichmentError("anchor support/depth validation failed")
 
+    registry_description = run_json([
+        duckdb, "-light-mode", "-json", ":memory:", "-c",
+        f"DESCRIBE SELECT * FROM read_parquet({sql_string(registry)});",
+    ])
+    registry_columns = {
+        str(row["column_name"]) for row in registry_description
+    }
+    source_recommendation_sql = (
+        "source_recommended_threshold::DOUBLE AS source_recommended_threshold"
+        if "source_recommended_threshold" in registry_columns else
+        "recommended_threshold::DOUBLE AS source_recommended_threshold"
+    )
+    application_status_sql = (
+        "calibration_status::VARCHAR AS threshold_application_status"
+        if "source_recommended_threshold" in registry_columns else
+        "NULL::VARCHAR AS threshold_application_status"
+    )
     registry_rows = run_json([
         duckdb, "-light-mode", "-json", ":memory:", "-c",
         "SELECT motif_id::VARCHAR AS motif_id, motif_name::VARCHAR AS motif_name, "
         "recommended_threshold::DOUBLE AS recommended_threshold, "
-        "calibration_status::VARCHAR AS calibration_status "
+        "calibration_status::VARCHAR AS calibration_status, "
+        f"{source_recommendation_sql}, {application_status_sql} "
         f"FROM read_parquet({sql_string(registry)}) ORDER BY motif_id;",
     ])
     registry_by_motif = {str(row["motif_id"]): row for row in registry_rows}
@@ -348,6 +371,9 @@ def prepare(arguments: argparse.Namespace) -> None:
         maxima, marker, marker_path = validate_source_task(source_run, source_row)
         registry_row = registry_by_motif[motif_id]
         recommendation = registry_row.get("recommended_threshold")
+        application_status = str(
+            registry_row.get("threshold_application_status") or ""
+        )
         if recommendation is None:
             fallback_count += 1
             recommended_text = "NA"
@@ -358,13 +384,32 @@ def prepare(arguments: argparse.Namespace) -> None:
                 "fallback_zero_for_all_motif_coverage;"
                 "registry_recommendation_remains_null"
             )
+        elif application_status.startswith("fallback_"):
+            fallback_count += 1
+            recommended_text = format(float(recommendation), ".17g")
+            positive_threshold = float(recommendation)
+            threshold_source = "explicit_fallback_bounded_by_scan_retention_floor"
+            threshold_role = "descriptive_fallback"
+            semantics = (
+                "no_chr1_context_recommendation;fallback_zero_then_raise_to_"
+                "scan_floor_if_required"
+            )
+        elif application_status == "raised_to_scan_retention_floor":
+            recommended_text = format(float(recommendation), ".17g")
+            positive_threshold = float(recommendation)
+            threshold_source = "density_limited_genome_scan_retention_floor"
+            threshold_role = "scan_floor_limited_operating_point"
+            semantics = (
+                "chr1_recommendation_unreachable_in_retained_scan;"
+                "use_inclusive_scan_floor"
+            )
         else:
             recommended_text = format(float(recommendation), ".17g")
             positive_threshold = float(recommendation)
             threshold_source = "historical_threshold_complement_recommendation"
             threshold_role = "historical_operating_point"
             semantics = (
-                "fixed_historical_operating_point;exploratory_reuse_on_chr1"
+                "fixed_chr1_context_operating_point;exploratory_reuse"
             )
         relative = maxima.relative_to(source_run)
         writer.writerow({
@@ -381,7 +426,10 @@ def prepare(arguments: argparse.Namespace) -> None:
             "positive_threshold_source": threshold_source,
             "positive_threshold_role": threshold_role,
             "selection_semantics": semantics,
-            "source_calibration_status": registry_row.get("calibration_status") or "unknown",
+            "source_calibration_status": (
+                application_status or registry_row.get("calibration_status") or
+                "unknown"
+            ),
         })
     task_path = run_root / "plan" / "enrichment_tasks.tsv"
     immutable_write(task_path, output.getvalue())
@@ -396,10 +444,23 @@ def prepare(arguments: argparse.Namespace) -> None:
         if not path.is_file():
             raise EnrichmentError(f"scientific source file is missing: {path}")
         source_file_sha256[relative_name] = sha256(path)
+    source_analysis_scope = str(source_config.get(
+        "analysis_scope",
+        "all_non_target_jaspar2026_motifs_vs_tp73_chr1_cutrun",
+    ))
+    source_inference_status = str(source_config.get(
+        "inference_status",
+        "exploratory chr1; operating points selected on chr1; no independent validation",
+    ))
+    multiple_testing_scope_label = (
+        "all planned non-TP73 JASPAR 2026 motifs on autosomes 1-22; exploratory"
+        if "autosome" in source_analysis_scope else
+        "all planned non-TP73 JASPAR 2026 motifs on chromosome 1; exploratory"
+    )
     config = {
         "schema_version": 1,
         "run_id": arguments.run_id,
-        "analysis_scope": "all_non_target_jaspar2026_motifs_vs_tp73_chr1_cutrun",
+        "analysis_scope": source_analysis_scope,
         "task_count": len(source_rows),
         "fallback_zero_task_count": fallback_count,
         "source_threshold_run": str(source_run),
@@ -435,10 +496,8 @@ def prepare(arguments: argparse.Namespace) -> None:
         "minimum_class_fraction": arguments.minimum_class_fraction,
         "multiple_testing_family_size": len(source_rows),
         "multiple_testing_method": "Benjamini-Hochberg across all planned motifs",
-        "inference_status": (
-            "exploratory chr1; operating points selected on chr1; "
-            "no independent validation"
-        ),
+        "multiple_testing_scope_label": multiple_testing_scope_label,
+        "inference_status": source_inference_status,
         "enrichment_task_plan_sha256": sha256(task_path),
     }
     immutable_write(
@@ -650,7 +709,7 @@ SELECT p.* EXCLUDE (
        a.q_value_bh_all_jaspar,
        {task_count}::BIGINT AS requested_motifs_in_multiple_testing_scope,
        c.estimable_motifs AS estimable_motifs_in_multiple_testing_scope,
-       'all planned non-TP73 JASPAR 2026 motifs on chromosome 1; exploratory'
+       {sql_string(config['multiple_testing_scope_label'])}
            AS multiple_testing_scope,
        CASE
          WHEN p.evaluation_status <> 'ok' THEN 'not_estimable'

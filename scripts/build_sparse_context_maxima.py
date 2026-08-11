@@ -43,6 +43,32 @@ def parse_cofactors(
     return cofactors
 
 
+def parse_cofactor_spans(
+    values: list[list[str]], cofactors: list[tuple[str, Path, Path]]
+) -> dict[str, int]:
+    spans: dict[str, int] = {}
+    for motif_id, span_text in values:
+        if motif_id in spans:
+            raise ContextMaximaError(f"duplicate cofactor span: {motif_id}")
+        try:
+            span = int(span_text)
+        except ValueError as error:
+            raise ContextMaximaError(
+                f"cofactor span is not an integer for {motif_id}: {span_text}"
+            ) from error
+        if span <= 0:
+            raise ContextMaximaError(
+                f"cofactor span must be positive for {motif_id}"
+            )
+        spans[motif_id] = span
+    requested = {motif_id for motif_id, _, _ in cofactors}
+    if spans and set(spans) != requested:
+        raise ContextMaximaError(
+            "when supplied, --cofactor-span must cover every requested motif"
+        )
+    return spans
+
+
 def hit_union_sql(cofactors: list[tuple[str, Path, Path]]) -> str:
     selects: list[str] = []
     for motif_id, plus, minus in cofactors:
@@ -64,6 +90,16 @@ def motif_values_sql(cofactors: list[tuple[str, Path, Path]]) -> str:
 
 def motif_id_list_sql(cofactors: list[tuple[str, Path, Path]]) -> str:
     return ",".join(sql_string(motif_id) for motif_id, _, _ in cofactors)
+
+
+def declared_span_sql(spans: dict[str, int]) -> str:
+    if not spans:
+        return "SELECT NULL::VARCHAR AS motif_id, NULL::BIGINT AS span_bp WHERE false"
+    values = ",".join(
+        f"({sql_string(motif_id)}, {span})"
+        for motif_id, span in sorted(spans.items())
+    )
+    return f"SELECT * FROM (VALUES {values}) AS declared(motif_id, span_bp)"
 
 
 def threshold_source_sql(
@@ -123,7 +159,8 @@ WHERE threshold_set_id = {sql_string(arguments.threshold_set_id)}
 
 
 def build_sql(arguments: argparse.Namespace, cofactors: list[tuple[str, Path, Path]],
-              staging_output: Path, temp_directory: Path) -> str:
+              spans: dict[str, int], staging_output: Path,
+              temp_directory: Path) -> str:
     return f"""
 SET threads={arguments.threads};
 SET memory_limit={sql_string(arguments.memory_limit)};
@@ -145,11 +182,18 @@ anchor_input AS (
 hit_input AS (
     {hit_union_sql(cofactors)}
 ),
+declared_span AS (
+    {declared_span_sql(spans)}
+),
 span_parameter AS (
     SELECT
         MAX(anchor_end - anchor_start)::BIGINT AS max_anchor_span_bp,
-        (SELECT MAX(hit_end - start)::BIGINT FROM hit_input)
-            AS max_context_span_bp
+        COALESCE(
+            (SELECT MAX(hit_end - start)::BIGINT FROM hit_input), 0
+        )::BIGINT AS observed_max_context_span_bp,
+        COALESCE(
+            (SELECT MAX(span_bp)::BIGINT FROM declared_span), 0
+        )::BIGINT AS declared_max_context_span_bp
     FROM anchor_input
 ),
 parameter AS (
@@ -157,10 +201,19 @@ parameter AS (
         {arguments.flank}::BIGINT AS context_flank_bp,
         GREATEST(
             1,
-            {arguments.flank} + max_anchor_span_bp + max_context_span_bp
+            {arguments.flank} + max_anchor_span_bp +
+                GREATEST(
+                    observed_max_context_span_bp,
+                    declared_max_context_span_bp
+                )
         )::BIGINT AS capture_prefilter_center_bp,
         max_anchor_span_bp,
-        max_context_span_bp
+        observed_max_context_span_bp,
+        declared_max_context_span_bp,
+        GREATEST(
+            observed_max_context_span_bp,
+            declared_max_context_span_bp
+        )::BIGINT AS effective_max_context_span_bp
     FROM span_parameter
 ),
 anchors AS (
@@ -299,7 +352,9 @@ SELECT
     p.context_flank_bp,
     p.capture_prefilter_center_bp,
     p.max_anchor_span_bp AS observed_max_anchor_span_bp,
-    p.max_context_span_bp AS observed_max_context_span_bp,
+    p.observed_max_context_span_bp,
+    p.declared_max_context_span_bp,
+    p.effective_max_context_span_bp,
     'signed_interval_edge_distance'::VARCHAR AS context_distance_metric
 FROM features f
 CROSS JOIN parameter p
@@ -467,9 +522,16 @@ SELECT
     MIN(capture_prefilter_center_bp)::BIGINT AS capture_prefilter_center_bp,
     MIN(observed_max_anchor_span_bp)::BIGINT AS observed_max_anchor_span_bp,
     MIN(observed_max_context_span_bp)::BIGINT AS observed_max_context_span_bp,
+    MIN(declared_max_context_span_bp)::BIGINT AS declared_max_context_span_bp,
+    MIN(effective_max_context_span_bp)::BIGINT AS effective_max_context_span_bp,
     COUNT(DISTINCT capture_prefilter_center_bp)::BIGINT AS prefilter_values,
     COUNT(DISTINCT observed_max_anchor_span_bp)::BIGINT AS anchor_span_values,
-    COUNT(DISTINCT observed_max_context_span_bp)::BIGINT AS context_span_values
+    COUNT(DISTINCT observed_max_context_span_bp)::BIGINT
+        AS observed_context_span_values,
+    COUNT(DISTINCT declared_max_context_span_bp)::BIGINT
+        AS declared_context_span_values,
+    COUNT(DISTINCT effective_max_context_span_bp)::BIGINT
+        AS effective_context_span_values
 FROM output;
 """
     process = subprocess.run(
@@ -492,10 +554,16 @@ FROM output;
         raise ContextMaximaError("anchor input produced no context-maximum rows")
     if any(rows[0].get(key) is None for key in (
         "capture_prefilter_center_bp", "observed_max_anchor_span_bp",
-        "observed_max_context_span_bp",
+        "observed_max_context_span_bp", "declared_max_context_span_bp",
+        "effective_max_context_span_bp",
     )):
         raise ContextMaximaError("anchor or motif-hit inputs lack interval spans")
     result = {key: int(value) for key, value in rows[0].items()}
+    if (result["observed_max_anchor_span_bp"] <= 0
+            or result["effective_max_context_span_bp"] <= 0):
+        raise ContextMaximaError(
+            "empty motif-hit inputs require a positive --cofactor-span"
+        )
     if result["chromosomes"] != 1:
         raise ContextMaximaError(
             "anchor input must contain exactly one chromosome because sparse "
@@ -510,7 +578,9 @@ FROM output;
     if result["duplicate_keys"] != 0 or result["scores_below_source_floor"] != 0:
         raise ContextMaximaError("output failed key or source-score-floor validation")
     if any(result[key] != 1 for key in (
-        "prefilter_values", "anchor_span_values", "context_span_values"
+        "prefilter_values", "anchor_span_values",
+        "observed_context_span_values", "declared_context_span_values",
+        "effective_context_span_values",
     )):
         raise ContextMaximaError("output contains inconsistent geometry provenance")
     if threshold_configured:
@@ -532,6 +602,7 @@ def write_run_config(
     path: Path,
     arguments: argparse.Namespace,
     cofactors: list[tuple[str, Path, Path]],
+    spans: dict[str, int],
     result: dict[str, int],
 ) -> None:
     fieldnames = (
@@ -540,7 +611,9 @@ def write_run_config(
         "threshold_parquet", "threshold_set_id", "threshold_role",
         "calibration_stratum_id", "thresholded_loci",
         "capture_prefilter_center_bp", "observed_max_anchor_span_bp",
-        "observed_max_context_span_bp", "rows", "anchors",
+        "observed_max_context_span_bp", "declared_max_context_span_bp",
+        "effective_max_context_span_bp", "declared_context_span_bp",
+        "rows", "anchors",
     )
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(
@@ -573,6 +646,11 @@ def write_run_config(
                     result["observed_max_anchor_span_bp"],
                 "observed_max_context_span_bp":
                     result["observed_max_context_span_bp"],
+                "declared_max_context_span_bp":
+                    result["declared_max_context_span_bp"],
+                "effective_max_context_span_bp":
+                    result["effective_max_context_span_bp"],
+                "declared_context_span_bp": spans.get(motif_id, ""),
                 "rows": result["rows"],
                 "anchors": result["anchors"],
             })
@@ -602,6 +680,7 @@ def build(arguments: argparse.Namespace) -> None:
     if run_config.exists():
         raise ContextMaximaError(f"run config already exists: {run_config}")
     cofactors = parse_cofactors(arguments.cofactor)
+    cofactor_spans = parse_cofactor_spans(arguments.cofactor_span, cofactors)
     validate_threshold_input(arguments, cofactors)
 
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
@@ -622,7 +701,10 @@ def build(arguments: argparse.Namespace) -> None:
     staging_output.unlink()
     staging_run_config = Path(f"{staging_output}.run_config.tsv")
     try:
-        sql = build_sql(arguments, cofactors, staging_output, working_directory)
+        sql = build_sql(
+            arguments, cofactors, cofactor_spans, staging_output,
+            working_directory
+        )
         run_duckdb(arguments.duckdb, sql)
         result = validate_output(
             arguments.duckdb,
@@ -630,7 +712,9 @@ def build(arguments: argparse.Namespace) -> None:
             len(cofactors),
             arguments.threshold_parquet is not None,
         )
-        write_run_config(staging_run_config, arguments, cofactors, result)
+        write_run_config(
+            staging_run_config, arguments, cofactors, cofactor_spans, result
+        )
         os.replace(staging_output, arguments.output)
         os.replace(staging_run_config, run_config)
     finally:
@@ -675,6 +759,17 @@ def argument_parser() -> argparse.ArgumentParser:
         help=(
             "stable motif accession and its exact, single-chromosome plus/minus "
             "sparse Parquet files; repeat"
+        ),
+    )
+    parser.add_argument(
+        "--cofactor-span",
+        action="append",
+        nargs=2,
+        default=[],
+        metavar=("MOTIF_ID", "SPAN_BP"),
+        help=(
+            "catalog-pinned motif span used when a chromosome emits no hits; "
+            "when supplied, repeat for every --cofactor"
         ),
     )
     parser.add_argument(

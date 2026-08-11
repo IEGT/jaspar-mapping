@@ -23,7 +23,7 @@ Rscript -e 'library(data.table)' >/dev/null 2>&1 || {
 "$duckdb" -batch :memory: >/dev/null <<SQL
 COPY (
     SELECT
-        '1'::VARCHAR AS chrom,
+        CASE WHEN i < 200 THEN '1' ELSE '2' END::VARCHAR AS chrom,
         (i * 1000)::BIGINT AS anchor_start,
         (i * 1000 + 16)::BIGINT AS anchor_end,
         (((i * 7) % 17) / 2.0)::FLOAT AS anchor_score,
@@ -64,7 +64,7 @@ COPY (
 
 COPY (
     SELECT
-        '1'::VARCHAR AS chrom,
+        CASE WHEN i < 200 THEN '1' ELSE '2' END::VARCHAR AS chrom,
         (i * 1000)::BIGINT AS anchor_start,
         (i * 1000 + 16)::BIGINT AS anchor_end,
         motif_id,
@@ -77,15 +77,18 @@ COPY (
             WHEN motif_id = 'M_DEPLETED' AND i % 8 = 7 THEN -1.0
             ELSE NULL
         END::FLOAT AS context_score,
-        -1.0::DOUBLE AS source_score_floor,
+        CASE WHEN motif_id = 'M_CENSORED' THEN 2.0
+             ELSE -1.0 END::DOUBLE AS source_score_floor,
         150::BIGINT AS context_flank_bp,
         'signed_interval_edge_distance'::VARCHAR AS context_distance_metric
     FROM range(400) AS r(i)
-    CROSS JOIN (VALUES ('M_DEPLETED'), ('M_ENRICHED')) AS m(motif_id)
+    CROSS JOIN (VALUES
+        ('M_CENSORED'), ('M_DEPLETED'), ('M_ENRICHED')
+    ) AS m(motif_id)
 ) TO '$temporary/maxima.parquet' (FORMAT PARQUET);
 SQL
 
-printf 'motif_id\tpositive_threshold\tfactor_name\tpositive_threshold_source\tselection_semantics\nM_DEPLETED\t4\tSynthetic depleted\ttest_fixture\tprespecified\nM_ENRICHED\t4\tSynthetic enriched\ttest_fixture\tprespecified\n' \
+printf 'motif_id\tpositive_threshold\tfactor_name\tpositive_threshold_source\tselection_semantics\nM_CENSORED\t4\tSynthetic censored\ttest_fixture\tprespecified\nM_DEPLETED\t4\tSynthetic depleted\ttest_fixture\tprespecified\nM_ENRICHED\t4\tSynthetic enriched\ttest_fixture\tprespecified\n' \
     > "$temporary/thresholds.tsv"
 
 Rscript "$repository_root/scripts/analyze_tp73_cofactor_enrichment.R" \
@@ -157,13 +160,32 @@ SELECT CASE WHEN NOT EXISTS (
       AND factor_name = 'Synthetic enriched'
       AND comparison_label = 'score>=4 versus score<-1'
       AND negative_reference_threshold = -1
-      AND adjusted_odds_ratio > 1 AND p_value IS NOT NULL
+      AND try_cast(adjusted_odds_ratio AS DOUBLE) > 1
+      AND try_cast(p_value AS DOUBLE) IS NOT NULL
 ) THEN error('primary matched test missed enrichment') END;
 SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM primary_test
     WHERE motif_id = 'M_DEPLETED' AND evaluation_status = 'ok'
-      AND adjusted_odds_ratio < 1 AND p_value IS NOT NULL
+      AND try_cast(adjusted_odds_ratio AS DOUBLE) < 1
+      AND try_cast(p_value AS DOUBLE) IS NOT NULL
 ) THEN error('primary matched test missed depletion') END;
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM primary_test
+    WHERE motif_id = 'M_CENSORED'
+      AND source_score_floor = 2
+      AND negative_reference_threshold = -1
+      AND NOT negative_reference_observable
+      AND evaluation_status = 'negative_reference_below_source_floor'
+      AND evaluation_note LIKE '%absent rows cannot define%'
+) THEN error('unobservable negative class was treated as evidence') END;
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM classes
+    WHERE motif_id = 'M_CENSORED' AND tp73_score_stratum = 'all'
+      AND negative_reference_threshold = -1
+      AND NOT negative_reference_observable
+      AND classification_status = 'negative_reference_below_source_floor'
+      AND anchors_negative_reference = 0 AND anchors_intermediate = 400
+) THEN error('censored negative class was not explicit') END;
 SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM run_config
     WHERE negative_reference_semantics = 'strict context_score < N or absent'
@@ -171,7 +193,9 @@ SELECT CASE WHEN NOT EXISTS (
       AND context_geometry = 'signed_interval_edge_distance'
       AND evidence_column_scheme = 'supported_tp73_and_negative_control'
       AND sample_count = 2
-      AND chromosomes = '1'
+      AND chromosomes = '1,2'
+      AND chromosome_adjustment = 'chromosome fixed effect'
+      AND primary_formula LIKE '% + chromosome + %'
       AND inference_status = 'synthetic_held_out_validation'
 ) THEN error('run provenance omits comparison semantics') END;
 SQL

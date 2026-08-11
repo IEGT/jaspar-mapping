@@ -42,6 +42,8 @@ scripts/manage_genome_scan.py
 scripts/manage_motif_density_calibration.py
 scripts/manage_motif_threshold_calibration.py
 scripts/manage_tp73_cofactor_enrichment.py
+scripts/manage_tp73_genome_context_maxima.py
+scripts/manage_tp73_genome_evidence.py
 scripts/plot_h3k4me3_metaprofile.R
 scripts/plot_informative_threshold_distribution.py
 scripts/plot_tp73_score_distributions.R
@@ -60,9 +62,14 @@ scripts/run_motif_threshold_calibration_finalize.sh
 scripts/run_motif_threshold_calibration_slurm_task.sh
 scripts/run_negative_threshold_sensitivity_finalize.sh
 scripts/run_negative_threshold_sensitivity_slurm_task.sh
+scripts/run_tp73_chromosome_production.py
 scripts/run_tp73_cofactor_enrichment_finalize.sh
 scripts/run_tp73_cofactor_enrichment_setup.sh
+scripts/run_tp73_cofactor_enrichment_slurm_batch.sh
 scripts/run_tp73_cofactor_enrichment_slurm_task.sh
+scripts/run_tp73_genome_context_maxima_batch.py
+scripts/run_tp73_genome_context_maxima_finalize.sh
+scripts/run_tp73_genome_evidence_finalize.sh
 scripts/run_what_is_missing.sh
 scripts/shift_bed.awk
 scripts/stage_fasta_region.py
@@ -74,6 +81,8 @@ scripts/submit_motif_density_calibration_slurm.sh
 scripts/submit_motif_threshold_calibration_slurm.sh
 scripts/submit_negative_threshold_sensitivity_slurm.sh
 scripts/submit_tp73_cofactor_enrichment_slurm.sh
+scripts/submit_tp73_genome_context_maxima_slurm.sh
+scripts/submit_tp73_genome_evidence_slurm.sh
 scripts/summarize_tp73_cutandrun_threshold.R
 scripts/summarize_tp73_patz1_cutandrun_threshold.R
 EOF
@@ -128,7 +137,7 @@ done < "$expected"
 
 assert_help "OverlapTfPromoters/localMaxSkmelTADN.pl"
 
-scanner_build=$($repository_root/pssm_scan --version-json)
+scanner_build=$("$repository_root/pssm_scan" --version-json)
 python3 - "$scanner_build" <<'PY'
 import json
 import sys

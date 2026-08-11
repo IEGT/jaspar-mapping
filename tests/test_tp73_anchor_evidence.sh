@@ -12,6 +12,22 @@ command -v "$duckdb" >/dev/null 2>&1 || {
     exit 0
 }
 
+python3 - "$repository_root" <<'PY'
+import importlib.util
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1]) / "scripts" / "export_bigwig_chrom_bedgraph.py"
+spec = importlib.util.spec_from_file_location("bigwig_export", path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+assert module.normalize_chrom("chrM") == "MT"
+assert module.normalize_chrom("MT") == "MT"
+assert module.normalize_chrom("chr1") == "1"
+assert module.chrom_matches("chr25", "MT", True)
+assert not module.chrom_matches("chr25", "MT", False)
+PY
+
 "$duckdb" -batch :memory: >/dev/null <<SQL
 COPY (
     SELECT * FROM (VALUES
@@ -123,5 +139,44 @@ SELECT CASE WHEN NOT EXISTS (
 SQL
 grep -Fq $'schema7_local_peak_context_anchor\t' \
     "$temporary/selected-anchors.parquet.run_config.tsv"
+
+: > "$temporary/empty.bedGraph"
+"$repository_root/scripts/build_tp73_anchor_evidence.py" \
+    --anchor-source "$temporary/context-anchor.parquet" \
+    --coverage supported_empty="$temporary/empty.bedGraph" \
+    --output "$temporary/empty-coverage-anchors.parquet" --chrom MT \
+    --minimum-anchor-score -1 --allow-empty-coverage --duckdb "$duckdb"
+"$duckdb" -batch :memory: >/dev/null <<SQL
+SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM read_parquet('$temporary/empty-coverage-anchors.parquet')
+    WHERE supported_empty OR depth_empty <> 0
+) THEN error('empty chromosome coverage did not become zero support') END;
+SQL
+grep -Fq $'zero_support\t' \
+    "$temporary/empty-coverage-anchors.parquet.run_config.tsv"
+
+if "$repository_root/scripts/build_tp73_anchor_evidence.py" \
+    --anchor-source "$temporary/context-anchor.parquet" \
+    --coverage supported_empty="$temporary/empty.bedGraph" \
+    --output "$temporary/strict-empty.parquet" --chrom MT \
+    --minimum-anchor-score -1 --duckdb "$duckdb" \
+    > "$temporary/strict-empty.out" 2> "$temporary/strict-empty.err"; then
+    echo "E: strict empty-coverage mode unexpectedly succeeded." >&2
+    exit 1
+fi
+grep -Fq 'coverage has no positive rows' "$temporary/strict-empty.err"
+
+printf '%s\n' $'chr25\t5\t17\t3' > "$temporary/mitochondrial.bedGraph"
+"$repository_root/scripts/build_tp73_anchor_evidence.py" \
+    --anchor-source "$temporary/context-anchor.parquet" \
+    --coverage supported_mt="$temporary/mitochondrial.bedGraph" \
+    --output "$temporary/mitochondrial-anchors.parquet" --chrom MT \
+    --minimum-anchor-score -1 --mitochondrial-chromosome --duckdb "$duckdb"
+"$duckdb" -batch :memory: >/dev/null <<SQL
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM read_parquet('$temporary/mitochondrial-anchors.parquet')
+    WHERE anchor_start = 10 AND supported_mt AND depth_mt = 3
+) THEN error('chr25 coverage did not match the run-scoped MT alias') END;
+SQL
 
 echo "TP73 anchor-evidence tests passed."

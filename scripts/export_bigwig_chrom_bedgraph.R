@@ -4,7 +4,7 @@ usage <- function(status = 0L) {
     stream <- if (status == 0L) stdout() else stderr()
     writeLines(c(
         "Usage: export_bigwig_chrom_bedgraph.R --input FILE.bigWig",
-        "       --output FILE.bedGraph [--chrom CHROM]",
+        "       --output FILE.bedGraph [--chrom CHROM] [options]",
         "",
         "Export one chromosome from a BigWig as sorted, non-overlapping bedGraph.",
         "Only finite signal values greater than zero are retained. Coordinates in",
@@ -14,6 +14,9 @@ usage <- function(status = 0L) {
         "  --input FILE    Source BigWig",
         "  --output FILE   New bedGraph; an existing file is never replaced",
         "  --chrom CHROM   Chromosome with or without chr prefix (default: 1)",
+        "  --allow-empty   Write an empty bedGraph when no positive rows exist",
+        "  --mitochondrial-aliases",
+        "                   Treat M, MT, and 25 as equivalent for this run",
         "  -h, --help      Show this help"
     ), con = stream)
     quit(status = status)
@@ -24,10 +27,24 @@ if (any(arguments %in% c("-h", "--help"))) {
     usage()
 }
 
-values <- list(chrom = "1")
+values <- list(
+    chrom = "1",
+    allow_empty = FALSE,
+    mitochondrial_aliases = FALSE
+)
 index <- 1L
 while (index <= length(arguments)) {
     option <- arguments[[index]]
+    if (option == "--allow-empty") {
+        values$allow_empty <- TRUE
+        index <- index + 1L
+        next
+    }
+    if (option == "--mitochondrial-aliases") {
+        values$mitochondrial_aliases <- TRUE
+        index <- index + 1L
+        next
+    }
     if (!option %in% c("--input", "--output", "--chrom")) {
         writeLines(paste("E: unknown argument:", option), con = stderr())
         usage(2L)
@@ -57,11 +74,34 @@ suppressPackageStartupMessages({
     library(rtracklayer)
 })
 
-normalize_chrom <- function(chrom) sub("^chr", "", chrom, ignore.case = TRUE)
+normalize_chrom <- function(chrom) {
+    normalized <- toupper(sub("^chr", "", chrom, ignore.case = TRUE))
+    normalized[normalized %in% c("M", "MT")] <- "MT"
+    normalized
+}
 
 bigwig <- BigWigFile(values$input)
 available <- seqlevels(seqinfo(bigwig))
-matches <- available[normalize_chrom(available) == normalize_chrom(values$chrom)]
+requested <- normalize_chrom(values$chrom)
+if (values$mitochondrial_aliases) {
+    if (!requested %in% c("MT", "25")) {
+        stop(
+            "--mitochondrial-aliases requires --chrom M, MT, or 25",
+            call. = FALSE
+        )
+    }
+    matches <- available[normalize_chrom(available) %in% c("MT", "25")]
+} else {
+    matches <- available[normalize_chrom(available) == requested]
+}
+if (length(matches) == 0L && values$allow_empty) {
+    dir.create(dirname(values$output), recursive = TRUE, showWarnings = FALSE)
+    if (!file.create(values$output)) {
+        stop("could not create empty output: ", values$output, call. = FALSE)
+    }
+    message("I: exported 0 positive intervals to ", values$output)
+    quit(status = 0L)
+}
 if (length(matches) != 1L) {
     stop(
         "BigWig does not contain exactly one chromosome matching ",
@@ -84,7 +124,16 @@ scores <- mcols(ranges)$score
 ranges <- ranges[is.finite(scores) & scores > 0]
 
 dir.create(dirname(values$output), recursive = TRUE, showWarnings = FALSE)
-export(ranges, values$output, format = "bedGraph")
+if (length(ranges) == 0L) {
+    if (!values$allow_empty) {
+        stop("BigWig chromosome has no positive intervals: ", chrom, call. = FALSE)
+    }
+    if (!file.create(values$output)) {
+        stop("could not create empty output: ", values$output, call. = FALSE)
+    }
+} else {
+    export(ranges, values$output, format = "bedGraph")
+}
 message(
     "I: exported ", length(ranges), " positive ", chrom,
     " intervals to ", values$output

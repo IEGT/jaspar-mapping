@@ -12,7 +12,22 @@ from pathlib import Path
 
 
 def normalize_chrom(value: str) -> str:
-    return value[3:] if value.lower().startswith("chr") else value
+    normalized = value[3:] if value.lower().startswith("chr") else value
+    return "MT" if normalized.upper() in {"M", "MT"} else normalized
+
+
+def chrom_matches(observed: str, requested: str,
+                  mitochondrial_aliases: bool) -> bool:
+    observed_normalized = normalize_chrom(observed).upper()
+    requested_normalized = normalize_chrom(requested).upper()
+    if mitochondrial_aliases:
+        aliases = {"M", "MT", "25"}
+        if requested_normalized not in aliases:
+            raise RuntimeError(
+                "--mitochondrial-aliases requires --chrom M, MT, or 25"
+            )
+        return observed_normalized in aliases
+    return observed_normalized == requested_normalized
 
 
 def export(arguments: argparse.Namespace) -> None:
@@ -34,14 +49,20 @@ def export(arguments: argparse.Namespace) -> None:
     with pyBigWig.open(str(source)) as bigwig:
         matching = [
             chrom for chrom in bigwig.chroms()
-            if normalize_chrom(chrom).lower() == normalize_chrom(arguments.chrom).lower()
+            if chrom_matches(
+                chrom, arguments.chrom, arguments.mitochondrial_aliases
+            )
         ]
-        if len(matching) != 1:
+        if not matching and arguments.allow_empty:
+            chrom = arguments.chrom
+            intervals = ()
+        elif len(matching) != 1:
             raise RuntimeError(
                 f"BigWig has {len(matching)} chromosomes matching {arguments.chrom}"
             )
-        chrom = matching[0]
-        intervals = bigwig.intervals(chrom) or ()
+        else:
+            chrom = matching[0]
+            intervals = bigwig.intervals(chrom) or ()
         temporary = output.with_name(f".{output.name}.tmp-{os.getpid()}")
         written = 0
         try:
@@ -50,7 +71,7 @@ def export(arguments: argparse.Namespace) -> None:
                     if math.isfinite(value) and value > 0:
                         handle.write(f"{chrom}\t{start}\t{end}\t{value:.17g}\n")
                         written += 1
-            if written == 0:
+            if written == 0 and not arguments.allow_empty:
                 raise RuntimeError(
                     f"BigWig has no positive intervals on chromosome {chrom}"
                 )
@@ -74,6 +95,20 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--input", type=Path, required=True)
     result.add_argument("--output", type=Path, required=True)
     result.add_argument("--chrom", default="1")
+    result.add_argument(
+        "--allow-empty", action="store_true",
+        help=(
+            "write a valid empty bedGraph when the chromosome has no positive "
+            "intervals; useful for whole-genome zero-support strata"
+        ),
+    )
+    result.add_argument(
+        "--mitochondrial-aliases", action="store_true",
+        help=(
+            "for a run-plan-identified mitochondrial sequence, treat M, MT, "
+            "and 25 (with optional chr prefix) as equivalent"
+        ),
+    )
     return result
 
 

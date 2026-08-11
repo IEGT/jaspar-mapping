@@ -48,6 +48,15 @@ COPY (
 ) TO '$temporary/m2-minus.parquet' (FORMAT PARQUET);
 
 COPY (
+    SELECT NULL::BIGINT AS start, NULL::BIGINT AS "end", NULL::FLOAT AS score
+    WHERE false
+) TO '$temporary/empty-plus.parquet' (FORMAT PARQUET);
+COPY (
+    SELECT NULL::BIGINT AS start, NULL::BIGINT AS "end", NULL::FLOAT AS score
+    WHERE false
+) TO '$temporary/empty-minus.parquet' (FORMAT PARQUET);
+
+COPY (
     SELECT * FROM (VALUES
         ('M1', 'MOTIF1', 'synthetic_v1', 'genome1', 'motifs1',
          'tp73_context_binary_feature', 'MA0861.2',
@@ -72,6 +81,44 @@ COPY (
     )
 ) TO '$temporary/thresholds.parquet' (FORMAT PARQUET);
 SQL
+
+"$repository_root/scripts/build_sparse_context_maxima.py" \
+    --anchor-parquet "$temporary/anchors.parquet" \
+    --cofactor EMPTY "$temporary/empty-plus.parquet" \
+        "$temporary/empty-minus.parquet" \
+    --cofactor-span EMPTY 12 \
+    --output "$temporary/empty-maxima.parquet" \
+    --flank 150 --source-score-floor -1 \
+    --duckdb "$duckdb" --threads 1 --memory-limit 256MB \
+    --temp-directory "$temporary"
+
+"$duckdb" -batch :memory: >/dev/null <<SQL
+SELECT CASE WHEN (SELECT count(*) FROM read_parquet(
+    '$temporary/empty-maxima.parquet')) <> 2
+    THEN error('empty-hit motif did not remain anchor-complete') END;
+SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM read_parquet('$temporary/empty-maxima.parquet')
+    WHERE context_score IS NOT NULL OR observed_max_context_span_bp <> 0
+       OR declared_max_context_span_bp <> 12
+       OR effective_max_context_span_bp <> 12
+) THEN error('empty-hit motif fabricated a score or lost its catalog span') END;
+SQL
+
+if "$repository_root/scripts/build_sparse_context_maxima.py" \
+    --anchor-parquet "$temporary/anchors.parquet" \
+    --cofactor EMPTY "$temporary/empty-plus.parquet" \
+        "$temporary/empty-minus.parquet" \
+    --output "$temporary/empty-without-span.parquet" \
+    --duckdb "$duckdb" --threads 1 --memory-limit 256MB \
+    --temp-directory "$temporary" \
+    >"$temporary/empty-without-span.out" \
+    2>"$temporary/empty-without-span.err"
+then
+    echo "E: Empty motif hits were accepted without a catalog span." >&2
+    exit 1
+fi
+grep -Fq 'require a positive --cofactor-span' \
+    "$temporary/empty-without-span.err"
 
 "$repository_root/scripts/build_sparse_context_maxima.py" \
     --anchor-parquet "$temporary/anchors.parquet" \
@@ -111,6 +158,8 @@ SELECT CASE WHEN EXISTS (
     WHERE capture_prefilter_center_bp <> 200
        OR observed_max_anchor_span_bp <> 10
        OR observed_max_context_span_bp <> 40
+       OR declared_max_context_span_bp <> 0
+       OR effective_max_context_span_bp <> 40
        OR context_distance_metric <> 'signed_interval_edge_distance'
 ) THEN error('derived interval-prefilter provenance is incorrect') END;
 SELECT CASE WHEN EXISTS (

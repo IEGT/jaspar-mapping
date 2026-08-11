@@ -601,6 +601,14 @@ threshold-derived count is separate from `tp73_motif_context_summary`, whose
 historical `n_neighbor_loci` continues to describe every locus retained at the
 scan storage floor.
 
+For the whole-autosome production form of this complementary zero-complete
+table, including application of the actual genome-scan retention floor and the
+restart-safe motif-batch catalog, see
+[`jaspar2026_tp73_whole_genome_followup.md`](jaspar2026_tp73_whole_genome_followup.md).
+That rectangular 150 bp table does not replace `anchor_motif_band_feature`:
+the latter remains the source for overlap/0-5/6-20/21-50/51-100/101-150 spatial
+stratification and coupled strongest-locus geometry.
+
 Do not conflate the TP73 source scan floor with context anchor eligibility. The
 production TP73 scan may retain scores down to -5 while a context package can
 conservatively select local-peak anchors only from scores at least -1. Both

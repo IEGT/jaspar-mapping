@@ -7,13 +7,13 @@ usage() {
 Usage: submit_tp73_cofactor_enrichment_slurm.sh --run-root DIR
        --source-threshold-run DIR --run-id ID [options]
 
-Prepare and submit a restart-safe all-JASPAR chromosome-1 TP73 cofactor
-enrichment run. A setup job reconstructs the depth-bearing TP73 anchor table
-from exact pinned bedGraphs. Each short array task reuses one cofactor-maxima
-Parquet, stages it and the shared TP73/CUT&RUN anchors to node-local scratch,
-and writes only compact statistics. Array chunks run serially with at most the
-requested number of tasks live. A dependent finalizer validates all exact
-outputs, performs the all-motif BH correction, and publishes Parquet + DuckDB.
+Prepare and submit a restart-safe all-JASPAR TP73 cofactor enrichment run. A
+setup job can reconstruct the depth-bearing anchor table from pinned bedGraphs.
+Each array job stages that shared table once and evaluates a bounded motif batch;
+every motif is still published independently. Array chunks run serially with at
+most the requested number of jobs live. A dependent finalizer validates all
+exact outputs, performs the all-motif BH correction, and publishes Parquet plus
+DuckDB.
 
 Options:
   --run-root DIR             New durable run below /data/sm718
@@ -26,10 +26,11 @@ Options:
   --account NAME             Slurm account (default: cluster)
   --partition NAME           Slurm partition (default: requeue)
   --max-concurrent N         Live tasks across the array (default: 20)
-  --array-size N             Tasks per scheduler array (default: 1000)
-  --cpus N                   CPUs per motif task (default: 1)
-  --memory SIZE              Memory per motif task (default: 16G)
-  --time LIMIT               Time per motif task (default: 00:30:00)
+  --array-size N             Batch jobs per scheduler array (default: 1000)
+  --motifs-per-job N         Motifs sharing one staged anchor (default: 2)
+  --cpus N                   CPUs per batch job (default: 2)
+  --memory SIZE              Memory per batch job (default: 32G)
+  --time LIMIT               Time per batch job (default: 01:00:00)
   --reuse-plan               Reuse an identical immutable prepared plan
   --dry-run                  Print sbatch commands without submitting
   -h, --help                 Show this help
@@ -51,9 +52,10 @@ account=cluster
 partition=requeue
 max_concurrent=20
 array_size=1000
-cpus=1
-memory=16G
-wall_time=00:30:00
+motifs_per_job=2
+cpus=2
+memory=32G
+wall_time=01:00:00
 reuse_plan=0
 dry_run=0
 while [[ $# -gt 0 ]]; do
@@ -69,6 +71,7 @@ while [[ $# -gt 0 ]]; do
         --partition) partition=${2:?}; shift 2 ;;
         --max-concurrent) max_concurrent=${2:?}; shift 2 ;;
         --array-size) array_size=${2:?}; shift 2 ;;
+        --motifs-per-job) motifs_per_job=${2:?}; shift 2 ;;
         --cpus) cpus=${2:?}; shift 2 ;;
         --memory) memory=${2:?}; shift 2 ;;
         --time) wall_time=${2:?}; shift 2 ;;
@@ -84,8 +87,9 @@ done
     exit 2
 }
 [[ $max_concurrent =~ ^[1-9][0-9]*$ &&
-   $array_size =~ ^[1-9][0-9]*$ && $cpus =~ ^[1-9][0-9]*$ ]] || {
-    echo "E: concurrency, array size, and CPUs must be positive integers." >&2
+   $array_size =~ ^[1-9][0-9]*$ && $motifs_per_job =~ ^[1-9][0-9]*$ &&
+   $cpus =~ ^[1-9][0-9]*$ ]] || {
+    echo "E: concurrency, array size, motifs/job, and CPUs must be positive integers." >&2
     exit 2
 }
 case "$run_root" in
@@ -164,6 +168,7 @@ PY
         scripts/build_tp73_anchor_evidence.py
         scripts/manage_tp73_cofactor_enrichment.py
         scripts/run_tp73_cofactor_enrichment_setup.sh
+        scripts/run_tp73_cofactor_enrichment_slurm_batch.sh
         scripts/run_tp73_cofactor_enrichment_slurm_task.sh
     )
     git -C "$source" cat-file -e "$plan_source_commit^{commit}" 2>/dev/null || {
@@ -260,11 +265,12 @@ if [[ $setup_needed -eq 1 ]]; then
     dependency=(--dependency="afterok:$setup_job")
 fi
 
+batch_count=$(((task_count + motifs_per_job - 1) / motifs_per_job))
 array_jobs=()
 array_start=0
 array_chunk=0
-while (( array_start < task_count )); do
-    chunk_tasks=$((task_count - array_start))
+while (( array_start < batch_count )); do
+    chunk_tasks=$((batch_count - array_start))
     if (( chunk_tasks > array_size )); then
         chunk_tasks=$array_size
     fi
@@ -282,10 +288,11 @@ while (( array_start < task_count )); do
         submission+=("${dependency[@]}")
     fi
     submission+=(
-        "$source/scripts/run_tp73_cofactor_enrichment_slurm_task.sh"
+        "$source/scripts/run_tp73_cofactor_enrichment_slurm_batch.sh"
         --run-root "$run_root" --source-threshold-run "$source_threshold_run"
         --task-file "$task_file" --run-config "$run_config" --source "$source"
-        --duckdb "$duckdb" --rscript "$rscript" --task-offset "$array_start"
+        --duckdb "$duckdb" --rscript "$rscript"
+        --motifs-per-job "$motifs_per_job" --batch-offset "$array_start"
     )
     if [[ $dry_run -eq 1 ]]; then
         printf '%q ' "${submission[@]}"; printf '\n'
@@ -318,11 +325,12 @@ if [[ $dry_run -eq 1 ]]; then
 fi
 final_job=$("${final_submission[@]}")
 
-printf 'setup_job\tarray_jobs\tfinalize_job\ttask_count\tmax_concurrent\tarray_size\tarray_chunks\tplan_source_commit\texecution_source_commit\treused_plan\n' \
+printf 'setup_job\tarray_jobs\tfinalize_job\tmotif_tasks\tbatch_jobs\tmotifs_per_job\tmax_concurrent\tarray_size\tarray_chunks\tplan_source_commit\texecution_source_commit\treused_plan\n' \
     > "$submission_record"
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$setup_job" "$array_jobs_text" "$final_job" "$task_count" "$max_concurrent" \
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$setup_job" "$array_jobs_text" "$final_job" "$task_count" \
+    "$batch_count" "$motifs_per_job" "$max_concurrent" \
     "$array_size" "$array_chunk" "$plan_source_commit" \
     "$execution_source_commit" "$reuse_plan" >> "$submission_record"
-echo "I: Submitted setup=$setup_job arrays=$array_jobs_text finalizer=$final_job tasks=$task_count live=$max_concurrent chunks=$array_chunk" >&2
+echo "I: Submitted setup=$setup_job arrays=$array_jobs_text finalizer=$final_job motifs=$task_count batches=$batch_count motifs_per_job=$motifs_per_job live=$max_concurrent chunks=$array_chunk" >&2
 printf '%s\n' "$array_jobs_text"

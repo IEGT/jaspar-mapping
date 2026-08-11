@@ -146,6 +146,23 @@ grep -Fq "included series series_a has inconsistent cell_line" \
 "$repository_root/scripts/build_h3k4me3_anchor_signal.py" \
     --anchor-source "$temporary/context-anchor.parquet" \
     --track-manifest "$manifest" --track-root "$temporary" \
+    --tp73-output "$temporary/evidence-only.parquet" --evidence-only \
+    --chrom 1 --chrom-length 10000 --threads 2 --memory-limit 1GB \
+    --duckdb "$duckdb"
+"$duckdb" -batch :memory: >/dev/null <<SQL
+SELECT CASE WHEN (SELECT count(*) FROM read_parquet(
+    '$temporary/evidence-only.parquet')) <> 16
+THEN error('evidence-only mode changed the anchor cardinality') END;
+SQL
+[[ ! -e $temporary/evidence-only-signal.parquet ]]
+grep -Fq '"mode": "evidence_only"' \
+    "$temporary/evidence-only.parquet.run_config.json"
+awk -F '\t' 'NR > 1 && $4 == "h3k4me3" && $7 != "false" { exit 1 }' \
+    "$temporary/evidence-only.parquet.track_manifest.tsv"
+
+"$repository_root/scripts/build_h3k4me3_anchor_signal.py" \
+    --anchor-source "$temporary/context-anchor.parquet" \
+    --track-manifest "$manifest" --track-root "$temporary" \
     --tp73-output "$temporary/tp73.parquet" \
     --signal-output "$temporary/signal.parquet" \
     --profile-output "$temporary/profile.tsv" \

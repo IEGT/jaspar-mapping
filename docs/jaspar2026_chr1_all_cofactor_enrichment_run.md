@@ -1,5 +1,10 @@
 # JASPAR 2026 TP73 Cofactor Enrichment Run
 
+The whole-genome successor and its scan-floor observability rule are specified
+in [`jaspar2026_tp73_whole_genome_followup.md`](jaspar2026_tp73_whole_genome_followup.md).
+In particular, absence can define a strict score-`<N` negative only when the
+retained scan floor is `<= N`; otherwise that contrast is explicitly censored.
+
 ## Purpose
 
 This run asks, for every non-TP73 motif in JASPAR 2026, whether a

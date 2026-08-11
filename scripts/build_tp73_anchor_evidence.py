@@ -36,6 +36,22 @@ def sql_string(value: str | Path) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
+def canonical_chrom(value: str) -> str:
+    normalized = value[3:] if value.lower().startswith("chr") else value
+    return "mt" if normalized.lower() in {"m", "mt"} else normalized.lower()
+
+
+def accepted_chroms(value: str, mitochondrial_chromosome: bool) -> tuple[str, ...]:
+    normalized = canonical_chrom(value)
+    if mitochondrial_chromosome:
+        if normalized not in {"mt", "25"}:
+            raise AnchorEvidenceError(
+                "--mitochondrial-chromosome requires --chrom M, MT, or 25"
+            )
+        return "mt", "25"
+    return (normalized,)
+
+
 def parse_coverage(value: str) -> tuple[str, Path]:
     sample_id, separator, filename = value.partition("=")
     if not separator or not SAMPLE_ID.fullmatch(sample_id) or not filename:
@@ -59,9 +75,23 @@ def leading_metadata_lines(path: Path) -> int:
 
 
 def coverage_ctes(index: int, sample_id: str, path: Path, chrom: str,
-                   skip_lines: int) -> str:
+                   skip_lines: int, allow_empty: bool,
+                   mitochondrial_chromosome: bool) -> str:
     prefix = f"coverage_{index}"
-    return f"""
+    if path.stat().st_size == 0:
+        source_ctes = f"""
+{prefix}_selected AS (
+    SELECT NULL::BIGINT AS start, NULL::BIGINT AS interval_end,
+           NULL::DOUBLE AS depth
+    WHERE false
+)
+""".strip()
+    else:
+        requested_chroms = ",".join(
+            sql_string(item)
+            for item in accepted_chroms(chrom, mitochondrial_chromosome)
+        )
+        source_ctes = f"""
 {prefix}_text AS (
     SELECT trim(column0) AS chrom_text,
            try_cast(column1 AS BIGINT) AS start,
@@ -81,15 +111,26 @@ def coverage_ctes(index: int, sample_id: str, path: Path, chrom: str,
 {prefix}_selected AS (
     SELECT start, interval_end, depth
     FROM {prefix}_text
-    WHERE regexp_replace(lower(chrom_text), '^chr', '') = {sql_string(chrom)}
-),
+    WHERE CASE
+              WHEN regexp_replace(lower(chrom_text), '^chr', '') IN ('m', 'mt')
+                  THEN 'mt'
+              ELSE regexp_replace(lower(chrom_text), '^chr', '')
+          END IN ({requested_chroms})
+)
+""".strip()
+    empty_check = "" if allow_empty else (
+        "WHEN count(*) = 0 THEN error('coverage has no positive rows on "
+        f"chromosome {chrom}: {sample_id}')"
+    )
+    return f"""
+{source_ctes},
 {prefix}_ordered AS MATERIALIZED (
     SELECT *, lag(interval_end) OVER (ORDER BY start, interval_end) AS previous_end
     FROM {prefix}_selected
 ),
 {prefix}_validation AS MATERIALIZED (
     SELECT CASE
-        WHEN count(*) = 0 THEN error('coverage has no positive rows on chromosome {chrom}: {sample_id}')
+        {empty_check}
         WHEN count(*) FILTER (
             WHERE start IS NULL OR interval_end IS NULL OR depth IS NULL
                OR start < 0 OR interval_end <= start
@@ -157,7 +198,7 @@ CREATE TABLE anchors AS
         updates.append(
             f"ALTER TABLE anchors ADD COLUMN {sample_id} BOOLEAN DEFAULT false;\n"
             f"ALTER TABLE anchors ADD COLUMN {depth_column} DOUBLE DEFAULT 0;\n"
-            f"WITH {coverage_ctes(index, sample_id, path, arguments.chrom, skip_lines)}\n"
+            f"WITH {coverage_ctes(index, sample_id, path, arguments.chrom, skip_lines, arguments.allow_empty_coverage, arguments.mitochondrial_chromosome)}\n"
             f", coverage_{index}_matches AS MATERIALIZED (\n"
             "    SELECT a.anchor_start, a.anchor_end, max(g.depth) AS depth\n"
             "    FROM anchors AS a\n"
@@ -309,7 +350,8 @@ def build(arguments: argparse.Namespace) -> None:
             "observed_minimum_score", "observed_maximum_score", "anchor_plus",
             "anchor_plus_sha256", "anchor_minus", "anchor_minus_sha256",
             "anchor_source", "anchor_source_sha256",
-            "coverage_track_count", "duckdb",
+            "coverage_track_count", "empty_coverage_policy", "duckdb",
+            "mitochondrial_alias_policy",
         ],
         [{
             "schema_version": 3,
@@ -347,7 +389,14 @@ def build(arguments: argparse.Namespace) -> None:
                 sha256(arguments.anchor_source) if arguments.anchor_source else ""
             ),
             "coverage_track_count": len(arguments.coverage),
+            "empty_coverage_policy": (
+                "zero_support" if arguments.allow_empty_coverage else "error"
+            ),
             "duckdb": duckdb,
+            "mitochondrial_alias_policy": (
+                "M_MT_25_with_optional_chr_prefix"
+                if arguments.mitochondrial_chromosome else "disabled"
+            ),
         }],
     )
     write_tsv_atomic(
@@ -399,6 +448,20 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--duckdb", default="duckdb")
     result.add_argument("--threads", type=int, default=4)
     result.add_argument("--memory-limit", default="12GB")
+    result.add_argument(
+        "--allow-empty-coverage", action="store_true",
+        help=(
+            "treat a coverage input with no rows on this chromosome as zero "
+            "support instead of an input error"
+        ),
+    )
+    result.add_argument(
+        "--mitochondrial-chromosome", action="store_true",
+        help=(
+            "the run plan identifies this sequence as mitochondrial; accept "
+            "M, MT, and 25 (with optional chr prefix) in coverage inputs"
+        ),
+    )
     return result
 
 
