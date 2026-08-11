@@ -5,6 +5,17 @@ set -euo pipefail
 repository_root=$(cd "$(dirname "$0")/.." && pwd)
 temporary=$(mktemp -d "${TMPDIR:-/tmp}/jaspar-context-submit.XXXXXX")
 trap 'rm -rf "$temporary"' EXIT HUP INT TERM
+
+expected_nuclear_chromosomes=$(printf '%s\n' {1..22} X Y)
+actual_nuclear_chromosomes=$(
+    sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' \
+        "$repository_root/config/grch38_primary_nuclear_chromosomes.txt"
+)
+[[ $actual_nuclear_chromosomes == "$expected_nuclear_chromosomes" ]] || {
+    echo "E: GRCh38 primary nuclear chromosome registry differs." >&2
+    exit 1
+}
+
 mkdir -p "$temporary/scan"
 printf '{}\n' > "$temporary/scan/manifest.json"
 printf 'gtf\n' > "$temporary/annotation.gtf"

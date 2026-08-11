@@ -17,6 +17,7 @@ __pycache__/
 *.gch
 *.txt
 !requirements.txt
+!config/grch38_primary_nuclear_chromosomes.txt
 *.png
 gtf_file_region_retrieval 
 pssm_scan
