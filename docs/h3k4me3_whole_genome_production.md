@@ -107,13 +107,15 @@ physical keys before any model starts.
 H3_PACKAGE=$H3_RUN/final/genome_h3k4me3_signal
 ANNOTATION=$ANNOTATION_RUN/final
 CONTEXT=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_tp73_context_maxima_autosomes_v1/final/context_maxima
-ANALYSIS_RUN=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_h3k4me3_cofactor_analysis_v3
+ANALYSIS_RUN=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_h3k4me3_cofactor_analysis_v3_schema9
 
 "$SOURCE/scripts/submit_h3k4me3_cofactor_analysis_slurm.sh" \
   --run-root "$ANALYSIS_RUN" --h3-package "$H3_PACKAGE" \
   --evidence-package "$EVIDENCE" --context-maxima-package "$CONTEXT" \
   --annotation-catalog "$ANNOTATION" --runtime-prefix "$RUNTIME" \
-  --source "$SOURCE" --partition requeue --max-concurrent 20 \
+  --run-id jaspar2026_grch38_h3k4me3_cofactor_analysis_v3_schema9 \
+  --source "$SOURCE" --rscript "$RUNTIME/r/bin/Rscript" \
+  --partition requeue --max-concurrent 20 \
   --motifs-per-batch 8 --cpus 4 --memory 32G --time 04:00:00 \
   --dry-run
 ```
