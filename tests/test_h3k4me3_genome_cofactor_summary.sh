@@ -89,6 +89,31 @@ COPY (
 ) TO '$temporary/gene_relation.parquet' (FORMAT PARQUET);
 
 COPY (
+  SELECT e.motif_id,-1 AS negative_reference_threshold,
+         r.gene_relation_class,
+         CASE r.gene_relation_class
+           WHEN 'promoter' THEN CASE e.motif_id WHEN 'M1' THEN 4.0 ELSE 0.25 END
+           WHEN 'downstream' THEN CASE e.motif_id WHEN 'M1' THEN 0.25 ELSE 4.0 END
+           WHEN 'gene_body' THEN CASE e.motif_id WHEN 'M1' THEN 1.5 ELSE 0.75 END
+           ELSE CASE e.motif_id WHEN 'M1' THEN 0.8 ELSE 1.2 END
+         END::DOUBLE AS adjusted_odds_ratio,
+         0.1::DOUBLE AS confidence_interval_95_lower,
+         5.0::DOUBLE AS confidence_interval_95_upper,
+         0.01::DOUBLE AS p_value,0.02::DOUBLE AS q_value_bh_all_motifs,
+         CASE WHEN adjusted_odds_ratio > 1 THEN 'anti_p73_enriched'
+              ELSE 'anti_p73_depleted' END AS association_direction,
+         'ok'::VARCHAR AS evaluation_status,'synthetic matched fit'::VARCHAR
+           AS evaluation_note,
+         100::BIGINT AS anchors_total,40::BIGINT AS anchors_positive,
+         60::BIGINT AS anchors_negative_reference,
+         300::BIGINT AS discordant_observations,
+         6::BIGINT AS matched_samples,20::BIGINT AS genomic_blocks
+  FROM (VALUES ('M1'),('M2')) AS e(motif_id)
+  CROSS JOIN (VALUES ('promoter'),('downstream'),('gene_body'),('intergenic'))
+    AS r(gene_relation_class)
+) TO '$temporary/gene_relation_occupancy.parquet' (FORMAT PARQUET);
+
+COPY (
   SELECT e.motif_id,e.factor_name,1 AS positive_threshold,
          e.source_score_floor,-1 AS score_clamp_reference,
          d.series_id,d.isoform,'ok' AS evaluation_status,
@@ -119,6 +144,7 @@ summary="$temporary/summary"
     --intensity "$temporary/intensity.parquet" \
     --context "$temporary/context.parquet" \
     --gene-relation "$temporary/gene_relation.parquet" \
+    --gene-relation-occupancy "$temporary/gene_relation_occupancy.parquet" \
     --score-gradient "$temporary/gradient.parquet" \
     --interaction "$temporary/interaction.parquet" \
     --h3-summary "$temporary/h3_summary.parquet" \
@@ -145,6 +171,12 @@ SELECT CASE WHEN EXISTS (SELECT 1 FROM read_parquet(
 SELECT CASE WHEN (SELECT count(*) FROM read_parquet(
   '$summary/gene_relation_primary_effect.parquet')) <> 32
   THEN error('four-way gene-relation summary is incomplete') END;
+SELECT CASE WHEN NOT EXISTS (
+  SELECT 1 FROM read_parquet('$summary/gene_relation_primary_effect.parquet')
+  WHERE motif_id='M1' AND gene_relation_class='promoter'
+    AND tp73_adjusted_odds_ratio=4.0
+    AND global_tp73_adjusted_odds_ratio=2.0
+) THEN error('gene-relation summary reused the global TP73 odds ratio') END;
 SQL
 
 [[ -s $summary/manifest.json && -s $summary/summary_metrics.tsv ]]
@@ -171,6 +203,7 @@ if "$repository_root/scripts/summarize_h3k4me3_genome_cofactors.py" \
     --intensity "$temporary/intensity.parquet" \
     --context "$temporary/context.parquet" \
     --gene-relation "$temporary/gene_relation.parquet" \
+    --gene-relation-occupancy "$temporary/gene_relation_occupancy.parquet" \
     --score-gradient "$temporary/gradient.parquet" \
     --interaction "$temporary/interaction.parquet" \
     --h3-summary "$temporary/h3_summary.parquet" \

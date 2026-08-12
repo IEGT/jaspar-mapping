@@ -38,6 +38,8 @@ OUTPUTS = {
         "context_stratified_intensity_effect.tsv",
     "gene_relation_stratified_intensity_effect":
         "gene_relation_stratified_intensity_effect.tsv",
+    "gene_relation_stratified_tp73_occupancy":
+        "gene_relation_stratified_tp73_occupancy.tsv",
     "score_gradient": "score_gradient.tsv",
     "run_config": "run_config.tsv",
 }
@@ -55,6 +57,9 @@ BH_PARTITIONS = {
     "gene_relation_stratified_intensity_effect": (
         "series_id", "isoform", "negative_reference_threshold",
         "gene_relation_class",
+    ),
+    "gene_relation_stratified_tp73_occupancy": (
+        "negative_reference_threshold", "gene_relation_class",
     ),
     "score_gradient": (
         "series_id", "isoform", "score_clamp_reference",
@@ -676,6 +681,7 @@ def validate_result(prefix: Path, motif_id: str) -> None:
         "tp73_interaction": 24,
         "series_summary": 4,
         "gene_relation_stratified_intensity_effect": 32,
+        "gene_relation_stratified_tp73_occupancy": 8,
         "score_gradient": 8,
         "run_config": 1,
     }
@@ -691,7 +697,7 @@ def validate_result(prefix: Path, motif_id: str) -> None:
         ):
             raise AnalysisError(f"{dataset} contains another motif")
         if dataset == "run_config":
-            if (rows[0].get("schema_version") != "3"
+            if (rows[0].get("schema_version") != "4"
                     or set(rows[0].get("chromosomes", "").split(",")) !=
                     set(AUTOSOMES)):
                 raise AnalysisError("evaluator run configuration is incomplete")
@@ -1092,6 +1098,8 @@ SELECT
   (SELECT count(*) FROM tp73_interaction)::BIGINT AS interaction_rows,
   (SELECT count(*) FROM gene_relation_stratified_intensity_effect)::BIGINT
     AS gene_relation_rows,
+  (SELECT count(*) FROM gene_relation_stratified_tp73_occupancy)::BIGINT
+    AS gene_relation_occupancy_rows,
   (SELECT count(*) FROM score_gradient)::BIGINT AS score_rows,
   (SELECT count(*) FROM run_config)::BIGINT AS run_config_rows,
   (SELECT count(*) FROM intensity_effect
@@ -1099,7 +1107,10 @@ SELECT
     AS missing_global_q,
   (SELECT count(*) FROM gene_relation_stratified_intensity_effect
     WHERE p_value IS NOT NULL AND q_value_bh_all_motifs IS NULL)::BIGINT
-    AS missing_gene_relation_q;
+    AS missing_gene_relation_q,
+  (SELECT count(*) FROM gene_relation_stratified_tp73_occupancy
+    WHERE p_value IS NOT NULL AND q_value_bh_all_motifs IS NULL)::BIGINT
+    AS missing_gene_relation_occupancy_q;
 """, cwd=staging)
         if len(validation) != 1:
             raise AnalysisError("final validation returned no summary")
@@ -1109,10 +1120,12 @@ SELECT
                 or values["intensity_rows"] != task_count * 8
                 or values["interaction_rows"] != task_count * 24
                 or values["gene_relation_rows"] != task_count * 32
+                or values["gene_relation_occupancy_rows"] != task_count * 8
                 or values["score_rows"] != task_count * 8
                 or values["run_config_rows"] != task_count
                 or values["missing_global_q"] != 0
-                or values["missing_gene_relation_q"] != 0):
+                or values["missing_gene_relation_q"] != 0
+                or values["missing_gene_relation_occupancy_q"] != 0):
             raise AnalysisError(f"final analysis validation failed: {values}")
         manifest = {
             "schema_version": 1,

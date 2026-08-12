@@ -363,6 +363,10 @@ The schema-9 annotation rebuild adds physical transcript-end/downstream-region
 relationships and a four-way promoter/downstream/gene-body/intergenic H3K4me3
 analysis to the restart-safe whole-genome workflow specified in
 [`docs/h3k4me3_whole_genome_production.md`](docs/h3k4me3_whole_genome_production.md).
+The downstream region mirrors the promoter window around each strand-aware
+transcript end. Relation-specific figures refit both the matched TP73
+occupancy association and the H3K4me3 change within the same anchor class;
+they do not reuse one genome-wide occupancy estimate on every panel.
 
 ## Automated reference checks
 

@@ -13,6 +13,8 @@ usage <- function(status = 0L) {
         "outcome is log2((H3K4me3 area + alpha)/(input area + alpha)) in TA or DN",
         "minus the matching GFP value. TP73 confirmation and its cofactor",
         "interaction are secondary, descriptive post-treatment analyses.",
+        "With schema-9 annotation, four-way relation outputs refit both H3K4me3",
+        "change and matched anti-TP73/control occupancy within each relation.",
         "",
         "Options:",
         "  --signal FILE             Windowed H3K4me3/input Parquet; repeatable",
@@ -397,6 +399,9 @@ binding_rows <- lapply(analysis_series, function(series_id) {
             stop("invalid TP73 evidence for ", series_id, " ", condition,
                  call. = FALSE)
         }
+        result[, (paste0("tp73_support_", condition)) := tp73_support]
+        result[, (paste0("negative_control_support_", condition)) :=
+                   negative_support]
         result[, (paste0("confirmed_", condition)) :=
                    tp73_support & !negative_support]
         result[, (paste0("tp73_depth_", condition)) := tp73_depth]
@@ -663,6 +668,181 @@ status_result <- function(status, note, observations = 0L, blocks = 0L) data.tab
     evaluation_status = status, evaluation_note = note
 )
 
+gene_relation_levels <- c("promoter", "downstream", "gene_body", "intergenic")
+
+# Refit the established matched anti-TP73/control occupancy estimand inside one
+# genomic-relation stratum. Each anchor contributes one Bernoulli observation
+# only when anti-TP73 and its matched negative-control track disagree for that
+# sample. The retained coefficient is therefore the cofactor-by-antibody
+# interaction, not a cross-sectional binding prevalence contrast.
+clustered_relation_occupancy <- function(
+    input, negative_reference_observable, overlap_invalid, source_score_floor,
+    negative_reference
+) {
+    physical <- unique(
+        input[, .(
+            chrom, anchor_start, anchor_end, anchor_score,
+            cofactor_positive, cofactor_negative, cofactor_intermediate
+        )],
+        by = c("chrom", "anchor_start", "anchor_end")
+    )
+    anchors_total <- nrow(physical)
+    anchors_positive <- sum(physical$cofactor_positive)
+    anchors_negative <- sum(physical$cofactor_negative)
+    anchors_intermediate <- sum(physical$cofactor_intermediate)
+    eligible_total <- anchors_positive + anchors_negative
+    positive_fraction <- if (eligible_total > 0L) {
+        anchors_positive / eligible_total
+    } else 0
+    negative_fraction <- if (eligible_total > 0L) {
+        anchors_negative / eligible_total
+    } else 0
+    empty <- function(status, note, observations = 0L, blocks = 0L,
+                      samples = 0L) data.table(
+        anchors_total = anchors_total,
+        anchors_positive = anchors_positive,
+        anchors_negative_reference = anchors_negative,
+        anchors_intermediate = anchors_intermediate,
+        discordant_observations = observations,
+        matched_samples = samples,
+        genomic_blocks = blocks,
+        adjusted_log_odds = NA_real_, adjusted_odds_ratio = NA_real_,
+        block_clustered_standard_error = NA_real_,
+        confidence_interval_95_lower = NA_real_,
+        confidence_interval_95_upper = NA_real_, p_value = NA_real_,
+        evaluation_status = status, evaluation_note = note
+    )
+    if (!negative_reference_observable) {
+        return(empty(
+            "negative_reference_below_source_floor",
+            paste("cofactor source floor", source_score_floor,
+                  "is above negative reference", negative_reference)
+        ))
+    }
+    if (overlap_invalid) {
+        return(empty(
+            "overlapping_score_classes",
+            "positive threshold is below the negative reference"
+        ))
+    }
+    if (eligible_total == 0L ||
+        anchors_positive < values$minimum_class_count ||
+        anchors_negative < values$minimum_class_count ||
+        positive_fraction < values$minimum_class_fraction ||
+        negative_fraction < values$minimum_class_fraction) {
+        return(empty(
+            "underpowered_gene_relation_anchor_class",
+            "relation-specific positive/negative classes lack support"
+        ))
+    }
+
+    eligible <- input$cofactor_positive | input$cofactor_negative
+    evidence_rows <- lapply(c("GFP", "TA", "DN"), function(condition) {
+        anti <- input[[paste0("tp73_support_", condition)]]
+        control <- input[[paste0("negative_control_support_", condition)]]
+        selected <- eligible & anti != control
+        input[selected, .(
+            chrom, anchor_start, anchor_score,
+            sample_id = paste(series_id, condition, sep = ":"),
+            retained = as.integer(cofactor_positive),
+            outcome = as.integer(anti)
+        )]
+    })
+    evidence <- rbindlist(evidence_rows, use.names = TRUE)
+    if (nrow(evidence) == 0L || evidence[, uniqueN(outcome)] != 2L ||
+        evidence[, uniqueN(retained)] != 2L) {
+        return(empty(
+            "not_estimable", "discordant matched evidence lacks two classes",
+            nrow(evidence), uniqueN(evidence$chrom),
+            uniqueN(evidence$sample_id)
+        ))
+    }
+    evidence[, sample_id := factor(sample_id)]
+    evidence[, chromosome := factor(chrom)]
+    evidence[, genomic_block := paste(
+        chrom, floor(anchor_start / values$block_size), sep = ":"
+    )]
+    terms <- c(
+        if (uniqueN(evidence$sample_id) > 1L) "sample_id" else character(),
+        if (uniqueN(evidence$chromosome) > 1L) "chromosome" else character(),
+        paste0("splines::ns(anchor_score, df = ", values$spline_df, ")"),
+        "retained"
+    )
+    formula <- as.formula(paste("outcome ~", paste(terms, collapse = " + ")))
+    fit <- tryCatch(
+        suppressWarnings(glm(
+            formula, data = evidence, family = binomial(),
+            control = glm.control(maxit = 50L, epsilon = 1e-8),
+            x = TRUE, y = TRUE
+        )),
+        error = function(condition) NULL
+    )
+    if (is.null(fit) || !isTRUE(fit$converged) ||
+        !"retained" %in% names(coef(fit)) ||
+        any(!is.finite(coef(fit)))) {
+        return(empty(
+            "not_estimable", "matched occupancy GLM did not converge",
+            nrow(evidence), uniqueN(evidence$genomic_block),
+            uniqueN(evidence$sample_id)
+        ))
+    }
+    bread <- tryCatch(vcov(fit), error = function(condition) NULL)
+    if (is.null(bread) || any(!is.finite(bread))) {
+        return(empty(
+            "not_estimable", "matched occupancy covariance is singular",
+            nrow(evidence), uniqueN(evidence$genomic_block),
+            uniqueN(evidence$sample_id)
+        ))
+    }
+    model_matrix <- fit$x
+    score_rows <- model_matrix * as.numeric(fit$y - fitted(fit))
+    cluster_scores <- rowsum(
+        score_rows, group = evidence$genomic_block, reorder = FALSE
+    )
+    clusters <- nrow(cluster_scores)
+    observations <- nrow(evidence)
+    parameters <- ncol(model_matrix)
+    if (clusters < 2L || observations <= parameters) {
+        return(empty(
+            "not_estimable", "too few genomic blocks for clustered uncertainty",
+            observations, clusters, uniqueN(evidence$sample_id)
+        ))
+    }
+    correction <- (clusters / (clusters - 1)) *
+        ((observations - 1) / (observations - parameters))
+    covariance <- bread %*% crossprod(cluster_scores) %*% bread * correction
+    coefficient_index <- match("retained", colnames(model_matrix))
+    standard_error <- sqrt(covariance[coefficient_index, coefficient_index])
+    estimate <- unname(coef(fit)[["retained"]])
+    if (!is.finite(standard_error) || standard_error <= 0) {
+        return(empty(
+            "not_estimable", "block-clustered standard error is invalid",
+            observations, clusters, uniqueN(evidence$sample_id)
+        ))
+    }
+    z_value <- estimate / standard_error
+    data.table(
+        anchors_total = anchors_total,
+        anchors_positive = anchors_positive,
+        anchors_negative_reference = anchors_negative,
+        anchors_intermediate = anchors_intermediate,
+        discordant_observations = observations,
+        matched_samples = uniqueN(evidence$sample_id),
+        genomic_blocks = clusters,
+        adjusted_log_odds = estimate,
+        adjusted_odds_ratio = exp(estimate),
+        block_clustered_standard_error = standard_error,
+        confidence_interval_95_lower = exp(estimate - 1.96 * standard_error),
+        confidence_interval_95_upper = exp(estimate + 1.96 * standard_error),
+        p_value = 2 * pnorm(abs(z_value), lower.tail = FALSE),
+        evaluation_status = "ok",
+        evaluation_note = paste(
+            "discordant anti-TP73/control pairs; SE clusters",
+            values$block_size, "bp genomic blocks"
+        )
+    )
+}
+
 model_formula <- function(data, interaction = FALSE,
                           adjust_context_class = annotation_available,
                           exposure = "cofactor_present") {
@@ -710,9 +890,11 @@ state_rows <- list()
 occurrence_rows <- list()
 context_intensity_rows <- list()
 gene_relation_intensity_rows <- list()
+gene_relation_occupancy_rows <- list()
 score_effect_rows <- list()
 intensity_index <- interaction_index <- state_index <- occurrence_index <- 1L
-context_intensity_index <- gene_relation_intensity_index <- score_effect_index <- 1L
+context_intensity_index <- gene_relation_intensity_index <- 1L
+gene_relation_occupancy_index <- score_effect_index <- 1L
 
 for (motif_index in seq_len(nrow(thresholds))) {
     threshold <- thresholds[motif_index]
@@ -737,6 +919,48 @@ for (motif_index in seq_len(nrow(thresholds))) {
                    (is.na(context_score) | context_score < negative_reference)]
         joined[, cofactor_intermediate :=
                    !cofactor_positive & !cofactor_negative]
+        if (annotation_available) {
+            for (relation_class in gene_relation_levels) {
+                occupancy <- clustered_relation_occupancy(
+                    joined[gene_relation_class == relation_class],
+                    negative_reference_observable, overlap_invalid,
+                    motif_source_floor, negative_reference
+                )
+                occupancy[, `:=`(
+                    motif_id = threshold$motif_id,
+                    factor_name = threshold$factor_name,
+                    positive_threshold = threshold$positive_threshold,
+                    positive_threshold_source =
+                        threshold$positive_threshold_source,
+                    selection_semantics = threshold$selection_semantics,
+                    source_score_floor = motif_source_floor,
+                    negative_reference_threshold = negative_reference,
+                    negative_reference_observable =
+                        negative_reference_observable,
+                    gene_relation_class = relation_class,
+                    outcome = "strict_immersion",
+                    matched_design = "anti_tp73_vs_matched_negative_control",
+                    negative_reference_rule = paste0(
+                        "context_score < ", negative_reference, " or absent"
+                    ),
+                    adjustment = paste(
+                        "sample + chromosome_when_multichromosome +",
+                        "TP73_score_spline"
+                    )
+                )]
+                occupancy[, association_direction := fcase(
+                    evaluation_status != "ok", "not_estimable",
+                    adjusted_odds_ratio > 1, "anti_p73_enriched",
+                    adjusted_odds_ratio < 1, "anti_p73_depleted",
+                    default = "neutral"
+                )]
+                gene_relation_occupancy_rows[[
+                    gene_relation_occupancy_index
+                ]] <- occupancy
+                gene_relation_occupancy_index <-
+                    gene_relation_occupancy_index + 1L
+            }
+        }
         for (isoform in c("TA", "DN")) {
             outcome_column <- paste0("delta_", isoform)
             confirmed_column <- paste0("confirmed_", isoform)
@@ -935,9 +1159,7 @@ for (motif_index in seq_len(nrow(thresholds))) {
                     # projection. It keeps promoter/downstream precedence
                     # explicit while the richer context class remains a model
                     # covariate inside the heterogeneous gene-body stratum.
-                    for (relation_class in c(
-                        "promoter", "downstream", "gene_body", "intergenic"
-                    )) {
+                    for (relation_class in gene_relation_levels) {
                         relation <- current[
                             gene_relation_class == relation_class
                         ]
@@ -1225,6 +1447,9 @@ context_intensity <- if (annotation_available) {
 gene_relation_intensity <- if (annotation_available) {
     rbindlist(gene_relation_intensity_rows, fill = TRUE)
 } else NULL
+gene_relation_occupancy <- if (annotation_available) {
+    rbindlist(gene_relation_occupancy_rows, fill = TRUE)
+} else NULL
 score_effect <- rbindlist(score_effect_rows, fill = TRUE)
 
 intensity[, q_value_bh := p.adjust(p_value, method = "BH"),
@@ -1238,6 +1463,8 @@ if (annotation_available) {
     gene_relation_intensity[, q_value_bh := p.adjust(p_value, method = "BH"),
         by = .(series_id, isoform, negative_reference_threshold,
                gene_relation_class)]
+    gene_relation_occupancy[, q_value_bh := p.adjust(p_value, method = "BH"),
+        by = .(negative_reference_threshold, gene_relation_class)]
 }
 score_effect[, q_value_bh := p.adjust(p_value, method = "BH"),
     by = .(series_id, isoform, score_clamp_reference)]
@@ -1287,6 +1514,8 @@ if (annotation_available) {
              series_id, genomic_context_class)
     setorder(gene_relation_intensity, motif_id, negative_reference_threshold,
              isoform, series_id, gene_relation_class)
+    setorder(gene_relation_occupancy, motif_id, negative_reference_threshold,
+             gene_relation_class)
 }
 setorder(score_effect, motif_id, score_clamp_reference, isoform, series_id)
 
@@ -1314,12 +1543,20 @@ if (annotation_available) {
         ),
         sep = "\t", na = "NA", quote = FALSE
     )
+    fwrite(
+        gene_relation_occupancy,
+        paste0(
+            values$output_prefix,
+            "_gene_relation_stratified_tp73_occupancy.tsv"
+        ),
+        sep = "\t", na = "NA", quote = FALSE
+    )
 }
 fwrite(score_effect, paste0(values$output_prefix, "_score_gradient.tsv"),
        sep = "\t", na = "NA", quote = FALSE)
 
 run_config <- data.table(
-    schema_version = 3L,
+    schema_version = 4L,
     analysis = "gfp_referenced_h3k4me3_cofactor_change",
     analysis_role = values$analysis_role,
     chromosomes = paste(sort(unique(wide$chrom)), collapse = ","),
@@ -1350,6 +1587,22 @@ run_config <- data.table(
     } else "TP73_score_spline + chromosome_when_multichromosome",
     context_stratified_output = annotation_available,
     gene_relation_stratified_output = annotation_available,
+    gene_relation_tp73_occupancy_output = annotation_available,
+    gene_relation_tp73_occupancy_estimand = if (annotation_available) {
+        paste(
+            "cofactor-by-antibody interaction within relation via discordant",
+            "matched anti-TP73/control pairs"
+        )
+    } else NA_character_,
+    gene_relation_tp73_occupancy_adjustment = if (annotation_available) {
+        "sample + chromosome_when_multichromosome + TP73_score_spline"
+    } else NA_character_,
+    gene_relation_tp73_occupancy_uncertainty = if (annotation_available) {
+        paste(values$block_size, "bp genomic-block clustered SE")
+    } else NA_character_,
+    gene_relation_tp73_occupancy_h3_zero_policy = if (annotation_available) {
+        "retained_independent_of_h3k4me3_signal"
+    } else NA_character_,
     gene_relation_precedence = if (annotation_available) {
         "promoter_then_downstream_then_gene_body_then_intergenic"
     } else NA_character_,

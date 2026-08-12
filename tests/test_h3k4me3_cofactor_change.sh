@@ -504,12 +504,41 @@ TO '$temporary/maxima-effect.parquet' (FORMAT PARQUET, COMPRESSION ZSTD);
 COPY (SELECT * FROM read_parquet('$temporary/maxima.parquet')
       WHERE motif_id = 'M_OVERLAP')
 TO '$temporary/maxima-overlap.parquet' (FORMAT PARQUET, COMPRESSION ZSTD);
+COPY (
+  SELECT * REPLACE (
+    NOT supported_tp73_series_a_GFP
+      AS supported_negative_control_series_a_GFP,
+    (NOT supported_tp73_series_a_GFP)::INTEGER
+      AS depth_negative_control_series_a_GFP,
+    NOT supported_tp73_series_a_TA
+      AS supported_negative_control_series_a_TA,
+    (NOT supported_tp73_series_a_TA)::INTEGER
+      AS depth_negative_control_series_a_TA,
+    NOT supported_tp73_series_a_DN
+      AS supported_negative_control_series_a_DN,
+    (NOT supported_tp73_series_a_DN)::INTEGER
+      AS depth_negative_control_series_a_DN,
+    NOT supported_tp73_series_b_GFP
+      AS supported_negative_control_series_b_GFP,
+    (NOT supported_tp73_series_b_GFP)::INTEGER
+      AS depth_negative_control_series_b_GFP,
+    NOT supported_tp73_series_b_TA
+      AS supported_negative_control_series_b_TA,
+    (NOT supported_tp73_series_b_TA)::INTEGER
+      AS depth_negative_control_series_b_TA,
+    NOT supported_tp73_series_b_DN
+      AS supported_negative_control_series_b_DN,
+    (NOT supported_tp73_series_b_DN)::INTEGER
+      AS depth_negative_control_series_b_DN
+  )
+  FROM read_parquet('$temporary/tp73.parquet')
+) TO '$temporary/tp73-matched.parquet' (FORMAT PARQUET, COMPRESSION ZSTD);
 SQL
 
 Rscript "$repository_root/scripts/analyze_h3k4me3_cofactor_change.R" \
     --change "$temporary/change-a.parquet" \
     --change "$temporary/change-b.parquet" \
-    --tp73-evidence "$temporary/tp73.parquet" \
+    --tp73-evidence "$temporary/tp73-matched.parquet" \
     --cofactor-maxima "$temporary/maxima-effect.parquet" \
     --cofactor-maxima "$temporary/maxima-overlap.parquet" \
     --annotation "$temporary/annotation-a.parquet" \
@@ -526,6 +555,9 @@ CREATE VIEW context_effect AS SELECT * FROM read_csv_auto(
   delim='\t', header=true, nullstr='NA');
 CREATE VIEW gene_relation_effect AS SELECT * FROM read_csv_auto(
   '$temporary/context-result_gene_relation_stratified_intensity_effect.tsv',
+  delim='\t', header=true, nullstr='NA');
+CREATE VIEW gene_relation_occupancy AS SELECT * FROM read_csv_auto(
+  '$temporary/context-result_gene_relation_stratified_tp73_occupancy.tsv',
   delim='\t', header=true, nullstr='NA');
 CREATE VIEW score_gradient AS SELECT * FROM read_csv_auto(
   '$temporary/context-result_score_gradient.tsv', delim='\t',
@@ -545,6 +577,15 @@ SELECT CASE WHEN EXISTS (
   WHERE gene_relation_class NOT IN
     ('promoter', 'downstream', 'gene_body', 'intergenic')
 ) THEN error('unexpected gene-relation class was emitted') END;
+SELECT CASE WHEN (SELECT count(*) FROM gene_relation_occupancy) <> 16
+  OR (SELECT count(DISTINCT gene_relation_class)
+      FROM gene_relation_occupancy) <> 4
+THEN error('relation-specific TP73 occupancy rows were not emitted') END;
+SELECT CASE WHEN NOT EXISTS (
+  SELECT 1 FROM gene_relation_occupancy
+  WHERE motif_id = 'M_EFFECT' AND negative_reference_threshold = -1
+    AND evaluation_status = 'ok' AND adjusted_odds_ratio > 0
+) THEN error('matched relation-specific TP73 occupancy was not estimated') END;
 SELECT CASE WHEN NOT EXISTS (
   SELECT 1 FROM score_gradient
   WHERE estimate_unit = 'one_SD_increase_in_clamped_cofactor_score'
@@ -552,13 +593,16 @@ SELECT CASE WHEN NOT EXISTS (
 SELECT CASE WHEN NOT EXISTS (
   SELECT 1 FROM context_config
   WHERE input_mode = 'precomputed_change'
-    AND schema_version = 3
+    AND schema_version = 4
     AND annotation_schema =
       'schema9_tp73_context_anchor_collapsed_to_physical_span'
     AND gene_relation_precedence =
       'promoter_then_downstream_then_gene_body_then_intergenic'
     AND strict_intergenic_definition =
       'no_transcript_promoter_or_downstream_region_overlap'
+    AND gene_relation_tp73_occupancy_output
+    AND gene_relation_tp73_occupancy_h3_zero_policy =
+      'retained_independent_of_h3k4me3_signal'
 ) THEN error('genome inference provenance is incomplete') END;
 SQL
 

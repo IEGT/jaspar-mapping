@@ -29,6 +29,10 @@ completed chromosome-1 result is reported in
 For the schema-9 annotation rebuild and restart-safe whole-genome H3K4me3
 signal and all-JASPAR cofactor analysis, also read
 [`docs/h3k4me3_whole_genome_production.md`](docs/h3k4me3_whole_genome_production.md).
+Gene-relation figures must join `gene_relation_stratified_intensity_effect`
+to `gene_relation_stratified_tp73_occupancy` by motif, negative reference, and
+relation class; never substitute the global TP73 occupancy estimate on their
+x-axis.
 The completed all-autosome joint TP73 enrichment/H3K4me3 interpretation is
 reported in
 [`docs/h3k4me3_tp73_cofactor_results_autosomes_20260812.md`](docs/h3k4me3_tp73_cofactor_results_autosomes_20260812.md).

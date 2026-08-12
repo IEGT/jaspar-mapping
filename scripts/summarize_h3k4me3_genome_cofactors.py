@@ -87,6 +87,7 @@ def output_sql(inputs: dict[str, Path], staging: Path) -> str:
     intensity = sql_string(inputs["intensity"])
     context = sql_string(inputs["context"])
     gene_relation = sql_string(inputs["gene_relation"])
+    gene_relation_occupancy = sql_string(inputs["gene_relation_occupancy"])
     gradient = sql_string(inputs["score_gradient"])
     interaction = sql_string(inputs["interaction"])
     h3_summary = sql_string(inputs["h3_summary"])
@@ -108,6 +109,8 @@ CREATE VIEW enrichment AS SELECT * FROM read_parquet({enrichment});
 CREATE VIEW intensity AS SELECT * FROM read_parquet({intensity});
 CREATE VIEW context_effect AS SELECT * FROM read_parquet({context});
 CREATE VIEW gene_relation_effect AS SELECT * FROM read_parquet({gene_relation});
+CREATE VIEW gene_relation_occupancy AS
+  SELECT * FROM read_parquet({gene_relation_occupancy});
 CREATE VIEW score_gradient AS SELECT * FROM read_parquet({gradient});
 CREATE VIEW tp73_interaction AS SELECT * FROM read_parquet({interaction});
 CREATE VIEW h3_summary AS SELECT * FROM read_parquet({h3_summary});
@@ -302,12 +305,29 @@ WHERE e.evaluation_status='ok' AND c.negative_reference_threshold=-1
 ORDER BY c.motif_id,c.isoform,c.series_id,c.genomic_context_class;
 
 CREATE TABLE gene_relation_primary_effect AS
-SELECT e.adjusted_odds_ratio AS tp73_adjusted_odds_ratio,
-       e.q_value_bh_all_jaspar AS tp73_q,
-       e.association_direction AS tp73_association_direction,
+SELECT o.adjusted_odds_ratio AS tp73_adjusted_odds_ratio,
+       o.confidence_interval_95_lower AS tp73_ci_lower,
+       o.confidence_interval_95_upper AS tp73_ci_upper,
+       o.p_value AS tp73_p_value,
+       o.q_value_bh_all_motifs AS tp73_q,
+       o.association_direction AS tp73_association_direction,
+       o.evaluation_status AS tp73_evaluation_status,
+       o.evaluation_note AS tp73_evaluation_note,
+       o.anchors_total AS tp73_anchors_total,
+       o.anchors_positive AS tp73_anchors_positive,
+       o.anchors_negative_reference AS tp73_anchors_negative_reference,
+       o.discordant_observations AS tp73_discordant_observations,
+       o.matched_samples AS tp73_matched_samples,
+       o.genomic_blocks AS tp73_genomic_blocks,
+       e.adjusted_odds_ratio AS global_tp73_adjusted_odds_ratio,
+       e.q_value_bh_all_jaspar AS global_tp73_q,
+       e.association_direction AS global_tp73_association_direction,
        g.*
-FROM enrichment e JOIN gene_relation_effect g USING (motif_id)
-WHERE e.evaluation_status='ok' AND g.negative_reference_threshold=-1
+FROM gene_relation_effect g
+JOIN gene_relation_occupancy o
+  USING (motif_id, negative_reference_threshold, gene_relation_class)
+LEFT JOIN enrichment e USING (motif_id)
+WHERE g.negative_reference_threshold=-1
 ORDER BY g.motif_id,g.isoform,g.series_id,g.gene_relation_class;
 
 CREATE TABLE score_gradient_primary_effect AS
@@ -371,6 +391,10 @@ def parser() -> argparse.ArgumentParser:
                         help="final context-stratified effect Parquet")
     result.add_argument("--gene-relation", type=Path, required=True,
                         help="final four-way gene-relation effect Parquet")
+    result.add_argument(
+        "--gene-relation-occupancy", type=Path, required=True,
+        help="final four-way relation-specific TP73 occupancy Parquet",
+    )
     result.add_argument("--score-gradient", type=Path, required=True,
                         help="final score_gradient Parquet")
     result.add_argument("--interaction", type=Path, required=True,
@@ -397,6 +421,8 @@ def main() -> int:
             "intensity": arguments.intensity.expanduser().resolve(),
             "context": arguments.context.expanduser().resolve(),
             "gene_relation": arguments.gene_relation.expanduser().resolve(),
+            "gene_relation_occupancy":
+                arguments.gene_relation_occupancy.expanduser().resolve(),
             "score_gradient": arguments.score_gradient.expanduser().resolve(),
             "interaction": arguments.interaction.expanduser().resolve(),
             "h3_summary": arguments.h3_summary.expanduser().resolve(),
@@ -434,7 +460,7 @@ def main() -> int:
         source = Path(__file__).resolve().parent.parent
         commit, dirty = git_identity(source)
         manifest = {
-            "schema_version": 2,
+            "schema_version": 3,
             "analysis": "joint_tp73_enrichment_h3k4me3_cofactor_summary",
             "analysis_partition": "autosome",
             "included_chromosomes": [str(value) for value in range(1, 23)],

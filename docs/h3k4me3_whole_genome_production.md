@@ -107,13 +107,13 @@ physical keys before any model starts.
 H3_PACKAGE=$H3_RUN/final/genome_h3k4me3_signal
 ANNOTATION=$ANNOTATION_RUN/final
 CONTEXT=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_tp73_context_maxima_autosomes_v1/final/context_maxima
-ANALYSIS_RUN=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_h3k4me3_cofactor_analysis_v3_schema9
+ANALYSIS_RUN=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_h3k4me3_cofactor_analysis_v4_schema9_gene_relation
 
 "$SOURCE/scripts/submit_h3k4me3_cofactor_analysis_slurm.sh" \
   --run-root "$ANALYSIS_RUN" --h3-package "$H3_PACKAGE" \
   --evidence-package "$EVIDENCE" --context-maxima-package "$CONTEXT" \
   --annotation-catalog "$ANNOTATION" --runtime-prefix "$RUNTIME" \
-  --run-id jaspar2026_grch38_h3k4me3_cofactor_analysis_v3_schema9 \
+  --run-id jaspar2026_grch38_h3k4me3_cofactor_analysis_v4_schema9_gene_relation \
   --source "$SOURCE" --rscript "$RUNTIME/r/bin/Rscript" \
   --partition requeue --max-concurrent 20 \
   --motifs-per-batch 8 --cpus 4 --memory 32G --time 04:00:00 \
@@ -148,6 +148,16 @@ Its classes are promoter, downstream, gene body outside the two higher-
 precedence regions, and intergenic. Underpowered classes remain explicit rows
 with a non-`ok` status.
 
+It also emits `gene_relation_stratified_tp73_occupancy`: exactly eight rows per
+motif (two negative references by four relation classes). This is not the
+global cofactor-enrichment estimate copied four times. Within each class it
+refits the matched anti-TP73/control discordance model with sample and
+chromosome fixed effects, a TP73-score spline, and 5 Mb block-clustered
+uncertainty. Finalization applies all-motif BH correction separately by
+negative reference and relation class. The four relation plots therefore
+compare relation-specific TP73 occupancy with relation-specific H3K4me3
+change.
+
 Array tasks contain one motif at a time for inferential output, so their local
 `q_value_bh` is diagnostic only. Finalization recomputes
 `q_value_bh_all_motifs` over every planned non-TP73 JASPAR motif within each
@@ -160,7 +170,7 @@ gene-relation class) with:
 
 ```sh
 ENRICHMENT=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_tp73_cofactor_enrichment_autosomes_v1/final/cofactor_enrichment
-INTERPRETATION=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_h3k4me3_cofactor_interpretation_v2_schema9
+INTERPRETATION=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_h3k4me3_cofactor_interpretation_v3_schema9_gene_relation
 SOURCE_COMMIT=$(git -C "$SOURCE" rev-parse HEAD)
 
 "$SOURCE/scripts/run_h3k4me3_genome_cofactor_interpretation.sh" \

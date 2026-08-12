@@ -162,28 +162,28 @@ COPY (
   SELECT * EXCLUDE (i),
          (i % 2 = 0) AS supported_tp73_saos2_GFP,
          (i % 2 = 0)::INTEGER AS depth_tp73_saos2_GFP,
-         false AS supported_negative_control_saos2_GFP,
-         0::INTEGER AS depth_negative_control_saos2_GFP,
+         (i % 2 = 1) AS supported_negative_control_saos2_GFP,
+         (i % 2 = 1)::INTEGER AS depth_negative_control_saos2_GFP,
          (i % 2 = 0) AS supported_tp73_saos2_TA,
          (i % 2 = 0)::INTEGER AS depth_tp73_saos2_TA,
-         false AS supported_negative_control_saos2_TA,
-         0::INTEGER AS depth_negative_control_saos2_TA,
+         (i % 2 = 1) AS supported_negative_control_saos2_TA,
+         (i % 2 = 1)::INTEGER AS depth_negative_control_saos2_TA,
          (i % 2 = 1) AS supported_tp73_saos2_DN,
          (i % 2 = 1)::INTEGER AS depth_tp73_saos2_DN,
-         false AS supported_negative_control_saos2_DN,
-         0::INTEGER AS depth_negative_control_saos2_DN,
+         (i % 2 = 0) AS supported_negative_control_saos2_DN,
+         (i % 2 = 0)::INTEGER AS depth_negative_control_saos2_DN,
          (i % 2 = 0) AS supported_tp73_skmel29_2_GFP,
          (i % 2 = 0)::INTEGER AS depth_tp73_skmel29_2_GFP,
-         false AS supported_negative_control_skmel29_2_GFP,
-         0::INTEGER AS depth_negative_control_skmel29_2_GFP,
+         (i % 2 = 1) AS supported_negative_control_skmel29_2_GFP,
+         (i % 2 = 1)::INTEGER AS depth_negative_control_skmel29_2_GFP,
          (i % 2 = 0) AS supported_tp73_skmel29_2_TA,
          (i % 2 = 0)::INTEGER AS depth_tp73_skmel29_2_TA,
-         false AS supported_negative_control_skmel29_2_TA,
-         0::INTEGER AS depth_negative_control_skmel29_2_TA,
+         (i % 2 = 1) AS supported_negative_control_skmel29_2_TA,
+         (i % 2 = 1)::INTEGER AS depth_negative_control_skmel29_2_TA,
          (i % 2 = 1) AS supported_tp73_skmel29_2_DN,
          (i % 2 = 1)::INTEGER AS depth_tp73_skmel29_2_DN,
-         false AS supported_negative_control_skmel29_2_DN,
-         0::INTEGER AS depth_negative_control_skmel29_2_DN
+         (i % 2 = 0) AS supported_negative_control_skmel29_2_DN,
+         (i % 2 = 0)::INTEGER AS depth_negative_control_skmel29_2_DN
   FROM anchors
 ) TO '$evidence/tables/tp73_anchor_evidence_autosome.parquet'
   (FORMAT PARQUET, COMPRESSION ZSTD);
@@ -299,6 +299,9 @@ SELECT CASE WHEN (SELECT count(*) FROM score_gradient) <> 16
 SELECT CASE WHEN (SELECT count(*)
                   FROM gene_relation_stratified_intensity_effect) <> 64
   THEN error('combined four-way gene-relation output is incomplete') END;
+SELECT CASE WHEN (SELECT count(*)
+                  FROM gene_relation_stratified_tp73_occupancy) <> 16
+  THEN error('combined relation-specific TP73 occupancy is incomplete') END;
 SELECT CASE WHEN EXISTS (
   SELECT 1 FROM intensity_effect
   WHERE p_value IS NOT NULL AND q_value_bh_all_motifs IS NULL
@@ -307,6 +310,10 @@ SELECT CASE WHEN EXISTS (
   SELECT 1 FROM gene_relation_stratified_intensity_effect
   WHERE p_value IS NOT NULL AND q_value_bh_all_motifs IS NULL
 ) THEN error('gene-relation global BH values are missing') END;
+SELECT CASE WHEN EXISTS (
+  SELECT 1 FROM gene_relation_stratified_tp73_occupancy
+  WHERE p_value IS NOT NULL AND q_value_bh_all_motifs IS NULL
+) THEN error('relation-specific TP73 occupancy BH values are missing') END;
 SELECT CASE WHEN NOT EXISTS (
   SELECT 1 FROM intensity_effect
   WHERE q_value_bh_task IS NOT NULL

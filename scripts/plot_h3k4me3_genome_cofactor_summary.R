@@ -14,6 +14,8 @@ usage <- function(status = 0L) {
         "Plot the genome-wide relationship between TP73 CUT&RUN enrichment and",
         "GFP-referenced H3K4me3 cofactor effects. The context plot and table",
         "summarize that relationship separately by genomic annotation class.",
+        "Each gene-relation plot refits TP73 occupancy and H3K4me3 change",
+        "within the same promoter/downstream/gene-body/intergenic anchors.",
         "Only motifs with an estimable strict score < -1 reference enter these",
         "figures; scan-floor-censored motifs remain in motif_coverage instead.",
         "",
@@ -229,7 +231,7 @@ gene_relation <- fread(
 )
 required_gene_relation <- c(
     "motif_id", "factor_name", "tp73_adjusted_odds_ratio", "tp73_q",
-    "tp73_association_direction", "series_id", "isoform",
+    "tp73_association_direction", "tp73_evaluation_status", "series_id", "isoform",
     "gene_relation_class", "evaluation_status", "estimate",
     "q_value_bh_all_motifs"
 )
@@ -261,7 +263,8 @@ gene_relation[, series := factor(
     series, levels = c("SaOS-2", "SK-Mel-29 series 2")
 )]
 gene_relation_correlations <- gene_relation[
-    evaluation_status == "ok" & tp73_q <= 0.05 &
+    evaluation_status == "ok" & tp73_evaluation_status == "ok" &
+        tp73_q <= 0.05 &
         is.finite(tp73_log2_odds_ratio) & is.finite(estimate),
     .(
         motifs = uniqueN(motif_id),
@@ -280,7 +283,10 @@ gene_relation_labels <- c(
 gene_relation_outputs <- character()
 for (relation_class in gene_relation_levels) {
     relation <- gene_relation[
-        gene_relation_class == relation_class & evaluation_status == "ok"
+        gene_relation_class == relation_class & evaluation_status == "ok" &
+            tp73_evaluation_status == "ok" &
+            is.finite(tp73_adjusted_odds_ratio) &
+            tp73_adjusted_odds_ratio > 0
     ]
     relation_labels <- relation[motif_id %in% labels & isoform == "TA"]
     relation_labels[, label := paste0(factor_name, "\n", motif_id)]
@@ -303,7 +309,7 @@ for (relation_class in gene_relation_levels) {
         facet_grid(rows = vars(series), cols = vars(isoform), scales = "free_y") +
         scale_colour_manual(values = palette, drop = FALSE) +
         labs(
-            x = expression(log[2] * " adjusted TP73 CUT&RUN odds ratio"),
+            x = expression(log[2] * " relation-specific adjusted TP73 CUT&RUN odds ratio"),
             y = expression(Delta * " H3K4me3 cofactor effect vs GFP"),
             colour = NULL,
             title = paste0(
@@ -311,8 +317,9 @@ for (relation_class in gene_relation_levels) {
                 gene_relation_labels[[relation_class]]
             ),
             subtitle = paste0(
-                "Strict cofactor-negative reference: score < -1; line uses ",
-                "motifs with TP73 association q <= 0.05"
+                "Both axes use only ", gene_relation_labels[[relation_class]],
+                " anchors; strict cofactor-negative reference: score < -1; ",
+                "line uses relation-specific TP73 q <= 0.05"
             )
         ) +
         theme_bw(base_size = 10.5) +

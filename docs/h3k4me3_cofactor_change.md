@@ -179,14 +179,29 @@ sensitivity. The deterministic nearest-feature summaries are adjustment
 covariates; the normalized tied-nearest tables remain authoritative for
 biological interpretation.
 
-The evaluator additionally writes a fixed four-way gene-relation table using
+The evaluator additionally writes fixed four-way gene-relation results using
 `promoter > downstream > gene_body > intergenic` precedence. Promoter and
 downstream membership come from versioned many-to-many physical interval
-bridges. `gene_body` means transcript overlap outside those higher-precedence
-regions; it is not synonymous with CDS. Within that pooled stratum the model
-continues to adjust for the finer CDS/exonic/intronic context. All four rows are
-emitted for every motif/series/isoform/reference combination, with an explicit
-underpowered status when a class cannot be estimated.
+bridges. The downstream interval mirrors the promoter geometry around the
+transcript end and follows transcript strand: its primary definition spans
+500 bp toward the transcript body and 2,000 bp beyond the end. An anchor that
+overlaps both a promoter and a downstream region is classified as promoter,
+while both independent overlap flags and bridge rows remain available.
+`gene_body` means transcript overlap outside those higher-precedence regions;
+it is not synonymous with CDS. Within that pooled stratum the model continues
+to adjust for the finer CDS/exonic/intronic context.
+
+Two relation-stratified outputs are emitted. The H3K4me3 table has 32 rows per
+motif: two negative references by two isoforms by two series by four relation
+classes. The matched TP73-occupancy table has eight rows per motif: two
+negative references by four relation classes. It refits the established
+discordant anti-TP73 versus matched-control logistic model inside each class,
+with sample and chromosome fixed effects, a TP73-score spline, and 5 Mb
+block-clustered uncertainty. Consequently, each relation-specific figure uses
+the same anchor stratum on both axes. The occupancy fit retains anchors with
+zero H3K4me3 because its outcome is independent of the mark; only the H3K4me3
+fit applies the all-mark-zero exclusion. Underpowered classes remain explicit
+rows with a non-`ok` status rather than borrowing the genome-wide estimate.
 
 The evaluator writes intensity effects, TP73 interactions, binding-state
 summaries, occurrence summaries, cross-series directional summaries, and the

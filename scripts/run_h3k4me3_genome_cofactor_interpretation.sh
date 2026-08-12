@@ -77,11 +77,13 @@ enrichment="$enrichment_package/tables/jaspar2026/cofactor_primary_occupancy/par
 intensity="$analysis/tables/intensity_effect.parquet"
 context="$analysis/tables/context_stratified_intensity_effect.parquet"
 gene_relation="$analysis/tables/gene_relation_stratified_intensity_effect.parquet"
+gene_relation_occupancy="$analysis/tables/gene_relation_stratified_tp73_occupancy.parquet"
 gradient="$analysis/tables/score_gradient.parquet"
 interaction="$analysis/tables/tp73_interaction.parquet"
 h3_summary="$h3_package/h3k4me3_change_summary_by_chromosome.parquet"
 for path in "$analysis/manifest.json" "$enrichment" "$intensity" "$context" \
-            "$gene_relation" "$gradient" "$interaction" "$h3_summary"; do
+            "$gene_relation" "$gene_relation_occupancy" "$gradient" \
+            "$interaction" "$h3_summary"; do
     [[ -s $path ]] || { echo "E: Finalized input is missing: $path" >&2; exit 1; }
 done
 
@@ -95,6 +97,7 @@ else
     "$source/scripts/summarize_h3k4me3_genome_cofactors.py" \
         --enrichment "$enrichment" --intensity "$intensity" \
         --context "$context" --gene-relation "$gene_relation" \
+        --gene-relation-occupancy "$gene_relation_occupancy" \
         --score-gradient "$gradient" --interaction "$interaction" \
         --h3-summary "$h3_summary" --output-dir "$output_dir" \
         --duckdb "$duckdb"
