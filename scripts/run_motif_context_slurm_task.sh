@@ -19,6 +19,9 @@ Options:
   --promoter-definition ID Versioned promoter definition
   --promoter-upstream-bp N Upstream promoter extent (default: 2000)
   --promoter-downstream-bp N Downstream promoter extent (default: 500)
+  --downstream-definition ID Versioned transcript-end region definition
+  --downstream-upstream-bp N Extent toward transcript body (default: 500)
+  --downstream-downstream-bp N Extent beyond transcript end (default: 2000)
   --task-file FILE        TSV written by submit_motif_context_slurm.sh
   --source DIR            Repository root (default: parent of this script)
   --duckdb FILE           DuckDB executable (default: duckdb)
@@ -36,6 +39,9 @@ annotation_release=ensembl_113
 promoter_definition_id=tss_upstream_2000_downstream_500_v1
 promoter_upstream_bp=2000
 promoter_downstream_bp=500
+downstream_definition_id=tes_upstream_500_downstream_2000_v1
+downstream_upstream_bp=500
+downstream_downstream_bp=2000
 task_file=""
 source=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 duckdb=duckdb
@@ -51,6 +57,9 @@ while [[ $# -gt 0 ]]; do
         --promoter-definition) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; promoter_definition_id=$2; shift 2 ;;
         --promoter-upstream-bp) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; promoter_upstream_bp=$2; shift 2 ;;
         --promoter-downstream-bp) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; promoter_downstream_bp=$2; shift 2 ;;
+        --downstream-definition) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; downstream_definition_id=$2; shift 2 ;;
+        --downstream-upstream-bp) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; downstream_upstream_bp=$2; shift 2 ;;
+        --downstream-downstream-bp) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; downstream_downstream_bp=$2; shift 2 ;;
         --task-file) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; task_file=$2; shift 2 ;;
         --source) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; source=$2; shift 2 ;;
         --duckdb) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; duckdb=$2; shift 2 ;;
@@ -77,12 +86,18 @@ task_offset=${JASPAR_CONTEXT_TASK_OFFSET:-0}
     exit 2
 }
 [[ $annotation_release =~ ^[A-Za-z0-9._-]+$ \
-   && $promoter_definition_id =~ ^[A-Za-z0-9._-]+$ ]] || {
-    echo "E: Annotation release and promoter definition must be safe identifiers." >&2
+   && $promoter_definition_id =~ ^[A-Za-z0-9._-]+$ \
+   && $downstream_definition_id =~ ^[A-Za-z0-9._-]+$ ]] || {
+    echo "E: Annotation and region definitions must be safe identifiers." >&2
     exit 2
 }
 [[ $promoter_upstream_bp =~ ^[0-9]+$ && $promoter_downstream_bp =~ ^[0-9]+$ ]] || {
     echo "E: Promoter extents must be nonnegative integers." >&2
+    exit 2
+}
+[[ $downstream_upstream_bp =~ ^[0-9]+$ \
+   && $downstream_downstream_bp =~ ^[0-9]+$ ]] || {
+    echo "E: Downstream-region extents must be nonnegative integers." >&2
     exit 2
 }
 [[ -d $run_root && -d $scan_package && -f $task_file ]] || {
@@ -108,21 +123,26 @@ task_row=$(awk -F '\t' -v task="$global_task_index" \
 IFS=$'\t' read -r task_index chromosome cofactor_motif_ids output_tier \
     builder_source_commit context_schema_version gtf_size_bytes gtf_sha256 \
     task_annotation_release task_promoter_definition_id \
-    task_promoter_upstream_bp task_promoter_downstream_bp task_kind \
+    task_promoter_upstream_bp task_promoter_downstream_bp \
+    task_downstream_definition_id task_downstream_upstream_bp \
+    task_downstream_downstream_bp task_kind \
     <<< "$task_row"
 task_kind=${task_kind:-cofactor_context}
 [[ $task_index == "$global_task_index" ]]
 [[ $chromosome =~ ^[A-Za-z0-9._-]+$ ]]
 [[ $output_tier == selected || $output_tier == summary || $output_tier == band ]]
-[[ $context_schema_version == 8 ]] || {
+[[ $context_schema_version == 9 ]] || {
     echo "E: Task $task_index requests unsupported context schema $context_schema_version." >&2
     exit 2
 }
 [[ $task_annotation_release == "$annotation_release" \
    && $task_promoter_definition_id == "$promoter_definition_id" \
    && $task_promoter_upstream_bp == "$promoter_upstream_bp" \
-   && $task_promoter_downstream_bp == "$promoter_downstream_bp" ]] || {
-    echo "E: Worker annotation/promoter arguments differ from task $task_index." >&2
+   && $task_promoter_downstream_bp == "$promoter_downstream_bp" \
+   && $task_downstream_definition_id == "$downstream_definition_id" \
+   && $task_downstream_upstream_bp == "$downstream_upstream_bp" \
+   && $task_downstream_downstream_bp == "$downstream_downstream_bp" ]] || {
+    echo "E: Worker annotation-region arguments differ from task $task_index." >&2
     exit 2
 }
 [[ $builder_source_commit =~ ^[A-Za-z0-9._-]+$ ]] || {
@@ -257,6 +277,9 @@ WHERE schema_version = $context_schema_version
   AND promoter_definition_id = '$promoter_definition_id'
   AND promoter_upstream_bp = $promoter_upstream_bp
   AND promoter_downstream_bp = $promoter_downstream_bp
+  AND downstream_definition_id = '$downstream_definition_id'
+  AND downstream_upstream_bp = $downstream_upstream_bp
+  AND downstream_downstream_bp = $downstream_downstream_bp
   $gtf_validation_sql;"
     ) || return 1
     [[ $valid == 1 ]] || return 1
@@ -347,6 +370,9 @@ build_arguments=(
     --promoter-definition-id "$promoter_definition_id"
     --promoter-upstream-bp "$promoter_upstream_bp"
     --promoter-downstream-bp "$promoter_downstream_bp"
+    --downstream-definition-id "$downstream_definition_id"
+    --downstream-upstream-bp "$downstream_upstream_bp"
+    --downstream-downstream-bp "$downstream_downstream_bp"
     --chrom "$chromosome"
     --capture-flank 150 --context-flank 150 --tandem-flank 20
     --cofactor-pair-flank 150 --output-tier "$output_tier"

@@ -262,12 +262,20 @@ created. GTF 1-based inclusive coordinates are converted to BED coordinates.
 Transcript bounds come from the complete accepted transcript feature set, and
 introns are the gaps between consecutive exons of each transcript.
 
-Schema 8 represents a TSS as a physical one-base BED interval: transcript
+Schema 9 represents a TSS as a physical one-base BED interval: transcript
 `start` on `+`, and exclusive transcript `end - 1` on `-`. TSS identity is
 `(genome, annotation release, chromosome, position, strand)`; genes and
 transcripts attach through `transcript_tss`, so shared starts are not collapsed.
 Promoter intervals are resolved from that TSS under the versioned
 `promoter_definition_id` recorded in `context_run_config`.
+
+A transcript end site is normalized in the same way: exclusive transcript
+`end - 1` on `+`, and transcript `start` on `-`. Physical TES rows live in
+`transcription_end_site`; transcript and gene ownership is retained through
+`transcript_tes`. The versioned default downstream region extends 500 bp
+toward the transcript body and 2,000 bp beyond the TES. Its physical intervals,
+gene bridge, and TP73 memberships are stored in `downstream_region`,
+`downstream_region_gene`, and `tp73_anchor_downstream_region`.
 
 CDS identity is physical in `coding_sequence_segment`; transcript, gene,
 reading-phase, and exon-number ownership remain normalized in `transcript_cds`.
@@ -290,6 +298,9 @@ The output deliberately preserves transcript and promoter ambiguity:
 - `tp73_anchor_promoter` is the canonical many-to-many physical
   anchor/promoter membership. `promoter_gene` attaches every associated gene;
   several transcripts or genes may share one physical promoter.
+- `tp73_anchor_downstream_region` is the corresponding canonical many-to-many
+  physical anchor/downstream-region membership. Positive half-open overlap is
+  required; mere abutment is not membership.
 - `tss_interval_distance_bp` follows the motif interval convention: abutting
   is 0 and a motif spanning the one-base TSS has distance -1. The separate
   transcription-oriented centre offset determines upstream/downstream, so a
@@ -306,9 +317,12 @@ The output deliberately preserves transcript and promoter ambiguity:
 - `in_any_intron` is a convenient anchor-level summary, but does not erase the
   fact that the same locus can be intronic for one isoform and non-intronic for
   another.
-- `strict_intergenic` means no positive overlap with any transcript and no
-  overlap with the package's versioned promoter definition. It does not mean
-  distant from a gene; nearest-TSS and nearest-CDS distances remain available.
+- `strict_intergenic` means no positive overlap with any transcript, promoter,
+  or versioned downstream region. It does not mean distant from a gene;
+  nearest-TSS and nearest-CDS distances remain available.
+- `gene_relation_class` is exhaustive and applies the declared precedence
+  `promoter > downstream > gene_body > intergenic`. The underlying many-to-many
+  flags and bridges remain available when an anchor has several relationships.
 
 ## Building the Parquet package
 
@@ -430,8 +444,9 @@ input uniqueness has not been established.
 
 ### Shared TP73 annotation layer
 
-Use an explicit anchor-only summary run to materialize the shared schema-8
-TP73, gene, TSS, transcript, exon, CDS, promoter, and anchor relationships once
+Use an explicit anchor-only summary run to materialize the shared schema-9
+TP73, gene, TSS, TES, transcript, exon, CDS, promoter, downstream-region, and
+anchor relationships once
 per chromosome. `--anchor-only` forbids cofactor motifs and requires
 `--output-tier summary`; the immutable task plan records
 `task_kind=anchor_annotation` and the literal `none` cofactor field. This is
@@ -442,7 +457,7 @@ annotation-free cofactor-band tasks.
 SOURCE=/data/sm718/GitHub/jaspar-mapping
 
 "$SOURCE/scripts/submit_motif_context_slurm.sh" \
-  --run-root /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_tp73_annotation_v3_schema8 \
+  --run-root /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_tp73_annotation_v4_schema9 \
   --scan-package /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_sparse_v3/package \
   --gtf /data/sm718/resources/ensembl/113/gtf/homo_sapiens/Homo_sapiens.GRCh38.113.gtf.gz \
   --anchor-only --output-tier summary \
@@ -450,16 +465,20 @@ SOURCE=/data/sm718/GitHub/jaspar-mapping
   --annotation-release ensembl_113 \
   --promoter-definition tss_upstream_2000_downstream_500_v1 \
   --promoter-upstream-bp 2000 --promoter-downstream-bp 500 \
+  --downstream-definition tes_upstream_500_downstream_2000_v1 \
+  --downstream-upstream-bp 500 --downstream-downstream-bp 2000 \
   --account cluster --partition requeue --max-concurrent 20 \
   --cpus 4 --memory 32G --memory-limit 24GB --max-temp-size 100GB \
   --time 0-02:00:00 --dry-run
 ```
 
 The worker stages only the two TP73 orientation files for its chromosome to
-node-local scratch. The finalizer refuses completion unless every schema-8
+node-local scratch. The finalizer refuses completion unless every schema-9
 package contains normalized gene/exon/CDS dimensions and bridges, physical TSS,
-transcript-to-TSS, promoter, promoter-to-gene, nearest-TSS, nearest-CDS,
-anchor-to-promoter, and TP73-anchor Parquet payloads. Legacy task plans without
+transcript-to-TSS, physical TES, transcript-to-TES, promoter,
+promoter-to-gene, downstream region, downstream-region-to-gene, nearest-TSS,
+nearest-CDS, anchor-to-promoter, anchor-to-downstream-region, and TP73-anchor
+Parquet payloads. Legacy task plans without
 `task_kind` remain
 `cofactor_context` plans.
 

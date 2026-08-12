@@ -55,6 +55,18 @@ CREATE TABLE promoter_gene (
 INSERT INTO promoter_gene VALUES
     ('genome1', 'release1', 'promoter_v1', 'P1', 'G1', 'GENE1', 1);
 
+CREATE TABLE downstream_region_gene (
+    genome_id VARCHAR,
+    annotation_release VARCHAR,
+    downstream_definition_id VARCHAR,
+    downstream_region_id VARCHAR,
+    gene_id VARCHAR,
+    gene_name VARCHAR,
+    n_transcripts BIGINT
+);
+INSERT INTO downstream_region_gene VALUES
+    ('genome1', 'release1', 'downstream_v1', 'D1', 'G1', 'GENE1', 1);
+
 CREATE TABLE tp73_anchor_nearest_tss (
     anchor_hit_id VARCHAR,
     genome_id VARCHAR,
@@ -135,13 +147,16 @@ CREATE TABLE tp73_context_anchor (
     in_any_intron BOOLEAN,
     overlaps_any_promoter BOOLEAN,
     n_overlapping_promoters BIGINT,
+    overlaps_any_downstream_region BOOLEAN,
+    n_overlapping_downstream_regions BIGINT,
     strict_intergenic BOOLEAN,
-    primary_genomic_context VARCHAR
+    primary_genomic_context VARCHAR,
+    gene_relation_class VARCHAR
 );
 INSERT INTO tp73_context_anchor VALUES
     ('H1_LO', '1', 55, 60, 'S1', 7.5, 'downstream', 'C1', 10, 10,
-     -17.5, 'upstream', true, true, false, false, true, 1, false,
-     'promoter_and_transcribed');
+     -17.5, 'upstream', true, true, false, false, true, 1, false, 0,
+     false, 'promoter_and_transcribed', 'promoter');
 
 CREATE TABLE tp73_anchor_promoter (
     anchor_hit_id VARCHAR,
@@ -169,6 +184,33 @@ INSERT INTO tp73_anchor_promoter VALUES
     ('H1_LO', 'genome1', 'motifs1', '1', 55, 60, 'P1', 'S1',
      'release1', 'promoter_v1', 0, 100, 50, 51, '+', 5, true, 4, 7.5,
      'downstream');
+
+CREATE TABLE tp73_anchor_downstream_region (
+    anchor_hit_id VARCHAR,
+    genome_id VARCHAR,
+    motif_set_id VARCHAR,
+    chrom VARCHAR,
+    anchor_start BIGINT,
+    anchor_end BIGINT,
+    downstream_region_id VARCHAR,
+    tes_id VARCHAR,
+    annotation_release VARCHAR,
+    downstream_definition_id VARCHAR,
+    downstream_start BIGINT,
+    downstream_end BIGINT,
+    tes_start BIGINT,
+    tes_end BIGINT,
+    tes_strand VARCHAR,
+    downstream_overlap_bp BIGINT,
+    anchor_fully_within_downstream_region BOOLEAN,
+    tes_interval_distance_bp BIGINT,
+    transcription_oriented_center_offset_bp DOUBLE,
+    anchor_tes_relation VARCHAR
+);
+INSERT INTO tp73_anchor_downstream_region VALUES
+    ('H1_LO', 'genome1', 'motifs1', '1', 55, 60, 'D1', 'E1',
+     'release1', 'downstream_v1', 40, 80, 70, 71, '+', 5, true, 10,
+     -12.5, 'upstream');
 
 CREATE TABLE motif_hit (
     genome_id VARCHAR,
@@ -478,10 +520,22 @@ PREPARE q23 AS
 SQL
     awk '
         /^-- Q23\./ { capture = 1 }
+        /^-- Q24\./ { capture = 0 }
         capture { print }
     ' "$repository_root/sql/queries.sql"
     cat <<'SQL'
 EXECUTE q23(anchor_hit_id := 'H1_LO');
+PREPARE q24 AS
+SQL
+    awk '
+        /^-- Q24\./ { capture = 1 }
+        capture { print }
+    ' "$repository_root/sql/queries.sql"
+    cat <<'SQL'
+EXECUTE q24(
+    anchor_hit_id := 'H1_LO',
+    downstream_definition_id := 'downstream_v1'
+);
 SQL
 } >> "$test_sql"
 

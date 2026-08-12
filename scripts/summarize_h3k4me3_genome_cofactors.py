@@ -25,6 +25,7 @@ OUTPUT_TABLES = (
     "joint_primary_motif",
     "joint_reference_zero_motif",
     "context_primary_effect",
+    "gene_relation_primary_effect",
     "score_gradient_primary_effect",
     "tp73_interaction_primary_effect",
     "summary_metrics",
@@ -85,6 +86,7 @@ def output_sql(inputs: dict[str, Path], staging: Path) -> str:
     enrichment = sql_string(inputs["enrichment"])
     intensity = sql_string(inputs["intensity"])
     context = sql_string(inputs["context"])
+    gene_relation = sql_string(inputs["gene_relation"])
     gradient = sql_string(inputs["score_gradient"])
     interaction = sql_string(inputs["interaction"])
     h3_summary = sql_string(inputs["h3_summary"])
@@ -105,6 +107,7 @@ SET preserve_insertion_order=false;
 CREATE VIEW enrichment AS SELECT * FROM read_parquet({enrichment});
 CREATE VIEW intensity AS SELECT * FROM read_parquet({intensity});
 CREATE VIEW context_effect AS SELECT * FROM read_parquet({context});
+CREATE VIEW gene_relation_effect AS SELECT * FROM read_parquet({gene_relation});
 CREATE VIEW score_gradient AS SELECT * FROM read_parquet({gradient});
 CREATE VIEW tp73_interaction AS SELECT * FROM read_parquet({interaction});
 CREATE VIEW h3_summary AS SELECT * FROM read_parquet({h3_summary});
@@ -207,9 +210,9 @@ SELECT motif_id,
     AS ta_intergenic_skmel,
   max(q_value_bh_all_motifs) FILTER
     (WHERE series_id='skmel29_2' AND isoform='TA') AS ta_intergenic_skmel_q
-FROM context_effect
+FROM gene_relation_effect
 WHERE negative_reference_threshold=-1 AND evaluation_status='ok'
-  AND genomic_context_class='strict_intergenic'
+  AND gene_relation_class='intergenic'
 GROUP BY motif_id;
 
 CREATE TEMP TABLE interaction_primary AS
@@ -298,6 +301,15 @@ FROM enrichment e JOIN context_effect c USING (motif_id)
 WHERE e.evaluation_status='ok' AND c.negative_reference_threshold=-1
 ORDER BY c.motif_id,c.isoform,c.series_id,c.genomic_context_class;
 
+CREATE TABLE gene_relation_primary_effect AS
+SELECT e.adjusted_odds_ratio AS tp73_adjusted_odds_ratio,
+       e.q_value_bh_all_jaspar AS tp73_q,
+       e.association_direction AS tp73_association_direction,
+       g.*
+FROM enrichment e JOIN gene_relation_effect g USING (motif_id)
+WHERE e.evaluation_status='ok' AND g.negative_reference_threshold=-1
+ORDER BY g.motif_id,g.isoform,g.series_id,g.gene_relation_class;
+
 CREATE TABLE score_gradient_primary_effect AS
 SELECT e.adjusted_odds_ratio AS tp73_adjusted_odds_ratio,
        e.q_value_bh_all_jaspar AS tp73_q,
@@ -357,6 +369,8 @@ def parser() -> argparse.ArgumentParser:
                         help="final H3K4me3 intensity_effect Parquet")
     result.add_argument("--context", type=Path, required=True,
                         help="final context-stratified effect Parquet")
+    result.add_argument("--gene-relation", type=Path, required=True,
+                        help="final four-way gene-relation effect Parquet")
     result.add_argument("--score-gradient", type=Path, required=True,
                         help="final score_gradient Parquet")
     result.add_argument("--interaction", type=Path, required=True,
@@ -382,6 +396,7 @@ def main() -> int:
             "enrichment": arguments.enrichment.expanduser().resolve(),
             "intensity": arguments.intensity.expanduser().resolve(),
             "context": arguments.context.expanduser().resolve(),
+            "gene_relation": arguments.gene_relation.expanduser().resolve(),
             "score_gradient": arguments.score_gradient.expanduser().resolve(),
             "interaction": arguments.interaction.expanduser().resolve(),
             "h3_summary": arguments.h3_summary.expanduser().resolve(),
@@ -419,7 +434,7 @@ def main() -> int:
         source = Path(__file__).resolve().parent.parent
         commit, dirty = git_identity(source)
         manifest = {
-            "schema_version": 1,
+            "schema_version": 2,
             "analysis": "joint_tp73_enrichment_h3k4me3_cofactor_summary",
             "analysis_partition": "autosome",
             "included_chromosomes": [str(value) for value in range(1, 23)],

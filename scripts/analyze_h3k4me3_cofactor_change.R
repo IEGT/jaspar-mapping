@@ -19,7 +19,7 @@ usage <- function(status = 0L) {
         "  --change FILE             Precomputed GFP-referenced change; repeatable",
         "  --tp73-evidence FILE      Strict TP73/negative-control evidence Parquet",
         "  --cofactor-maxima FILE    Schema-v4 cofactor maxima; repeatable",
-        "  --annotation FILE         Schema-8 tp73_context_anchor; repeatable",
+        "  --annotation FILE         Schema-9 tp73_context_anchor; repeatable",
         "  --thresholds FILE         motif_id and positive/recommended threshold TSV",
         "  --window NAME             Signal window (required with --signal)",
         "  --output-prefix PATH      Prefix for result TSV files",
@@ -432,6 +432,10 @@ if (annotation_available) {
         "AS context_values, bool_or(strict_intergenic) AS strict_intergenic, ",
         "count(DISTINCT strict_intergenic) AS intergenic_values, ",
         "bool_or(overlaps_any_promoter) AS overlaps_any_promoter, ",
+        "bool_or(overlaps_any_downstream_region) AS ",
+        "overlaps_any_downstream_region, ",
+        "min(gene_relation_class) AS gene_relation_class, ",
+        "count(DISTINCT gene_relation_class) AS gene_relation_values, ",
         "bool_or(in_any_transcript) AS in_any_transcript, ",
         "bool_or(in_any_exon) AS in_any_exon, bool_or(in_any_cds) AS in_any_cds, ",
         "min(nearest_tss_distance_bp) AS nearest_tss_distance_bp, ",
@@ -458,6 +462,7 @@ if (annotation_available) {
     ))
     if (nrow(annotation) == 0L || annotation[, any(
         context_values != 1L | intergenic_values != 1L |
+        gene_relation_values != 1L |
         nearest_tss_distance_values > 1L | nearest_cds_distance_values > 1L |
         tss_genomic_values > 1L | cds_genomic_values > 1L |
         tss_mixed_values > 1L | cds_mixed_values > 1L |
@@ -465,18 +470,32 @@ if (annotation_available) {
     )] || annotation[, anyDuplicated(paste(
         chrom, anchor_start, anchor_end
     ))] != 0L) {
-        stop("schema-8 annotation is empty or differs across anchor orientations",
+        stop("schema-9 annotation is empty or differs across anchor orientations",
              call. = FALSE)
     }
     annotation[, analysis_context_class := fcase(
-        strict_intergenic, "strict_intergenic",
         overlaps_any_promoter, "promoter",
+        overlaps_any_downstream_region, "downstream",
+        strict_intergenic, "strict_intergenic",
         primary_genomic_context %in% c("cds", "cds_boundary"), "cds",
         primary_genomic_context %in% c("exonic_non_cds", "exon_boundary"),
             "exonic_non_cds",
         primary_genomic_context %in% c("intron", "intron_boundary"), "intron",
         default = "other_transcribed"
     )]
+    annotation[, expected_gene_relation_class := fcase(
+        overlaps_any_promoter, "promoter",
+        overlaps_any_downstream_region, "downstream",
+        in_any_transcript, "gene_body",
+        default = "intergenic"
+    )]
+    if (annotation[, any(
+        gene_relation_class != expected_gene_relation_class |
+        strict_intergenic != (gene_relation_class == "intergenic")
+    )]) {
+        stop("schema-9 gene-relation precedence is inconsistent", call. = FALSE)
+    }
+    annotation[, expected_gene_relation_class := NULL]
     annotation[, nearest_tss_direction_class := fcase(
         is.na(nearest_tss_distance_bp), "unavailable",
         nearest_tss_has_mixed_strands %in% TRUE, "mixed_strand_tie",
@@ -499,7 +518,8 @@ if (annotation_available) {
     annotation[, log_nearest_cds_genomic_distance :=
                    log1p(nearest_cds_genomic_distance_bp)]
     annotation[, c(
-        "context_values", "intergenic_values", "nearest_tss_distance_values",
+        "context_values", "intergenic_values", "gene_relation_values",
+        "nearest_tss_distance_values",
         "nearest_cds_distance_values", "tss_genomic_values",
         "cds_genomic_values", "tss_mixed_values", "cds_mixed_values",
         "tss_relation_values", "cds_relation_values"
@@ -508,13 +528,14 @@ if (annotation_available) {
     setkey(wide, chrom, anchor_start, anchor_end)
     wide <- annotation[wide]
     if (nrow(wide) == 0L || wide[, anyNA(primary_genomic_context)]) {
-        stop("schema-8 annotation did not join every H3K4me3 anchor", call. = FALSE)
+        stop("schema-9 annotation did not join every H3K4me3 anchor", call. = FALSE)
     }
 } else {
     wide[, `:=`(
         primary_genomic_context = "not_assessed",
         strict_intergenic = NA,
         overlaps_any_promoter = NA,
+        overlaps_any_downstream_region = NA,
         in_any_transcript = NA,
         in_any_exon = NA,
         in_any_cds = NA,
@@ -527,6 +548,7 @@ if (annotation_available) {
         nearest_tss_relation = NA_character_,
         nearest_cds_relation = NA_character_,
         analysis_context_class = "not_assessed",
+        gene_relation_class = "not_assessed",
         nearest_tss_direction_class = "not_assessed",
         nearest_cds_direction_class = "not_assessed",
         log_nearest_tss_genomic_distance = NA_real_,
@@ -687,9 +709,10 @@ interaction_rows <- list()
 state_rows <- list()
 occurrence_rows <- list()
 context_intensity_rows <- list()
+gene_relation_intensity_rows <- list()
 score_effect_rows <- list()
 intensity_index <- interaction_index <- state_index <- occurrence_index <- 1L
-context_intensity_index <- score_effect_index <- 1L
+context_intensity_index <- gene_relation_intensity_index <- score_effect_index <- 1L
 
 for (motif_index in seq_len(nrow(thresholds))) {
     threshold <- thresholds[motif_index]
@@ -907,6 +930,104 @@ for (motif_index in seq_len(nrow(thresholds))) {
                         )
                         context_intensity_index <- context_intensity_index + 1L
                     }
+
+                    # The four-way gene relation is the stable reporting
+                    # projection. It keeps promoter/downstream precedence
+                    # explicit while the richer context class remains a model
+                    # covariate inside the heterogeneous gene-body stratum.
+                    for (relation_class in c(
+                        "promoter", "downstream", "gene_body", "intergenic"
+                    )) {
+                        relation <- current[
+                            gene_relation_class == relation_class
+                        ]
+                        relation_eligible <- relation$cofactor_positive |
+                            relation$cofactor_negative
+                        relation_positive <- sum(relation$cofactor_positive)
+                        relation_negative <- sum(relation$cofactor_negative)
+                        relation_eligible_count <- sum(relation_eligible)
+                        relation_supported <- negative_reference_observable &&
+                            !overlap_invalid && relation_eligible_count > 0L &&
+                            relation_positive >= values$minimum_class_count &&
+                            relation_negative >= values$minimum_class_count &&
+                            relation_positive / relation_eligible_count >=
+                                values$minimum_class_fraction &&
+                            relation_negative / relation_eligible_count >=
+                                values$minimum_class_fraction
+                        relation_data <- relation[relation_eligible, .(
+                            chrom, anchor_start, anchor_score,
+                            outcome = get(outcome_column),
+                            cofactor_present = as.integer(cofactor_positive),
+                            tp73_confirmed = as.integer(get(confirmed_column)),
+                            analysis_context_class,
+                            log_nearest_tss_genomic_distance,
+                            log_nearest_cds_genomic_distance,
+                            nearest_tss_direction_class,
+                            nearest_cds_direction_class
+                        )]
+                        relation_data[, genomic_block := paste(
+                            chrom, floor(anchor_start / values$block_size), sep = ":"
+                        )]
+                        relation_effect <- if (!negative_reference_observable) {
+                            status_result(
+                                "negative_reference_below_source_floor",
+                                paste("cofactor source floor", motif_source_floor,
+                                      "is above the requested negative reference")
+                            )
+                        } else if (overlap_invalid) {
+                            status_result(
+                                "overlapping_score_classes",
+                                "positive threshold is below the negative reference"
+                            )
+                        } else if (!relation_supported) {
+                            status_result(
+                                "underpowered_gene_relation_anchor_class",
+                                paste0(
+                                    "gene-relation-specific positive/negative ",
+                                    "classes lack support"
+                                )
+                            )
+                        } else {
+                            clustered_lm(
+                                relation_data,
+                                model_formula(relation_data),
+                                list(c(cofactor_present = 1))
+                            )[[1L]]
+                        }
+                        gene_relation_intensity_rows[[
+                            gene_relation_intensity_index
+                        ]] <- cbind(
+                            data.table(
+                                motif_id = threshold$motif_id,
+                                factor_name = threshold$factor_name,
+                                positive_threshold = threshold$positive_threshold,
+                                source_score_floor = motif_source_floor,
+                                negative_reference_threshold = negative_reference,
+                                negative_reference_observable =
+                                    negative_reference_observable,
+                                isoform = isoform,
+                                series_id = series_id,
+                                gene_relation_class = relation_class,
+                                anchors_positive = relation_positive,
+                                anchors_negative = relation_negative,
+                                anchors_intermediate =
+                                    sum(relation$cofactor_intermediate),
+                                mean_change_positive = if (relation_positive) {
+                                    mean(relation[[outcome_column]][
+                                        relation$cofactor_positive
+                                    ])
+                                } else NA_real_,
+                                mean_change_negative = if (relation_negative) {
+                                    mean(relation[[outcome_column]][
+                                        relation$cofactor_negative
+                                    ])
+                                } else NA_real_
+                            ),
+                            relation_effect
+                        )
+                        gene_relation_intensity_index <-
+                            gene_relation_intensity_index + 1L
+                    }
                 }
 
                 score_data <- current[, .(
@@ -1101,6 +1222,9 @@ occurrence <- rbindlist(occurrence_rows, fill = TRUE)
 context_intensity <- if (annotation_available) {
     rbindlist(context_intensity_rows, fill = TRUE)
 } else NULL
+gene_relation_intensity <- if (annotation_available) {
+    rbindlist(gene_relation_intensity_rows, fill = TRUE)
+} else NULL
 score_effect <- rbindlist(score_effect_rows, fill = TRUE)
 
 intensity[, q_value_bh := p.adjust(p_value, method = "BH"),
@@ -1111,6 +1235,9 @@ if (annotation_available) {
     context_intensity[, q_value_bh := p.adjust(p_value, method = "BH"),
         by = .(series_id, isoform, negative_reference_threshold,
                genomic_context_class)]
+    gene_relation_intensity[, q_value_bh := p.adjust(p_value, method = "BH"),
+        by = .(series_id, isoform, negative_reference_threshold,
+               gene_relation_class)]
 }
 score_effect[, q_value_bh := p.adjust(p_value, method = "BH"),
     by = .(series_id, isoform, score_clamp_reference)]
@@ -1158,6 +1285,8 @@ setorder(occurrence, motif_id, negative_reference_threshold, isoform, series_id,
 if (annotation_available) {
     setorder(context_intensity, motif_id, negative_reference_threshold, isoform,
              series_id, genomic_context_class)
+    setorder(gene_relation_intensity, motif_id, negative_reference_threshold,
+             isoform, series_id, gene_relation_class)
 }
 setorder(score_effect, motif_id, score_clamp_reference, isoform, series_id)
 
@@ -1177,12 +1306,20 @@ if (annotation_available) {
         paste0(values$output_prefix, "_context_stratified_intensity_effect.tsv"),
         sep = "\t", na = "NA", quote = FALSE
     )
+    fwrite(
+        gene_relation_intensity,
+        paste0(
+            values$output_prefix,
+            "_gene_relation_stratified_intensity_effect.tsv"
+        ),
+        sep = "\t", na = "NA", quote = FALSE
+    )
 }
 fwrite(score_effect, paste0(values$output_prefix, "_score_gradient.tsv"),
        sep = "\t", na = "NA", quote = FALSE)
 
 run_config <- data.table(
-    schema_version = 2L,
+    schema_version = 3L,
     analysis = "gfp_referenced_h3k4me3_cofactor_change",
     analysis_role = values$analysis_role,
     chromosomes = paste(sort(unique(wide$chrom)), collapse = ","),
@@ -1195,7 +1332,7 @@ run_config <- data.table(
         paste(values$annotation, collapse = ";")
     } else NA_character_,
     annotation_schema = if (annotation_available) {
-        "schema8_tp73_context_anchor_collapsed_to_physical_span"
+        "schema9_tp73_context_anchor_collapsed_to_physical_span"
     } else "not_supplied",
     thresholds = values$thresholds,
     window_name = values$window,
@@ -1212,8 +1349,12 @@ run_config <- data.table(
         )
     } else "TP73_score_spline + chromosome_when_multichromosome",
     context_stratified_output = annotation_available,
+    gene_relation_stratified_output = annotation_available,
+    gene_relation_precedence = if (annotation_available) {
+        "promoter_then_downstream_then_gene_body_then_intergenic"
+    } else NA_character_,
     strict_intergenic_definition = if (annotation_available) {
-        "no_transcript_overlap_and_no_versioned_promoter_overlap"
+        "no_transcript_promoter_or_downstream_region_overlap"
     } else NA_character_,
     tp73_confirmation = "strict TP73 immersion AND no strict negative-control immersion",
     tp73_interaction_interpretation = "secondary_descriptive_post_treatment",

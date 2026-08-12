@@ -6,7 +6,7 @@ and Y are retained as a separate sensitivity set. Mitochondrial labels (`M`,
 `MT`, and `25`, with or without a `chr` prefix) are excluded because
 mitochondrial abundance can produce a CUT&RUN bystander artifact.
 
-The workflow has three independently restartable products. Schema-8 annotation
+The workflow has three independently restartable products. Schema-9 annotation
 and H3K4me3 signal measurement can run in parallel. All-motif inference starts
 only after both have finalized.
 
@@ -30,20 +30,21 @@ inventory. Chromosome workers validate the pinned metadata and reuse that
 checksum in their provenance sidecars. They therefore perform chromosome-local
 BigWig reads without redundantly hashing every complete track in every task.
 
-## A. Schema-8 annotation
+## A. Schema-9 annotation
 
-Schema 8 adds normalized gene, exon, physical CDS segment, transcript-to-CDS,
-coding-span, start/stop-codon, and nearest-CDS tables. Its compact TP73 anchor
-surface records transcript/exon/CDS/promoter overlap, strict-intergenic state,
-and deterministic nearest-TSS/CDS summaries. The normalized many-to-many tables
-remain authoritative when several TSSs, CDS segments, transcripts, or genes are
-tied.
+Schema 9 retains the schema-8 normalized gene/CDS layer and adds physical TES,
+transcript-to-TES, versioned downstream-region, downstream-to-gene, and
+anchor-to-downstream-region tables. Its compact TP73 anchor surface records the
+exhaustive `promoter > downstream > gene_body > intergenic` projection while
+retaining every independent overlap flag and many-to-many relationship. The
+normalized tables remain authoritative when several starts, ends, CDS
+segments, transcripts, or genes are tied.
 
 ```sh
 SOURCE=/data/sm718/GitHub/jaspar-mapping
 SCAN=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_sparse_v3/package
 GTF=/data/sm718/resources/ensembl/113/gtf/homo_sapiens/Homo_sapiens.GRCh38.113.gtf.gz
-ANNOTATION_RUN=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_tp73_annotation_v3_schema8
+ANNOTATION_RUN=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_tp73_annotation_v4_schema9
 
 "$SOURCE/scripts/submit_motif_context_slurm.sh" \
   --run-root "$ANNOTATION_RUN" --scan-package "$SCAN" --gtf "$GTF" \
@@ -52,6 +53,8 @@ ANNOTATION_RUN=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_tp73_annotation
   --annotation-release ensembl_113 \
   --promoter-definition tss_upstream_2000_downstream_500_v1 \
   --promoter-upstream-bp 2000 --promoter-downstream-bp 500 \
+  --downstream-definition tes_upstream_500_downstream_2000_v1 \
+  --downstream-upstream-bp 500 --downstream-downstream-bp 2000 \
   --account cluster --partition requeue --max-concurrent 20 \
   --cpus 4 --memory 32G --memory-limit 24GB --max-temp-size 100GB \
   --time 02:00:00 --dry-run
@@ -95,7 +98,7 @@ The final catalog exposes complete, autosome-only, and sex-chromosome views.
 
 ## C. All-JASPAR cofactor inference
 
-This stage consumes the finalized H3 change, schema-8 annotation, autosomal
+This stage consumes the finalized H3 change, schema-9 annotation, autosomal
 TP73 evidence, and one zero-complete 150 bp context-maximum file per non-TP73
 motif. A preflight job proves that all three fixed anchor layers have identical
 physical keys before any model starts.
@@ -104,7 +107,7 @@ physical keys before any model starts.
 H3_PACKAGE=$H3_RUN/final/genome_h3k4me3_signal
 ANNOTATION=$ANNOTATION_RUN/final
 CONTEXT=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_tp73_context_maxima_autosomes_v1/final/context_maxima
-ANALYSIS_RUN=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_h3k4me3_cofactor_analysis_v1
+ANALYSIS_RUN=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_h3k4me3_cofactor_analysis_v3
 
 "$SOURCE/scripts/submit_h3k4me3_cofactor_analysis_slurm.sh" \
   --run-root "$ANALYSIS_RUN" --h3-package "$H3_PACKAGE" \
@@ -135,6 +138,13 @@ TP73 confirmation is post-treatment and is deliberately omitted from the
 primary total-association model. A continuous cofactor-score sensitivity and
 context-stratified effects, including `strict_intergenic`, are emitted beside
 the binary contrast.
+
+The schema-9 evaluator also emits
+`gene_relation_stratified_intensity_effect`: exactly 32 rows per motif (two
+negative references by two isoforms by two series by four relation classes).
+Its classes are promoter, downstream, gene body outside the two higher-
+precedence regions, and intergenic. Underpowered classes remain explicit rows
+with a non-`ok` status.
 
 Array tasks contain one motif at a time for inferential output, so their local
 `q_value_bh` is diagnostic only. Finalization recomputes

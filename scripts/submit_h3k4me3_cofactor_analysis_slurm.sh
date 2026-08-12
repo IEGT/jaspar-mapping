@@ -9,7 +9,7 @@ Usage: submit_h3k4me3_cofactor_analysis_slurm.sh --run-root DIR
        --annotation-catalog DIR --runtime-prefix DIR [options]
 
 Submit restart-safe all-JASPAR H3K4me3 cofactor inference on autosomes 1-22.
-A preflight job proves that H3K4me3 change, TP73 evidence, and schema-8
+A preflight job proves that H3K4me3 change, TP73 evidence, and schema-9
 annotation use the same physical anchors. Batches stage those fixed inputs once
 and publish each completed motif atomically. Finalization applies BH correction
 over all planned motifs, rather than within one array task.

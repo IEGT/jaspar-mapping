@@ -36,6 +36,8 @@ OUTPUTS = {
     "occurrence_summary": "occurrence_summary.tsv",
     "context_stratified_intensity_effect":
         "context_stratified_intensity_effect.tsv",
+    "gene_relation_stratified_intensity_effect":
+        "gene_relation_stratified_intensity_effect.tsv",
     "score_gradient": "score_gradient.tsv",
     "run_config": "run_config.tsv",
 }
@@ -49,6 +51,10 @@ BH_PARTITIONS = {
     "context_stratified_intensity_effect": (
         "series_id", "isoform", "negative_reference_threshold",
         "genomic_context_class",
+    ),
+    "gene_relation_stratified_intensity_effect": (
+        "series_id", "isoform", "negative_reference_threshold",
+        "gene_relation_class",
     ),
     "score_gradient": (
         "series_id", "isoform", "score_clamp_reference",
@@ -301,10 +307,10 @@ def prepare(arguments: argparse.Namespace) -> None:
         annotation_manifest.get("database", "context.duckdb")
     )
     if (annotation_manifest.get("state") != "complete"
-            or int(annotation_manifest.get("context_schema_version", -1)) != 8
+            or int(annotation_manifest.get("context_schema_version", -1)) != 9
             or annotation_manifest.get("task_kind") != "anchor_annotation"
             or not annotation_database.is_file()):
-        raise AnalysisError("annotation catalog is not completed schema 8")
+        raise AnalysisError("annotation catalog is not completed schema 9")
     annotation_rows = query_json(duckdb, annotation_database, """
 SELECT CAST(chrom AS VARCHAR) AS chrom, absolute_path, bytes
 FROM context_file_inventory
@@ -341,9 +347,9 @@ ORDER BY try_cast(chrom AS INTEGER), chrom;
     for row in sorted(annotation_rows, key=lambda item: int(item["chrom"])):
         path = Path(str(row["absolute_path"])).resolve()
         if not path.is_file() or path.stat().st_size != int(row["bytes"]):
-            raise AnalysisError(f"schema-8 annotation file differs: {path}")
+            raise AnalysisError(f"schema-9 annotation file differs: {path}")
         fixed_rows.append({
-            "kind": "schema8_annotation", "chrom": row["chrom"],
+            "kind": "schema9_annotation", "chrom": row["chrom"],
             "path": str(path), "bytes": int(row["bytes"]),
             "sha256": sha256(path),
         })
@@ -455,7 +461,9 @@ ORDER BY i.task_index;
             "task_q_is_single_motif_diagnostic;final_q_is_all_planned_motifs",
         "tp73_confirmation_role": "secondary_descriptive_post_treatment",
         "strict_intergenic_definition":
-            "no_transcript_overlap_and_no_versioned_promoter_overlap",
+            "no_transcript_promoter_or_downstream_region_overlap",
+        "gene_relation_precedence":
+            "promoter_then_downstream_then_gene_body_then_intergenic",
         "future_covariate_policy":
             "add_pretreatment_anchor_annotations_without_changing_outcome_grain",
     }
@@ -515,7 +523,7 @@ def preflight(arguments: argparse.Namespace) -> None:
     changes = [Path(row["path"]) for row in fixed
                if row["kind"] == "h3k4me3_change"]
     annotations = [Path(row["path"]) for row in fixed
-                   if row["kind"] == "schema8_annotation"]
+                   if row["kind"] == "schema9_annotation"]
     evidence_rows = [row for row in fixed if row["kind"] == "tp73_evidence"]
     if len(changes) != 22 or len(annotations) != 22 or len(evidence_rows) != 1:
         raise AnalysisError("fixed-input plan does not contain the nuclear contract")
@@ -534,6 +542,14 @@ WITH h AS (
          annotation."end" AS anchor_end,
          count(DISTINCT primary_genomic_context) AS context_values,
          count(DISTINCT strict_intergenic) AS intergenic_values,
+         count(DISTINCT overlaps_any_downstream_region) AS downstream_values,
+         count(DISTINCT gene_relation_class) AS gene_relation_values,
+         min(gene_relation_class) AS gene_relation_class,
+         bool_or(strict_intergenic) AS strict_intergenic,
+         bool_or(overlaps_any_promoter) AS overlaps_any_promoter,
+         bool_or(overlaps_any_downstream_region)
+           AS overlaps_any_downstream_region,
+         bool_or(in_any_transcript) AS in_any_transcript,
          count(DISTINCT nearest_tss_distance_bp) AS tss_values,
          count(DISTINCT nearest_cds_distance_bp) AS cds_values,
          count(DISTINCT nearest_tss_genomic_distance_bp) AS tss_genomic_values,
@@ -560,10 +576,17 @@ SELECT
   (SELECT count(*) - count(DISTINCT (chrom, anchor_start, anchor_end)) FROM e)
     ::BIGINT AS duplicate_evidence,
   (SELECT count(*) FROM a WHERE context_values <> 1 OR intergenic_values <> 1
+      OR downstream_values <> 1 OR gene_relation_values <> 1
       OR tss_values > 1 OR cds_values > 1
       OR tss_genomic_values > 1 OR cds_genomic_values > 1
       OR tss_mixed_values > 1 OR cds_mixed_values > 1
-      OR tss_relation_values > 1 OR cds_relation_values > 1)::BIGINT
+      OR tss_relation_values > 1 OR cds_relation_values > 1
+      OR gene_relation_class <> CASE
+           WHEN overlaps_any_promoter THEN 'promoter'
+           WHEN overlaps_any_downstream_region THEN 'downstream'
+           WHEN in_any_transcript THEN 'gene_body'
+           ELSE 'intergenic' END
+      OR strict_intergenic <> (gene_relation_class = 'intergenic'))::BIGINT
     AS annotation_conflicts,
   (SELECT count(*) FROM (SELECT * FROM e EXCEPT
                          SELECT chrom, anchor_start, anchor_end FROM h))::BIGINT
@@ -652,6 +675,7 @@ def validate_result(prefix: Path, motif_id: str) -> None:
         "intensity_effect": 8,
         "tp73_interaction": 24,
         "series_summary": 4,
+        "gene_relation_stratified_intensity_effect": 32,
         "score_gradient": 8,
         "run_config": 1,
     }
@@ -667,7 +691,7 @@ def validate_result(prefix: Path, motif_id: str) -> None:
         ):
             raise AnalysisError(f"{dataset} contains another motif")
         if dataset == "run_config":
-            if (rows[0].get("schema_version") != "2"
+            if (rows[0].get("schema_version") != "3"
                     or set(rows[0].get("chromosomes", "").split(",")) !=
                     set(AUTOSOMES)):
                 raise AnalysisError("evaluator run configuration is incomplete")
@@ -688,7 +712,7 @@ def canonicalize_run_config(prefix: Path, row: dict[str, str]) -> None:
         "cofactor_maxima": (
             "provenance/cofactor_tasks.tsv#motif_id=" + row["motif_id"]
         ),
-        "annotation": "provenance/fixed_inputs.tsv#kind=schema8_annotation",
+        "annotation": "provenance/fixed_inputs.tsv#kind=schema9_annotation",
         "thresholds": (
             "provenance/cofactor_tasks.tsv#motif_id=" + row["motif_id"]
         ),
@@ -774,7 +798,7 @@ def run_batch(arguments: argparse.Namespace) -> None:
         for row in fixed:
             source = verify_file_row(row, checksum=False)
             directory = scratch / row["kind"]
-            if row["kind"] == "schema8_annotation":
+            if row["kind"] == "schema9_annotation":
                 # The partitioned annotation payload omits chrom physically.
                 # Preserve it as a Hive path while staging to node-local scratch.
                 directory /= f"chrom={safe_label(row['chrom'])}"
@@ -787,7 +811,7 @@ def run_batch(arguments: argparse.Namespace) -> None:
                 raise AnalysisError(f"staged input checksum differs: {target}")
             if row["kind"] == "h3k4me3_change":
                 staged_change.append(target)
-            elif row["kind"] == "schema8_annotation":
+            elif row["kind"] == "schema9_annotation":
                 staged_annotation.append(target)
             elif row["kind"] == "tp73_evidence":
                 staged_evidence = target
@@ -1066,11 +1090,16 @@ SELECT
   (SELECT count(DISTINCT motif_id) FROM intensity_effect)::BIGINT AS motifs,
   (SELECT count(*) FROM intensity_effect)::BIGINT AS intensity_rows,
   (SELECT count(*) FROM tp73_interaction)::BIGINT AS interaction_rows,
+  (SELECT count(*) FROM gene_relation_stratified_intensity_effect)::BIGINT
+    AS gene_relation_rows,
   (SELECT count(*) FROM score_gradient)::BIGINT AS score_rows,
   (SELECT count(*) FROM run_config)::BIGINT AS run_config_rows,
   (SELECT count(*) FROM intensity_effect
     WHERE p_value IS NOT NULL AND q_value_bh_all_motifs IS NULL)::BIGINT
-    AS missing_global_q;
+    AS missing_global_q,
+  (SELECT count(*) FROM gene_relation_stratified_intensity_effect
+    WHERE p_value IS NOT NULL AND q_value_bh_all_motifs IS NULL)::BIGINT
+    AS missing_gene_relation_q;
 """, cwd=staging)
         if len(validation) != 1:
             raise AnalysisError("final validation returned no summary")
@@ -1079,9 +1108,11 @@ SELECT
         if (values["motifs"] != task_count
                 or values["intensity_rows"] != task_count * 8
                 or values["interaction_rows"] != task_count * 24
+                or values["gene_relation_rows"] != task_count * 32
                 or values["score_rows"] != task_count * 8
                 or values["run_config_rows"] != task_count
-                or values["missing_global_q"] != 0):
+                or values["missing_global_q"] != 0
+                or values["missing_gene_relation_q"] != 0):
             raise AnalysisError(f"final analysis validation failed: {values}")
         manifest = {
             "schema_version": 1,

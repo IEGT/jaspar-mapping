@@ -359,8 +359,9 @@ same document gives the restart-safe Slurm production command using schema-7
 TP73 local-peak anchors and node-local scratch. The completed production result
 is reported in
 [`docs/h3k4me3_chr1_production_20260810.md`](docs/h3k4me3_chr1_production_20260810.md).
-The schema-8 annotation rebuild and restart-safe whole-genome H3K4me3 signal
-and all-JASPAR cofactor inference are specified in
+The schema-9 annotation rebuild adds physical transcript-end/downstream-region
+relationships and a four-way promoter/downstream/gene-body/intergenic H3K4me3
+analysis to the restart-safe whole-genome workflow specified in
 [`docs/h3k4me3_whole_genome_production.md`](docs/h3k4me3_whole_genome_production.md).
 
 ## Automated reference checks

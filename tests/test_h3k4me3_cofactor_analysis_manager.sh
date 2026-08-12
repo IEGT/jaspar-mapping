@@ -113,11 +113,20 @@ SQL
 COPY (
   SELECT (100 + i * 1000000)::BIGINT AS start,
          (116 + i * 1000000)::BIGINT AS "end",
-         CASE WHEN i % 5 < 2 THEN 'strict_intergenic' ELSE 'promoter_only' END
+         CASE i % 4 WHEN 0 THEN 'promoter_only'
+                    WHEN 1 THEN 'downstream_only'
+                    WHEN 2 THEN 'intron'
+                    ELSE 'strict_intergenic' END
            ::VARCHAR AS primary_genomic_context,
-         (i % 5 < 2) AS strict_intergenic,
-         (i % 5 >= 2) AS overlaps_any_promoter,
-         false AS in_any_transcript, false AS in_any_exon,
+         (i % 4 = 3) AS strict_intergenic,
+         (i % 4 = 0) AS overlaps_any_promoter,
+         (i % 4 = 1) AS overlaps_any_downstream_region,
+         (i % 4 = 2) AS in_any_transcript,
+         CASE i % 4 WHEN 0 THEN 'promoter'
+                    WHEN 1 THEN 'downstream'
+                    WHEN 2 THEN 'gene_body'
+                    ELSE 'intergenic' END::VARCHAR AS gene_relation_class,
+         false AS in_any_exon,
          false AS in_any_cds,
          (1000 + i * 100)::BIGINT AS nearest_tss_distance_bp,
          (1000 + i * 100)::BIGINT AS nearest_tss_genomic_distance_bp,
@@ -183,12 +192,12 @@ printf '{"state":"complete","primary_inference_partition":"autosome"}\n' \
     > "$evidence/manifest.json"
 
 "$duckdb" -batch "$annotation/context.duckdb" >/dev/null <<SQL
-CREATE TABLE context_run AS SELECT 8::INTEGER AS context_schema_version,
+CREATE TABLE context_run AS SELECT 9::INTEGER AS context_schema_version,
   'anchor_annotation'::VARCHAR AS task_kind;
 CREATE TABLE context_file_inventory AS SELECT * FROM read_csv_auto(
   '$annotation/files.tsv', delim='\t', header=true);
 SQL
-printf '{"state":"complete","context_schema_version":8,"task_kind":"anchor_annotation","database":"context.duckdb"}\n' \
+printf '{"state":"complete","context_schema_version":9,"task_kind":"anchor_annotation","database":"context.duckdb"}\n' \
     > "$annotation/manifest.json"
 
 mkdir -p "$context/source-tasks"
@@ -287,10 +296,17 @@ SELECT CASE WHEN (SELECT count(*) FROM tp73_interaction) <> 48
   THEN error('combined interaction output is incomplete') END;
 SELECT CASE WHEN (SELECT count(*) FROM score_gradient) <> 16
   THEN error('combined score-gradient output is incomplete') END;
+SELECT CASE WHEN (SELECT count(*)
+                  FROM gene_relation_stratified_intensity_effect) <> 64
+  THEN error('combined four-way gene-relation output is incomplete') END;
 SELECT CASE WHEN EXISTS (
   SELECT 1 FROM intensity_effect
   WHERE p_value IS NOT NULL AND q_value_bh_all_motifs IS NULL
 ) THEN error('global all-motif BH values are missing') END;
+SELECT CASE WHEN EXISTS (
+  SELECT 1 FROM gene_relation_stratified_intensity_effect
+  WHERE p_value IS NOT NULL AND q_value_bh_all_motifs IS NULL
+) THEN error('gene-relation global BH values are missing') END;
 SELECT CASE WHEN NOT EXISTS (
   SELECT 1 FROM intensity_effect
   WHERE q_value_bh_task IS NOT NULL

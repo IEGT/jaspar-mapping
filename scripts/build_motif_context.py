@@ -143,6 +143,29 @@ def argument_parser() -> argparse.ArgumentParser:
         help="promoter bases downstream of the TSS, inclusive (default: 500)",
     )
     parser.add_argument(
+        "--downstream-definition-id",
+        default="tes_upstream_500_downstream_2000_v1",
+        help=(
+            "versioned transcript-end downstream-window identity (default: "
+            "tes_upstream_500_downstream_2000_v1)"
+        ),
+    )
+    parser.add_argument(
+        "--downstream-upstream-bp",
+        type=nonnegative_integer,
+        default=500,
+        help=(
+            "bases upstream of the TES, toward the transcript body, inclusive "
+            "(default: 500)"
+        ),
+    )
+    parser.add_argument(
+        "--downstream-downstream-bp",
+        type=nonnegative_integer,
+        default=2000,
+        help="bases downstream of the TES, inclusive (default: 2000)",
+    )
+    parser.add_argument(
         "--gtf-sha256",
         help=(
             "expected SHA-256 of the GTF bytes; verified before building and "
@@ -354,6 +377,9 @@ def gtf_sql(arguments: argparse.Namespace, gtf: Path,
     promoter_definition_id = sql_string(arguments.promoter_definition_id)
     promoter_upstream_bp = arguments.promoter_upstream_bp
     promoter_downstream_bp = arguments.promoter_downstream_bp
+    downstream_definition_id = sql_string(arguments.downstream_definition_id)
+    downstream_upstream_bp = arguments.downstream_upstream_bp
+    downstream_downstream_bp = arguments.downstream_downstream_bp
     return f"""
 -- Convert GTF coordinates once at ingestion. GTF end is already the correct
 -- exclusive BED end after subtracting one only from the GTF start.
@@ -401,6 +427,9 @@ SELECT
     MAX("end")::BIGINT AS transcript_end,
     -- TSS is the genomic base, not the exclusive transcript boundary.
     CASE WHEN strand = '+' THEN MIN(start) ELSE MAX("end") - 1 END::BIGINT AS tss,
+    -- TES is likewise the final transcribed genomic base, not the boundary
+    -- immediately beyond the transcript.
+    CASE WHEN strand = '+' THEN MAX("end") - 1 ELSE MIN(start) END::BIGINT AS tes,
     MAX(gene_name) AS gene_name,
     MAX(biotype) AS biotype
 FROM gtf_raw
@@ -544,6 +573,37 @@ JOIN transcription_start_site s
  AND s.start = t.tss
  AND s.strand = t.strand;
 
+-- TES identity is physical and normalized exactly like the TSS dimension.
+-- Transcript and gene ownership stays in transcript_tes because alternative
+-- isoforms and distinct genes can share the same terminal base.
+CREATE TEMP TABLE transcription_end_site AS
+SELECT DISTINCT
+    md5(concat_ws('|', genome_id, annotation_release, chrom, tes::VARCHAR,
+                  strand)) AS tes_id,
+    genome_id,
+    annotation_release,
+    chrom,
+    tes::BIGINT AS start,
+    (tes + 1)::BIGINT AS "end",
+    strand
+FROM transcript_annotation;
+
+CREATE TEMP TABLE transcript_tes AS
+SELECT
+    t.genome_id,
+    t.annotation_release,
+    t.gene_id,
+    t.gene_name,
+    t.transcript_id,
+    s.tes_id
+FROM transcript_annotation t
+JOIN transcription_end_site s
+  ON s.genome_id = t.genome_id
+ AND s.annotation_release = t.annotation_release
+ AND s.chrom = t.chrom
+ AND s.start = t.tes
+ AND s.strand = t.strand;
+
 -- A promoter is a resolved genomic interval for one physical TSS under one
 -- versioned definition. Offsets include the TSS base and are oriented in the
 -- direction of transcription.
@@ -583,6 +643,47 @@ FROM promoter_annotation p
 JOIN transcript_tss tt USING (genome_id, annotation_release, tss_id)
 GROUP BY p.genome_id, p.annotation_release, p.promoter_definition_id,
          p.promoter_id, tt.gene_id;
+
+-- This region mirrors the promoter window around a physical TES: 500 bases
+-- toward the transcript body and 2,000 bases beyond it by default. Offsets are
+-- transcription-oriented and include the TES base itself.
+CREATE TEMP TABLE downstream_region_annotation AS
+SELECT
+    md5(concat_ws('|', tes_id, {downstream_definition_id}))
+        AS downstream_region_id,
+    tes_id,
+    genome_id,
+    annotation_release,
+    {downstream_definition_id}::VARCHAR AS downstream_definition_id,
+    chrom,
+    strand,
+    CASE WHEN strand = '+'
+         THEN GREATEST(0, start - {downstream_upstream_bp})
+         ELSE GREATEST(0, start - {downstream_downstream_bp})
+    END::BIGINT AS downstream_start,
+    CASE WHEN strand = '+'
+         THEN start + {downstream_downstream_bp} + 1
+         ELSE start + {downstream_upstream_bp} + 1
+    END::BIGINT AS downstream_end,
+    start AS tes_start,
+    "end" AS tes_end,
+    {downstream_upstream_bp}::INTEGER AS upstream_bp,
+    {downstream_downstream_bp}::INTEGER AS downstream_bp
+FROM transcription_end_site;
+
+CREATE TEMP TABLE downstream_region_gene AS
+SELECT
+    d.genome_id,
+    d.annotation_release,
+    d.downstream_definition_id,
+    d.downstream_region_id,
+    tt.gene_id,
+    MAX(tt.gene_name) AS gene_name,
+    COUNT(DISTINCT tt.transcript_id)::BIGINT AS n_transcripts
+FROM downstream_region_annotation d
+JOIN transcript_tes tt USING (genome_id, annotation_release, tes_id)
+GROUP BY d.genome_id, d.annotation_release, d.downstream_definition_id,
+         d.downstream_region_id, tt.gene_id;
 
 CREATE TEMP TABLE intron_annotation AS
 WITH ordered_exon AS (
@@ -624,6 +725,11 @@ TO 'tables/jaspar2026/transcription_start_site.parquet'
     (FORMAT PARQUET, COMPRESSION ZSTD);
 COPY transcript_tss TO 'tables/jaspar2026/transcript_tss.parquet'
     (FORMAT PARQUET, COMPRESSION ZSTD);
+COPY transcription_end_site
+TO 'tables/jaspar2026/transcription_end_site.parquet'
+    (FORMAT PARQUET, COMPRESSION ZSTD);
+COPY transcript_tes TO 'tables/jaspar2026/transcript_tes.parquet'
+    (FORMAT PARQUET, COMPRESSION ZSTD);
 COPY gene_annotation TO 'tables/jaspar2026/gene.parquet'
     (FORMAT PARQUET, COMPRESSION ZSTD);
 COPY exon_annotation TO 'tables/jaspar2026/exon.parquet'
@@ -641,6 +747,12 @@ COPY coding_landmark TO 'tables/jaspar2026/coding_landmark.parquet'
 COPY promoter_annotation TO 'tables/jaspar2026/promoter.parquet'
     (FORMAT PARQUET, COMPRESSION ZSTD);
 COPY promoter_gene TO 'tables/jaspar2026/promoter_gene.parquet'
+    (FORMAT PARQUET, COMPRESSION ZSTD);
+COPY downstream_region_annotation
+TO 'tables/jaspar2026/downstream_region.parquet'
+    (FORMAT PARQUET, COMPRESSION ZSTD);
+COPY downstream_region_gene
+TO 'tables/jaspar2026/downstream_region_gene.parquet'
     (FORMAT PARQUET, COMPRESSION ZSTD);
 COPY transcript_annotation TO 'tables/jaspar2026/transcript.parquet'
     (FORMAT PARQUET, COMPRESSION ZSTD);
@@ -969,6 +1081,60 @@ COPY tp73_anchor_promoter
 TO 'tables/jaspar2026/tp73_anchor_promoter.parquet'
     (FORMAT PARQUET, COMPRESSION ZSTD);
 
+-- Canonical many-to-many membership in a versioned transcript-end downstream
+-- region. Gene ownership remains normalized through downstream_region_gene.
+CREATE TEMP TABLE tp73_anchor_downstream_region AS
+WITH geometry AS (
+    SELECT
+        a.anchor_hit_id,
+        a.genome_id,
+        a.motif_set_id,
+        a.chrom,
+        a.start AS anchor_start,
+        a."end" AS anchor_end,
+        a.center_bp AS anchor_center_bp,
+        d.downstream_region_id,
+        d.tes_id,
+        d.annotation_release,
+        d.downstream_definition_id,
+        d.downstream_start,
+        d.downstream_end,
+        d.tes_start,
+        d.tes_end,
+        d.strand AS tes_strand,
+        LEAST(a."end", d.downstream_end)
+            - GREATEST(a.start, d.downstream_start) AS downstream_overlap_bp,
+        a.start >= d.downstream_start AND a."end" <= d.downstream_end
+            AS anchor_fully_within_downstream_region,
+        CASE
+            WHEN a."end" <= d.tes_start THEN d.tes_start - a."end"
+            WHEN d.tes_end <= a.start THEN a.start - d.tes_end
+            ELSE -(LEAST(a."end", d.tes_end) - GREATEST(a.start, d.tes_start))
+        END::BIGINT AS tes_interval_distance_bp,
+        CASE WHEN d.strand = '+' THEN a.center_bp - d.tes_start
+             ELSE d.tes_start - a.center_bp END
+            AS transcription_oriented_center_offset_bp,
+        a.start <= d.tes_start AND a."end" > d.tes_start AS anchor_spans_tes
+    FROM anchor_hit a
+    JOIN downstream_region_annotation d
+      ON d.chrom = a.chrom
+     AND a.start < d.downstream_end
+     AND a."end" > d.downstream_start
+)
+SELECT
+    *,
+    CASE
+        WHEN anchor_spans_tes THEN 'spans_tes'
+        WHEN transcription_oriented_center_offset_bp < 0 THEN 'upstream'
+        WHEN transcription_oriented_center_offset_bp > 0 THEN 'downstream'
+        ELSE 'coincident_center'
+    END AS anchor_tes_relation
+FROM geometry;
+
+COPY tp73_anchor_downstream_region
+TO 'tables/jaspar2026/tp73_anchor_downstream_region.parquet'
+    (FORMAT PARQUET, COMPRESSION ZSTD);
+
 CREATE TEMP TABLE nearest_tss_summary AS
 SELECT * EXCLUDE (representative_rank, n_tss_strands)
 FROM (
@@ -1055,6 +1221,13 @@ SELECT anchor_hit_id,
 FROM tp73_anchor_promoter
 GROUP BY anchor_hit_id;
 
+CREATE TEMP TABLE downstream_context_summary AS
+SELECT anchor_hit_id,
+       true AS overlaps_any_downstream_region,
+       COUNT(*)::BIGINT AS n_overlapping_downstream_regions
+FROM tp73_anchor_downstream_region
+GROUP BY anchor_hit_id;
+
 CREATE TEMP TABLE anchor_gene_context AS
 SELECT
     a.anchor_hit_id,
@@ -1098,8 +1271,14 @@ SELECT
     COALESCE(s.overlaps_any_intron_boundary, false) AS overlaps_any_intron_boundary,
     COALESCE(p.overlaps_any_promoter, false) AS overlaps_any_promoter,
     COALESCE(p.n_overlapping_promoters, 0)::BIGINT AS n_overlapping_promoters,
+    COALESCE(d.overlaps_any_downstream_region, false)
+        AS overlaps_any_downstream_region,
+    COALESCE(d.n_overlapping_downstream_regions, 0)::BIGINT
+        AS n_overlapping_downstream_regions,
     NOT COALESCE(s.in_any_transcript, false)
-        AND NOT COALESCE(p.overlaps_any_promoter, false) AS strict_intergenic,
+        AND NOT COALESCE(p.overlaps_any_promoter, false)
+        AND NOT COALESCE(d.overlaps_any_downstream_region, false)
+        AS strict_intergenic,
     CASE WHEN COALESCE(s.in_any_intron, false) THEN 'intron'
          WHEN COALESCE(s.overlaps_any_intron_boundary, false) THEN 'intron_boundary'
          WHEN COALESCE(s.in_any_transcript, false) THEN 'transcribed_non_intron'
@@ -1110,6 +1289,13 @@ SELECT
         WHEN COALESCE(p.overlaps_any_promoter, false)
              AND COALESCE(s.in_any_transcript, false) THEN 'promoter_and_transcribed'
         WHEN COALESCE(p.overlaps_any_promoter, false) THEN 'promoter_only'
+        WHEN COALESCE(d.overlaps_any_downstream_region, false)
+             AND COALESCE(s.in_any_cds, false) THEN 'downstream_and_cds'
+        WHEN COALESCE(d.overlaps_any_downstream_region, false)
+             AND COALESCE(s.in_any_transcript, false)
+            THEN 'downstream_and_transcribed'
+        WHEN COALESCE(d.overlaps_any_downstream_region, false)
+            THEN 'downstream_only'
         WHEN COALESCE(s.in_any_cds, false) THEN 'cds'
         WHEN COALESCE(s.overlaps_any_cds_boundary, false) THEN 'cds_boundary'
         WHEN COALESCE(s.in_any_exon, false) THEN 'exonic_non_cds'
@@ -1118,12 +1304,19 @@ SELECT
         WHEN COALESCE(s.overlaps_any_intron_boundary, false) THEN 'intron_boundary'
         WHEN COALESCE(s.in_any_transcript, false) THEN 'transcript_boundary'
         ELSE 'strict_intergenic'
-    END AS primary_genomic_context
+    END AS primary_genomic_context,
+    CASE
+        WHEN COALESCE(p.overlaps_any_promoter, false) THEN 'promoter'
+        WHEN COALESCE(d.overlaps_any_downstream_region, false) THEN 'downstream'
+        WHEN COALESCE(s.in_any_transcript, false) THEN 'gene_body'
+        ELSE 'intergenic'
+    END AS gene_relation_class
 FROM anchor_hit a
 LEFT JOIN nearest_tss_summary n USING (anchor_hit_id)
 LEFT JOIN nearest_cds_summary c USING (anchor_hit_id)
 LEFT JOIN transcript_context_summary s USING (anchor_hit_id)
-LEFT JOIN promoter_context_summary p USING (anchor_hit_id);
+LEFT JOIN promoter_context_summary p USING (anchor_hit_id)
+LEFT JOIN downstream_context_summary d USING (anchor_hit_id);
 """
 
 
@@ -1169,9 +1362,12 @@ SELECT
     NULL::BOOLEAN AS overlaps_any_intron_boundary,
     NULL::BOOLEAN AS overlaps_any_promoter,
     NULL::BIGINT AS n_overlapping_promoters,
+    NULL::BOOLEAN AS overlaps_any_downstream_region,
+    NULL::BIGINT AS n_overlapping_downstream_regions,
     NULL::BOOLEAN AS strict_intergenic,
     'not_assessed'::VARCHAR AS primary_transcript_region,
-    'not_assessed'::VARCHAR AS primary_genomic_context
+    'not_assessed'::VARCHAR AS primary_genomic_context,
+    'not_assessed'::VARCHAR AS gene_relation_class
 FROM anchor_hit;
 """
 
@@ -1551,7 +1747,7 @@ FROM widths;
 
 CREATE TEMP TABLE context_run_config AS
 SELECT
-    8::INTEGER AS schema_version,
+    9::INTEGER AS schema_version,
     {sql_string(arguments.source_commit)}::VARCHAR AS builder_source_commit,
     {sql_string(arguments.input_uniqueness)}::VARCHAR AS input_uniqueness,
     {sql_string(arguments.genome_id)}::VARCHAR AS genome_id,
@@ -1613,7 +1809,12 @@ SELECT
         AS promoter_definition_id,
     {arguments.promoter_upstream_bp}::INTEGER AS promoter_upstream_bp,
     {arguments.promoter_downstream_bp}::INTEGER AS promoter_downstream_bp,
+    {sql_string(arguments.downstream_definition_id)}::VARCHAR
+        AS downstream_definition_id,
+    {arguments.downstream_upstream_bp}::INTEGER AS downstream_upstream_bp,
+    {arguments.downstream_downstream_bp}::INTEGER AS downstream_downstream_bp,
     'one_base_bed_start_plus_end_minus_1'::VARCHAR AS tss_coordinate_rule,
+    'one_base_bed_end_minus_1_plus_start'::VARCHAR AS tes_coordinate_rule,
     'all_physical_tss_at_minimum_center_distance'::VARCHAR AS nearest_tss_rule,
     'physical_cds_segments_overlap_first_then_minimum_interval_gap'::VARCHAR
         AS nearest_cds_rule,
@@ -1621,7 +1822,11 @@ SELECT
         AS cds_coordinate_rule,
     'anchor_overlaps_resolved_promoter_interval'::VARCHAR
         AS promoter_membership_rule,
-    'no_transcript_overlap_and_no_versioned_promoter_overlap'::VARCHAR
+    'anchor_overlaps_resolved_downstream_interval'::VARCHAR
+        AS downstream_membership_rule,
+    'promoter_then_downstream_then_gene_body_then_intergenic'::VARCHAR
+        AS gene_relation_precedence,
+    'no_transcript_promoter_or_downstream_region_overlap'::VARCHAR
         AS strict_intergenic_rule,
     {gtf_source}::VARCHAR AS gtf_source,
     {gtf_sha256}::VARCHAR AS gtf_sha256,
@@ -2436,7 +2641,7 @@ WITH qualifying AS (
              neighbor_motif_id, interval_distance_band
 )
 SELECT
-    8::INTEGER AS schema_version,
+    9::INTEGER AS schema_version,
     r.anchor_locus_id,
     r.genome_id,
     r.motif_set_id,
@@ -2934,9 +3139,12 @@ SELECT
     g.overlaps_any_intron_boundary,
     g.overlaps_any_promoter,
     g.n_overlapping_promoters,
+    g.overlaps_any_downstream_region,
+    g.n_overlapping_downstream_regions,
     g.strict_intergenic,
     g.primary_transcript_region,
     g.primary_genomic_context,
+    g.gene_relation_class,
     {arguments.capture_flank}::INTEGER AS capture_flank_bp,
     {arguments.context_flank}::INTEGER AS context_flank_bp,
     {arguments.tandem_flank}::INTEGER AS tandem_flank_bp
@@ -3069,16 +3277,26 @@ FROM read_parquet(
 DROP TABLE anchor_transcript_context;
 DROP TABLE transcription_start_site;
 DROP TABLE transcript_tss;
+DROP TABLE transcription_end_site;
+DROP TABLE transcript_tes;
 DROP TABLE promoter_gene;
+DROP TABLE downstream_region_gene;
 DROP TABLE tp73_anchor_nearest_tss;
 DROP TABLE tp73_anchor_nearest_cds;
 DROP TABLE tp73_anchor_promoter;
+DROP TABLE tp73_anchor_downstream_region;
 CREATE VIEW transcription_start_site AS
 SELECT * FROM read_parquet(
     'tables/jaspar2026/transcription_start_site.parquet'
 );
 CREATE VIEW transcript_tss AS
 SELECT * FROM read_parquet('tables/jaspar2026/transcript_tss.parquet');
+CREATE VIEW transcription_end_site AS
+SELECT * FROM read_parquet(
+    'tables/jaspar2026/transcription_end_site.parquet'
+);
+CREATE VIEW transcript_tes AS
+SELECT * FROM read_parquet('tables/jaspar2026/transcript_tes.parquet');
 CREATE VIEW gene AS
 SELECT * FROM read_parquet('tables/jaspar2026/gene.parquet');
 CREATE VIEW exon AS
@@ -3095,6 +3313,12 @@ CREATE VIEW promoter AS
 SELECT * FROM read_parquet('tables/jaspar2026/promoter.parquet');
 CREATE VIEW promoter_gene AS
 SELECT * FROM read_parquet('tables/jaspar2026/promoter_gene.parquet');
+CREATE VIEW downstream_region AS
+SELECT * FROM read_parquet('tables/jaspar2026/downstream_region.parquet');
+CREATE VIEW downstream_region_gene AS
+SELECT * FROM read_parquet(
+    'tables/jaspar2026/downstream_region_gene.parquet'
+);
 CREATE VIEW tp73_anchor_nearest_tss AS
 SELECT * FROM read_parquet(
     'tables/jaspar2026/tp73_anchor_nearest_tss.parquet'
@@ -3105,6 +3329,10 @@ SELECT * FROM read_parquet(
 );
 CREATE VIEW tp73_anchor_promoter AS
 SELECT * FROM read_parquet('tables/jaspar2026/tp73_anchor_promoter.parquet');
+CREATE VIEW tp73_anchor_downstream_region AS
+SELECT * FROM read_parquet(
+    'tables/jaspar2026/tp73_anchor_downstream_region.parquet'
+);
 CREATE VIEW transcript AS
 SELECT * FROM read_parquet('tables/jaspar2026/transcript.parquet');
 CREATE VIEW intron AS
@@ -3173,6 +3401,7 @@ def build_package(arguments: argparse.Namespace) -> None:
         ("--source-commit", arguments.source_commit),
         ("--annotation-release", arguments.annotation_release),
         ("--promoter-definition-id", arguments.promoter_definition_id),
+        ("--downstream-definition-id", arguments.downstream_definition_id),
     ):
         if not identifier_pattern.fullmatch(value):
             raise ContextBuildError(

@@ -26,7 +26,7 @@ For GFP-referenced H3K4me3 change at TP73 anchors, read
 [`docs/h3k4me3_cofactor_change.md`](docs/h3k4me3_cofactor_change.md). The
 completed chromosome-1 result is reported in
 [`docs/h3k4me3_chr1_production_20260810.md`](docs/h3k4me3_chr1_production_20260810.md).
-For the schema-8 annotation rebuild and restart-safe whole-genome H3K4me3
+For the schema-9 annotation rebuild and restart-safe whole-genome H3K4me3
 signal and all-JASPAR cofactor analysis, also read
 [`docs/h3k4me3_whole_genome_production.md`](docs/h3k4me3_whole_genome_production.md).
 The completed all-autosome joint TP73 enrichment/H3K4me3 interpretation is
@@ -65,6 +65,10 @@ as the draft query contract:
 - Use Q22 with `tp73_anchor_nearest_cds` when all tied nearest physical CDS
   segments and transcript/gene owners matter. Use Q23 only for the compact,
   deterministic anchor annotation covariates used by statistical models.
+- Use Q24 with `tp73_anchor_downstream_region` for versioned many-to-many
+  transcript-end downstream membership. The compact `gene_relation_class`
+  applies promoter, downstream, gene-body, then intergenic precedence without
+  replacing the independent relationship tables.
 - Treat TSSs, promoters, and `coding_sequence_segment` rows as physical
   dimensions. Recover their transcript/gene ownership and CDS phase through
   the corresponding bridge tables; exon and intron rows remain

@@ -33,7 +33,7 @@ grep -Fq -- '--cpus-per-task=2' <<< "$rendered"
 grep -Fq -- '--mem=20G' <<< "$rendered"
 grep -Fq -- '--memory-limit 14GB' <<< "$rendered"
 grep -Fq -- '--max-temp-size 80GB' <<< "$rendered"
-grep -Fq -- '--job-name=tp73_context_v8' <<< "$rendered"
+grep -Fq -- '--job-name=tp73_context_v9' <<< "$rendered"
 [[ $(wc -l < "$temporary/run/plan/context_tasks.tsv") -eq 5 ]]
 cmp -s "$repository_root/scripts/build_motif_context.py" \
     "$temporary/run/source/scripts/build_motif_context.py"
@@ -46,7 +46,7 @@ cmp -s "$repository_root/scripts/finalize_motif_context_run.py" \
 snapshot=$(cd "$temporary/run/source" && pwd)
 grep -Fq -- "--source $snapshot" <<< "$rendered"
 grep -Fq -- 'tp73_context_finalize' <<< "$rendered"
-grep -Eq $'\t8\t[0-9]+\t[0-9a-f]{64}\tensembl_113\ttss_upstream_2000_downstream_500_v1\t2000\t500\tcofactor_context$' \
+grep -Eq $'\t9\t[0-9]+\t[0-9a-f]{64}\tensembl_113\ttss_upstream_2000_downstream_500_v1\t2000\t500\ttes_upstream_500_downstream_2000_v1\t500\t2000\tcofactor_context$' \
     "$temporary/run/plan/context_tasks.tsv"
 
 # An identical dry run reuses the plan; changing it is rejected.
@@ -96,10 +96,12 @@ grep -Fq $'2\t1\tMA0003.1,MA0004.1\tband' \
     "$temporary/batched/plan/context_tasks.tsv"
 grep -Fq $'5\tX\tMA0005.1\tband' \
     "$temporary/batched/plan/context_tasks.tsv"
-awk -F '\t' 'NR > 1 && ($6 != 8 || $7 != 0 || $8 != "none" \
+awk -F '\t' 'NR > 1 && ($6 != 9 || $7 != 0 || $8 != "none" \
     || $9 != "ensembl_113" \
     || $10 != "tss_upstream_2000_downstream_500_v1" \
-    || $11 != 2000 || $12 != 500 || $13 != "cofactor_context") { exit 1 }' \
+    || $11 != 2000 || $12 != 500 \
+    || $13 != "tes_upstream_500_downstream_2000_v1" \
+    || $14 != 500 || $15 != 2000 || $16 != "cofactor_context") { exit 1 }' \
     "$temporary/batched/plan/context_tasks.tsv"
 
 anchor_rendered=$("$repository_root/scripts/submit_motif_context_slurm.sh" \
@@ -109,7 +111,7 @@ anchor_rendered=$("$repository_root/scripts/submit_motif_context_slurm.sh" \
 [[ $(wc -l < "$temporary/anchor/plan/context_tasks.tsv") -eq 3 ]]
 grep -Fq $'0\t1\tnone\tsummary' "$temporary/anchor/plan/context_tasks.tsv"
 grep -Fq $'1\tX\tnone\tsummary' "$temporary/anchor/plan/context_tasks.tsv"
-awk -F '\t' 'NR > 1 && $13 != "anchor_annotation" { exit 1 }' \
+awk -F '\t' 'NR > 1 && $16 != "anchor_annotation" { exit 1 }' \
     "$temporary/anchor/plan/context_tasks.tsv"
 grep -Fq -- '--array=0-1%8' <<< "$anchor_rendered"
 

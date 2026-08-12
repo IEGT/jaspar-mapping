@@ -407,7 +407,7 @@ grep -Fq '"anchor_source_mode": "schema_local_peak_context_anchor"' \
     "$temporary/signal.parquet.run_config.json"
 
 # The genome evaluator consumes the compact change table and collapses
-# orientation-duplicated schema-8 annotation only when physical-span fields
+# orientation-duplicated schema-9 annotation only when physical-span fields
 # agree.
 "$duckdb" -batch :memory: >/dev/null <<SQL
 COPY (
@@ -457,11 +457,23 @@ COPY (
 COPY (
   SELECT '1'::VARCHAR AS chrom, (100 + i * 500)::BIGINT AS start,
          (110 + i * 500)::BIGINT AS "end", strand,
-         CASE WHEN i % 2 = 0 THEN 'strict_intergenic' ELSE 'promoter_only' END
-             AS primary_genomic_context,
-         i % 2 = 0 AS strict_intergenic,
-         i % 2 = 1 AS overlaps_any_promoter,
-         false AS in_any_transcript, false AS in_any_exon, false AS in_any_cds,
+         CASE floor(i / 4)
+           WHEN 0 THEN 'promoter_only'
+           WHEN 1 THEN 'downstream_only'
+           WHEN 2 THEN 'intron'
+           ELSE 'strict_intergenic'
+         END AS primary_genomic_context,
+         floor(i / 4) = 3 AS strict_intergenic,
+         floor(i / 4) = 0 AS overlaps_any_promoter,
+         floor(i / 4) = 1 AS overlaps_any_downstream_region,
+         floor(i / 4) = 2 AS in_any_transcript,
+         CASE floor(i / 4)
+           WHEN 0 THEN 'promoter'
+           WHEN 1 THEN 'downstream'
+           WHEN 2 THEN 'gene_body'
+           ELSE 'intergenic'
+         END AS gene_relation_class,
+         false AS in_any_exon, false AS in_any_cds,
          (1000 + i * 100)::BIGINT AS nearest_tss_distance_bp,
          (1000 + i * 100)::BIGINT AS nearest_tss_genomic_distance_bp,
          i = 0 AS nearest_tss_has_mixed_strands,
@@ -472,7 +484,7 @@ COPY (
          'downstream'::VARCHAR AS nearest_cds_relation
   FROM range(16) AS r(i)
   CROSS JOIN (VALUES ('+'), ('-')) AS s(strand)
-) TO '$temporary/schema8-annotation.parquet' (FORMAT PARQUET, COMPRESSION ZSTD);
+) TO '$temporary/schema9-annotation.parquet' (FORMAT PARQUET, COMPRESSION ZSTD);
 
 COPY (SELECT * FROM read_parquet('$temporary/change.parquet')
       WHERE anchor_start % 1000 = 100)
@@ -480,10 +492,10 @@ TO '$temporary/change-a.parquet' (FORMAT PARQUET, COMPRESSION ZSTD);
 COPY (SELECT * FROM read_parquet('$temporary/change.parquet')
       WHERE anchor_start % 1000 = 600)
 TO '$temporary/change-b.parquet' (FORMAT PARQUET, COMPRESSION ZSTD);
-COPY (SELECT * FROM read_parquet('$temporary/schema8-annotation.parquet')
+COPY (SELECT * FROM read_parquet('$temporary/schema9-annotation.parquet')
       WHERE start % 1000 = 100)
 TO '$temporary/annotation-a.parquet' (FORMAT PARQUET, COMPRESSION ZSTD);
-COPY (SELECT * FROM read_parquet('$temporary/schema8-annotation.parquet')
+COPY (SELECT * FROM read_parquet('$temporary/schema9-annotation.parquet')
       WHERE start % 1000 = 600)
 TO '$temporary/annotation-b.parquet' (FORMAT PARQUET, COMPRESSION ZSTD);
 COPY (SELECT * FROM read_parquet('$temporary/maxima.parquet')
@@ -512,6 +524,9 @@ Rscript "$repository_root/scripts/analyze_h3k4me3_cofactor_change.R" \
 CREATE VIEW context_effect AS SELECT * FROM read_csv_auto(
   '$temporary/context-result_context_stratified_intensity_effect.tsv',
   delim='\t', header=true, nullstr='NA');
+CREATE VIEW gene_relation_effect AS SELECT * FROM read_csv_auto(
+  '$temporary/context-result_gene_relation_stratified_intensity_effect.tsv',
+  delim='\t', header=true, nullstr='NA');
 CREATE VIEW score_gradient AS SELECT * FROM read_csv_auto(
   '$temporary/context-result_score_gradient.tsv', delim='\t',
   header=true, nullstr='NA');
@@ -521,6 +536,15 @@ CREATE VIEW context_config AS SELECT * FROM read_csv_auto(
 SELECT CASE WHEN NOT EXISTS (
   SELECT 1 FROM context_effect WHERE genomic_context_class = 'strict_intergenic'
 ) THEN error('strict-intergenic context stratum was not emitted') END;
+SELECT CASE WHEN (SELECT count(DISTINCT gene_relation_class)
+                  FROM gene_relation_effect) <> 4
+  OR (SELECT count(*) FROM gene_relation_effect) <> 64
+THEN error('four-way gene-relation strata were not emitted') END;
+SELECT CASE WHEN EXISTS (
+  SELECT 1 FROM gene_relation_effect
+  WHERE gene_relation_class NOT IN
+    ('promoter', 'downstream', 'gene_body', 'intergenic')
+) THEN error('unexpected gene-relation class was emitted') END;
 SELECT CASE WHEN NOT EXISTS (
   SELECT 1 FROM score_gradient
   WHERE estimate_unit = 'one_SD_increase_in_clamped_cofactor_score'
@@ -528,10 +552,13 @@ SELECT CASE WHEN NOT EXISTS (
 SELECT CASE WHEN NOT EXISTS (
   SELECT 1 FROM context_config
   WHERE input_mode = 'precomputed_change'
+    AND schema_version = 3
     AND annotation_schema =
-      'schema8_tp73_context_anchor_collapsed_to_physical_span'
+      'schema9_tp73_context_anchor_collapsed_to_physical_span'
+    AND gene_relation_precedence =
+      'promoter_then_downstream_then_gene_body_then_intergenic'
     AND strict_intergenic_definition =
-      'no_transcript_overlap_and_no_versioned_promoter_overlap'
+      'no_transcript_promoter_or_downstream_region_overlap'
 ) THEN error('genome inference provenance is incomplete') END;
 SQL
 

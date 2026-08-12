@@ -3,7 +3,7 @@
 This document defines the production extension of the chromosome-1 TP73
 analysis to the finalized JASPAR 2026 GRCh38 scan. It covers TP73/control
 CUT&RUN evidence, convenient-threshold context counts, and all-motif
-enrichment/depletion. The schema-8 annotation rebuild and GFP-referenced
+enrichment/depletion. The schema-9 annotation rebuild and GFP-referenced
 H3K4me3 change extension are defined as subsequent, independently restartable
 stages.
 
@@ -153,7 +153,7 @@ After the context finalizer succeeds, pass that context run as
 `--anchor-evidence` to `submit_tp73_cofactor_enrichment_slurm.sh`. Its default
 two-motif batches request 2 CPUs, 32 GB, and one hour.
 
-Stages 4 and 5 rebuild the shared nuclear annotation at schema 8, extract
+Stages 4 and 5 rebuild the shared nuclear annotation at schema 9, extract
 H3K4me3/input signal in five fixed windows by reusing the finalized TP73 anchor
 evidence, and fit the all-JASPAR GFP-referenced change models. Their exact
 inputs, Slurm commands, restart contract, genomic-context covariates, and

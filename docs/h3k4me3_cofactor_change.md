@@ -170,7 +170,7 @@ cells satisfy the declared minimum support.
 - Benjamini-Hochberg correction is applied separately by series, isoform, and
   negative reference. TP73-interaction contrasts form separate families.
 
-With schema-8 annotation, the primary adjustment includes a TP73-score spline,
+With schema-9 annotation, the primary adjustment includes a TP73-score spline,
 chromosome, compact genomic context, unsigned genomic distances to the nearest
 TSS and CDS, and explicit upstream/downstream/overlap/mixed-strand direction
 classes. The evaluator also writes context-stratified intensity
@@ -178,6 +178,15 @@ effects (including strict intergenic) and a continuous cofactor-score
 sensitivity. The deterministic nearest-feature summaries are adjustment
 covariates; the normalized tied-nearest tables remain authoritative for
 biological interpretation.
+
+The evaluator additionally writes a fixed four-way gene-relation table using
+`promoter > downstream > gene_body > intergenic` precedence. Promoter and
+downstream membership come from versioned many-to-many physical interval
+bridges. `gene_body` means transcript overlap outside those higher-precedence
+regions; it is not synonymous with CDS. Within that pooled stratum the model
+continues to adjust for the finer CDS/exonic/intronic context. All four rows are
+emitted for every motif/series/isoform/reference combination, with an explicit
+underpowered status when a class cannot be estimated.
 
 The evaluator writes intensity effects, TP73 interactions, binding-state
 summaries, occurrence summaries, cross-series directional summaries, and the
@@ -267,7 +276,7 @@ target and renames that file atomically, because a direct cross-filesystem
 
 ## Whole-genome production
 
-The restart-safe whole-genome measurement, schema-8 annotation dependency, and
+The restart-safe whole-genome measurement, schema-9 annotation dependency, and
 all-JASPAR inference commands are specified in
 [`h3k4me3_whole_genome_production.md`](h3k4me3_whole_genome_production.md).
 Autosomes are primary; X/Y are retained as sensitivity data; mitochondria are

@@ -28,6 +28,7 @@ COPY (
         ('1', 620::BIGINT, 636::BIGINT, 'MA0861.2', 'TP73', '+', -0.5, 'log2_relative_risk', 1.0, 0.45),
         ('1', 780::BIGINT, 796::BIGINT, 'MA0861.2', 'TP73', '+', 3.0, 'log2_relative_risk', 1.0, 0.70),
         ('1', 1000::BIGINT, 1016::BIGINT, 'MA0861.2', 'TP73', '+', 4.0, 'log2_relative_risk', 1.0, 0.79),
+        ('1', 1400::BIGINT, 1416::BIGINT, 'MA0861.2', 'TP73', '+', 3.0, 'log2_relative_risk', 1.0, 0.70),
         ('1', 130::BIGINT, 139::BIGINT, 'MA0079.5', 'SP1',  '+', 6.0,  'log2_relative_risk', 1.0, 0.85),
         ('1', 410::BIGINT, 419::BIGINT, 'MA0079.5', 'SP1',  '+', 4.0,  'log2_relative_risk', 1.0, 0.80),
         ('1', 499::BIGINT, 508::BIGINT, 'MA0079.5', 'SP1',  '+', 3.0,  'log2_relative_risk', 1.0, 0.70),
@@ -111,6 +112,8 @@ EOF
     --annotation-release synthetic_v1 \
     --promoter-definition-id synthetic_up100_down25_v1 \
     --promoter-upstream-bp 100 --promoter-downstream-bp 25 \
+    --downstream-definition-id synthetic_tes_up25_down50_v1 \
+    --downstream-upstream-bp 25 --downstream-downstream-bp 50 \
     --anchor-minimum-score 0 --partner-minimum-score 0 \
     --score-mode log2_relative_risk --pseudocount 1 \
     --chrom 1 --capture-flank 150 --context-flank 150 --tandem-flank 20 \
@@ -660,6 +663,19 @@ SELECT CASE WHEN (SELECT COUNT(*) FROM gene) <> 6
     OR (SELECT COUNT(*) FROM coding_landmark) <> 2
 THEN error('normalized gene/CDS annotation dimensions are incomplete') END;
 
+SELECT CASE WHEN (SELECT COUNT(*) FROM transcription_end_site) <> 6
+    OR (SELECT COUNT(*) FROM transcript_tes) <> 7
+    OR (SELECT COUNT(*) FROM downstream_region) <> 6
+    OR (SELECT COUNT(*) FROM downstream_region_gene) <> 6
+THEN error('normalized TES/downstream-region dimensions are incomplete') END;
+
+-- The minus-strand G2 transcript starts at BED coordinate 250, so its final
+-- transcribed base and physical TES interval are [250,251).
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM transcription_end_site
+    WHERE start = 250 AND "end" = 251 AND strand = '-'
+) THEN error('minus-strand TES was not taken from the transcript start') END;
+
 -- One physical coding segment is shared by three transcripts across two
 -- genes; the segment remains singular and ownership stays in transcript_cds.
 SELECT CASE WHEN NOT EXISTS (
@@ -683,13 +699,45 @@ SELECT CASE WHEN NOT EXISTS (
 SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM tp73_context_anchor
     WHERE start = 780
-      AND strict_intergenic
       AND NOT in_any_transcript
       AND NOT overlaps_any_promoter
-      AND primary_genomic_context = 'strict_intergenic'
+      AND overlaps_any_downstream_region
+      AND gene_relation_class = 'downstream'
+      AND primary_genomic_context = 'downstream_only'
       AND nearest_cds_start = 849
       AND nearest_cds_genomic_distance_bp = 53
-) THEN error('strict-intergenic or nearest-CDS summary is incorrect') END;
+) THEN error('downstream or nearest-CDS summary is incorrect') END;
+
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM tp73_anchor_downstream_region
+    WHERE anchor_start = 780 AND tes_start = 799 AND tes_strand = '-'
+      AND downstream_definition_id = 'synthetic_tes_up25_down50_v1'
+      AND downstream_overlap_bp = 16
+      AND anchor_fully_within_downstream_region
+      AND tes_interval_distance_bp = 3
+      AND transcription_oriented_center_offset_bp = 11
+      AND anchor_tes_relation = 'downstream'
+) THEN error('minus-strand downstream-region geometry is incorrect') END;
+
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM tp73_context_anchor
+    WHERE start = 1400 AND strict_intergenic
+      AND NOT in_any_transcript AND NOT overlaps_any_promoter
+      AND NOT overlaps_any_downstream_region
+      AND gene_relation_class = 'intergenic'
+      AND primary_genomic_context = 'strict_intergenic'
+) THEN error('strict-intergenic four-way classification is incorrect') END;
+
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM tp73_context_anchor
+    WHERE start = 140 AND in_any_transcript
+      AND NOT overlaps_any_promoter AND NOT overlaps_any_downstream_region
+      AND gene_relation_class = 'gene_body'
+) OR NOT EXISTS (
+    SELECT 1 FROM tp73_context_anchor
+    WHERE start = 400 AND overlaps_any_promoter
+      AND gene_relation_class = 'promoter'
+) THEN error('gene-body/promoter four-way precedence is incorrect') END;
 
 SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM motif_transcript_context_pair
@@ -779,7 +827,7 @@ THEN error('many-to-many TP73 anchor/promoter membership is incorrect') END;
 
 SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM motif_context_run_config
-    WHERE schema_version = 8
+    WHERE schema_version = 9
       AND builder_source_commit = 'unknown'
       AND input_uniqueness = 'deduplicate'
       AND genome_id = 'synthetic_grch38_v1'
@@ -818,7 +866,10 @@ SELECT CASE WHEN NOT EXISTS (
       AND annotation_release = 'synthetic_v1'
       AND promoter_definition_id = 'synthetic_up100_down25_v1'
       AND promoter_upstream_bp = 100 AND promoter_downstream_bp = 25
+      AND downstream_definition_id = 'synthetic_tes_up25_down50_v1'
+      AND downstream_upstream_bp = 25 AND downstream_downstream_bp = 50
       AND tss_coordinate_rule = 'one_base_bed_start_plus_end_minus_1'
+      AND tes_coordinate_rule = 'one_base_bed_end_minus_1_plus_start'
       AND nearest_tss_rule = 'all_physical_tss_at_minimum_center_distance'
       AND nearest_cds_rule =
           'physical_cds_segments_overlap_first_then_minimum_interval_gap'
@@ -826,8 +877,12 @@ SELECT CASE WHEN NOT EXISTS (
           'gtf_cds_1_based_inclusive_to_bed_half_open'
       AND promoter_membership_rule =
           'anchor_overlaps_resolved_promoter_interval'
+      AND downstream_membership_rule =
+          'anchor_overlaps_resolved_downstream_interval'
+      AND gene_relation_precedence =
+          'promoter_then_downstream_then_gene_body_then_intergenic'
       AND strict_intergenic_rule =
-          'no_transcript_overlap_and_no_versioned_promoter_overlap'
+          'no_transcript_promoter_or_downstream_region_overlap'
       AND gtf_source IS NOT NULL
       AND length(gtf_sha256) = 64
       AND gtf_size_bytes > 0

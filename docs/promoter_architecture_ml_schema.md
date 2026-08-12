@@ -152,10 +152,16 @@ implemented by `scripts/query_genome_scan.py`. Optional synteny bridges are in
   tandem summary, local motif counts, a convenient representative nearest-TSS
   and nearest-CDS annotation with explicit tie/mixed-strand flags, plus
   transcript/exon/CDS/intron/promoter indicators and a strict-intergenic class.
+  Schema 9 also carries downstream-region membership and the exhaustive
+  `promoter > downstream > gene_body > intergenic` modeling projection.
   It never replaces the normalized pair or nearest-feature tables.
 - **`transcription_start_site / transcript_tss`** — physical one-base TSS
   intervals and their many-to-many transcript/gene ownership. A shared TSS is
   not duplicated merely because several transcripts or genes use it.
+- **`transcription_end_site / transcript_tes`** — physical one-base TES
+  intervals and their many-to-many transcript/gene ownership. On the forward
+  strand the TES is transcript `end - 1`; on the reverse strand it is
+  transcript `start`.
 - **`tp73_anchor_nearest_tss`** — every physical TSS tied for the minimum
   distance from a TP73 anchor. This is authoritative when the compact anchor
   summary reports a tie.
@@ -169,6 +175,12 @@ implemented by `scripts/query_genome_scan.py`. Optional synteny bridges are in
   strand-aware intervals under a versioned promoter definition, gene ownership,
   and canonical many-to-many TP73-anchor membership. Nearest-TSS annotation and
   promoter membership are deliberately separate concepts.
+- **`downstream_region / downstream_region_gene /
+  tp73_anchor_downstream_region`** — resolved, strand-aware intervals under a
+  versioned transcript-end definition, normalized gene ownership, and
+  canonical many-to-many anchor membership. The default region extends 500 bp
+  toward the transcript body and 2 kb beyond the TES, symmetrically to the
+  promoter extents.
 - **`motif_transcript_context_pair`** — a transcript-specific view of each
   TP73/cofactor relationship with transcription-oriented direction and signed
   TSS distances. It is kept out of the anchor-grain ML table to avoid
@@ -205,6 +217,11 @@ span that crosses a promoter boundary is therefore associated with that
 promoter, while a span that merely abuts the boundary is not. The TP73-specific
 bridge additionally records whether the complete motif-model span lies within
 the promoter.
+Downstream-region membership uses the same positive half-open overlap rule;
+mere abutment is excluded. An anchor may retain several promoter, downstream,
+and transcript relationships. `gene_relation_class` is only a deterministic
+modeling projection with precedence `promoter`, `downstream`, `gene_body`,
+then `intergenic`.
 
 ## Dense Chr1 Calibration
 
@@ -347,8 +364,12 @@ free-form access to raw genome-wide files:
 - `get_tp73_nearest_cds(anchor_hit_id)` -> query Q22, returning every tied
   physical CDS segment and all transcript/gene associations.
 - `get_tp73_annotation_covariates(anchor_hit_id)` -> query Q23, returning the
-  deterministic compact overlap flags, strict-intergenic state, and nearest
-  TSS/CDS summaries used by statistical models.
+  deterministic compact overlap flags, four-way gene relation,
+  strict-intergenic state, and nearest TSS/CDS summaries used by statistical
+  models.
+- `get_tp73_downstream_regions(anchor_hit_id, downstream_definition_id)` ->
+  query Q24, returning every overlapping versioned transcript-end region and
+  associated gene.
 - `get_cutandrun_promoter_signal(gene_name, cell_line)` -> query Q4.
 - `export_ml_matrix(cell_line, score_mode, pseudocount, feature_set)` -> query
   Q3, pivot its bound long result in the client, or read a pinned Parquet export

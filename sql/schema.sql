@@ -363,9 +363,18 @@ SELECT
     promoter_definition_id,
     promoter_upstream_bp,
     promoter_downstream_bp,
+    downstream_definition_id,
+    downstream_upstream_bp,
+    downstream_downstream_bp,
     tss_coordinate_rule,
+    tes_coordinate_rule,
     nearest_tss_rule,
+    nearest_cds_rule,
+    cds_coordinate_rule,
     promoter_membership_rule,
+    downstream_membership_rule,
+    gene_relation_precedence,
+    strict_intergenic_rule,
     gtf_source,
     gtf_sha256,
     gtf_size_bytes
@@ -711,9 +720,12 @@ SELECT
     overlaps_any_intron_boundary,
     overlaps_any_promoter,
     n_overlapping_promoters,
+    overlaps_any_downstream_region,
+    n_overlapping_downstream_regions,
     strict_intergenic,
     primary_transcript_region,
     primary_genomic_context,
+    gene_relation_class,
     capture_flank_bp,
     context_flank_bp,
     tandem_flank_bp
@@ -760,6 +772,16 @@ CREATE OR REPLACE VIEW transcript_tss AS
 SELECT genome_id, annotation_release, gene_id, gene_name, transcript_id, tss_id
 FROM read_parquet('tables/jaspar2026/transcript_tss.parquet');
 
+-- A TES is the physical final transcribed base. Ownership remains normalized
+-- because alternative transcripts and genes can share one terminal base.
+CREATE OR REPLACE VIEW transcription_end_site AS
+SELECT tes_id, genome_id, annotation_release, chrom, start, "end", strand
+FROM read_parquet('tables/jaspar2026/transcription_end_site.parquet');
+
+CREATE OR REPLACE VIEW transcript_tes AS
+SELECT genome_id, annotation_release, gene_id, gene_name, transcript_id, tes_id
+FROM read_parquet('tables/jaspar2026/transcript_tes.parquet');
+
 -- Promoter intervals are resolved once from a physical TSS and an explicitly
 -- versioned strand-aware definition. promoter_gene recovers every gene using
 -- a shared physical promoter without duplicating the promoter itself.
@@ -774,13 +796,27 @@ SELECT genome_id, annotation_release, promoter_definition_id, promoter_id,
        gene_id, gene_name, n_transcripts
 FROM read_parquet('tables/jaspar2026/promoter_gene.parquet');
 
+-- A downstream region is a versioned strand-aware interval around a physical
+-- TES. Its default 500 bp transcript-side and 2 kb exterior extents mirror the
+-- promoter definition, while downstream_region_gene retains all owners.
+CREATE OR REPLACE VIEW downstream_region AS
+SELECT downstream_region_id, tes_id, genome_id, annotation_release,
+       downstream_definition_id, chrom, strand, downstream_start,
+       downstream_end, tes_start, tes_end, upstream_bp, downstream_bp
+FROM read_parquet('tables/jaspar2026/downstream_region.parquet');
+
+CREATE OR REPLACE VIEW downstream_region_gene AS
+SELECT genome_id, annotation_release, downstream_definition_id,
+       downstream_region_id, gene_id, gene_name, n_transcripts
+FROM read_parquet('tables/jaspar2026/downstream_region_gene.parquet');
+
 -- Transcript and intron intervals are regenerated directly from the pinned
 -- GTF. A motif can be intronic for one transcript and non-intronic for another;
 -- keep that ambiguity in the long per-transcript bridge rather than flattening
 -- it into one premature gene-level label.
 CREATE OR REPLACE VIEW transcript AS
 SELECT genome_id, gene_id, transcript_id, chrom, strand, transcript_start, transcript_end,
-       tss, gene_name, biotype
+       tss, tes, gene_name, biotype
 FROM read_parquet('tables/jaspar2026/transcript.parquet');
 
 CREATE OR REPLACE VIEW exon AS
@@ -852,6 +888,12 @@ FROM read_parquet('tables/jaspar2026/tp73_anchor_nearest_cds.parquet');
 CREATE OR REPLACE VIEW tp73_anchor_promoter AS
 SELECT *
 FROM read_parquet('tables/jaspar2026/tp73_anchor_promoter.parquet');
+
+-- Canonical many-to-many anchor/downstream-region membership. Join through
+-- downstream_region_gene to recover every associated gene.
+CREATE OR REPLACE VIEW tp73_anchor_downstream_region AS
+SELECT *
+FROM read_parquet('tables/jaspar2026/tp73_anchor_downstream_region.parquet');
 
 -- Transcript-oriented TP73/cofactor direction is derived here rather than
 -- multiplying the chromosome-wide feature table once per transcript.

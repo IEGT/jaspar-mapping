@@ -140,7 +140,7 @@ def parse_task_plan(path: Path) -> tuple[list[dict[str, Any]], str]:
             raise ContextFinalizationError(
                 f"invalid context schema at task {task_index}: {schema_text}"
             ) from error
-        if schema_version not in {5, 6, 7, 8}:
+        if schema_version not in {5, 6, 7, 8, 9}:
             raise ContextFinalizationError(
                 f"unsupported context schema at task {task_index}: {schema_version}"
             )
@@ -200,6 +200,32 @@ def parse_task_plan(path: Path) -> tuple[list[dict[str, Any]], str]:
             promoter_upstream_bp = None
             promoter_downstream_bp = None
 
+        if schema_version >= 9:
+            downstream_definition_id = row.get("downstream_definition_id") or ""
+            if not SAFE_IDENTIFIER.fullmatch(downstream_definition_id):
+                raise ContextFinalizationError(
+                    f"invalid downstream-region identity at task {task_index}"
+                )
+            try:
+                downstream_upstream_bp = int(
+                    row.get("downstream_upstream_bp") or ""
+                )
+                downstream_downstream_bp = int(
+                    row.get("downstream_downstream_bp") or ""
+                )
+            except ValueError as error:
+                raise ContextFinalizationError(
+                    f"invalid downstream-region extent at task {task_index}"
+                ) from error
+            if downstream_upstream_bp < 0 or downstream_downstream_bp < 0:
+                raise ContextFinalizationError(
+                    f"negative downstream-region extent at task {task_index}"
+                )
+        else:
+            downstream_definition_id = None
+            downstream_upstream_bp = None
+            downstream_downstream_bp = None
+
         tasks.append({
             "task_index": task_index,
             "task_kind": task_kind,
@@ -214,6 +240,9 @@ def parse_task_plan(path: Path) -> tuple[list[dict[str, Any]], str]:
             "promoter_definition_id": promoter_definition_id,
             "promoter_upstream_bp": promoter_upstream_bp,
             "promoter_downstream_bp": promoter_downstream_bp,
+            "downstream_definition_id": downstream_definition_id,
+            "downstream_upstream_bp": downstream_upstream_bp,
+            "downstream_downstream_bp": downstream_downstream_bp,
         })
 
     for field in (
@@ -232,12 +261,14 @@ def parse_task_plan(path: Path) -> tuple[list[dict[str, Any]], str]:
         raise ContextFinalizationError("task plan mixes GTF content identities")
     annotation_identities = {
         (task["annotation_release"], task["promoter_definition_id"],
-         task["promoter_upstream_bp"], task["promoter_downstream_bp"])
+         task["promoter_upstream_bp"], task["promoter_downstream_bp"],
+         task["downstream_definition_id"], task["downstream_upstream_bp"],
+         task["downstream_downstream_bp"])
         for task in tasks
     }
     if len(annotation_identities) != 1:
         raise ContextFinalizationError(
-            "task plan mixes annotation or promoter definitions"
+            "task plan mixes annotation, promoter, or downstream definitions"
         )
     return tasks, plan_sha256
 
@@ -349,9 +380,33 @@ def validate_package_config(config: dict[str, Any], task: dict[str, Any],
             config, "cds_coordinate_rule",
             "gtf_cds_1_based_inclusive_to_bed_half_open", package,
         )
+        if task["context_schema_version"] == 8:
+            require_equal(
+                config, "strict_intergenic_rule",
+                "no_transcript_overlap_and_no_versioned_promoter_overlap",
+                package,
+            )
+    if task["context_schema_version"] >= 9:
+        for field in (
+            "downstream_definition_id", "downstream_upstream_bp",
+            "downstream_downstream_bp",
+        ):
+            require_equal(config, field, task[field], package)
+        require_equal(
+            config, "tes_coordinate_rule",
+            "one_base_bed_end_minus_1_plus_start", package,
+        )
+        require_equal(
+            config, "downstream_membership_rule",
+            "anchor_overlaps_resolved_downstream_interval", package,
+        )
+        require_equal(
+            config, "gene_relation_precedence",
+            "promoter_then_downstream_then_gene_body_then_intergenic", package,
+        )
         require_equal(
             config, "strict_intergenic_rule",
-            "no_transcript_overlap_and_no_versioned_promoter_overlap", package,
+            "no_transcript_promoter_or_downstream_region_overlap", package,
         )
 
 
@@ -395,6 +450,14 @@ def package_files(run_root: Path, package: Path,
                 "tables/jaspar2026/transcript_coding_span.parquet",
                 "tables/jaspar2026/coding_landmark.parquet",
                 "tables/jaspar2026/tp73_anchor_nearest_cds.parquet",
+            })
+        if task["context_schema_version"] >= 9:
+            required.update({
+                "tables/jaspar2026/transcription_end_site.parquet",
+                "tables/jaspar2026/transcript_tes.parquet",
+                "tables/jaspar2026/downstream_region.parquet",
+                "tables/jaspar2026/downstream_region_gene.parquet",
+                "tables/jaspar2026/tp73_anchor_downstream_region.parquet",
             })
     observed: set[str] = set()
     rows: list[dict[str, Any]] = []
@@ -690,6 +753,11 @@ def finalize(arguments: argparse.Namespace) -> None:
             "promoter_definition_id": task_rows[0]["promoter_definition_id"],
             "promoter_upstream_bp": task_rows[0]["promoter_upstream_bp"],
             "promoter_downstream_bp": task_rows[0]["promoter_downstream_bp"],
+            "downstream_definition_id":
+                task_rows[0]["downstream_definition_id"],
+            "downstream_upstream_bp": task_rows[0]["downstream_upstream_bp"],
+            "downstream_downstream_bp":
+                task_rows[0]["downstream_downstream_bp"],
             "orphan_staging_count": len(orphans),
             "finalization_validation_mode": (
                 "exact_task_plan_input_manifest_run_config_schema_probe_file_inventory"

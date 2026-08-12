@@ -75,6 +75,21 @@ COPY (
 
 COPY (
   SELECT e.motif_id,e.factor_name,1 AS positive_threshold,
+         e.source_score_floor,-1 AS negative_reference_threshold,
+         d.series_id,d.isoform,r.gene_relation_class,
+         'ok' AS evaluation_status,0.1::DOUBLE AS estimate,
+         0.02::DOUBLE AS q_value_bh_all_motifs
+  FROM (VALUES ('M1','Factor1',-1),('M2','Factor2',-1))
+    AS e(motif_id,factor_name,source_score_floor)
+  CROSS JOIN (VALUES ('saos2','TA'),('saos2','DN'),
+                     ('skmel29_2','TA'),('skmel29_2','DN'))
+    AS d(series_id,isoform)
+  CROSS JOIN (VALUES ('promoter'),('downstream'),('gene_body'),('intergenic'))
+    AS r(gene_relation_class)
+) TO '$temporary/gene_relation.parquet' (FORMAT PARQUET);
+
+COPY (
+  SELECT e.motif_id,e.factor_name,1 AS positive_threshold,
          e.source_score_floor,-1 AS score_clamp_reference,
          d.series_id,d.isoform,'ok' AS evaluation_status,
          0.1::DOUBLE AS estimate,0.02::DOUBLE AS q_value_bh_all_motifs
@@ -103,6 +118,7 @@ summary="$temporary/summary"
     --enrichment "$temporary/enrichment.parquet" \
     --intensity "$temporary/intensity.parquet" \
     --context "$temporary/context.parquet" \
+    --gene-relation "$temporary/gene_relation.parquet" \
     --score-gradient "$temporary/gradient.parquet" \
     --interaction "$temporary/interaction.parquet" \
     --h3-summary "$temporary/h3_summary.parquet" \
@@ -126,13 +142,35 @@ SELECT CASE WHEN EXISTS (SELECT 1 FROM read_parquet(
   WHERE anchors<>30 OR abs(mean_delta_ta_vs_gfp) > 1e-12
     OR abs(mean_delta_dn_vs_gfp + 5.0/3.0) > 1e-12)
   THEN error('autosome baseline is wrong or includes chromosome X') END;
+SELECT CASE WHEN (SELECT count(*) FROM read_parquet(
+  '$summary/gene_relation_primary_effect.parquet')) <> 32
+  THEN error('four-way gene-relation summary is incomplete') END;
 SQL
 
 [[ -s $summary/manifest.json && -s $summary/summary_metrics.tsv ]]
+if command -v Rscript >/dev/null 2>&1 && Rscript -e \
+    'quit(status=ifelse(requireNamespace("data.table",quietly=TRUE) && requireNamespace("ggplot2",quietly=TRUE),0,1))'; then
+    "$repository_root/scripts/plot_h3k4me3_genome_cofactor_summary.R" \
+        --joint "$summary/joint_primary_motif.tsv" \
+        --context "$summary/context_primary_effect.tsv" \
+        --gene-relation "$summary/gene_relation_primary_effect.tsv" \
+        --output-effect "$temporary/effect.png" \
+        --output-context "$temporary/context.png" \
+        --context-table "$temporary/context.tsv" \
+        --output-gene-relation-prefix "$temporary/gene-relation" \
+        --gene-relation-table "$temporary/gene-relation.tsv" \
+        --label-motifs M1
+    for relation in promoter downstream gene_body intergenic; do
+        [[ -s $temporary/gene-relation-$relation.png ]]
+    done
+    [[ -s $temporary/effect.png && -s $temporary/context.png \
+       && -s $temporary/gene-relation.tsv ]]
+fi
 if "$repository_root/scripts/summarize_h3k4me3_genome_cofactors.py" \
     --enrichment "$temporary/enrichment.parquet" \
     --intensity "$temporary/intensity.parquet" \
     --context "$temporary/context.parquet" \
+    --gene-relation "$temporary/gene_relation.parquet" \
     --score-gradient "$temporary/gradient.parquet" \
     --interaction "$temporary/interaction.parquet" \
     --h3-summary "$temporary/h3_summary.parquet" \

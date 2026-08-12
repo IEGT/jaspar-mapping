@@ -6,6 +6,9 @@ usage <- function(status = 0L) {
         "Usage: plot_h3k4me3_genome_cofactor_summary.R --joint JOINT.tsv",
         "       --context CONTEXT.tsv --output-effect EFFECT.png",
         "       --output-context CONTEXT.png --context-table CONTEXT.tsv",
+        "       --gene-relation GENE_RELATION.tsv",
+        "       --output-gene-relation-prefix PREFIX",
+        "       --gene-relation-table GENE_RELATION.tsv",
         "       [--label-motifs ID[,ID...]]",
         "",
         "Plot the genome-wide relationship between TP73 CUT&RUN enrichment and",
@@ -20,6 +23,9 @@ usage <- function(status = 0L) {
         "  --output-effect FILE  Four-panel enrichment/effect PNG",
         "  --output-context FILE Genomic-context correlation PNG",
         "  --context-table FILE  Derived context-correlation TSV",
+        "  --gene-relation FILE  Four-way gene-relation effect TSV",
+        "  --output-gene-relation-prefix PREFIX  Writes one 2x2 PNG per class",
+        "  --gene-relation-table FILE  Derived four-way correlation TSV",
         "  --label-motifs IDS    Comma-separated motif IDs to label",
         "  -h, --help            Show this help"
     ), con = stream)
@@ -36,7 +42,8 @@ values <- list(label_motifs = paste(
 index <- 1L
 valid <- c(
     "--joint", "--context", "--output-effect", "--output-context",
-    "--context-table", "--label-motifs"
+    "--context-table", "--gene-relation", "--output-gene-relation-prefix",
+    "--gene-relation-table", "--label-motifs"
 )
 while (index <= length(arguments)) {
     option <- arguments[[index]]
@@ -51,20 +58,30 @@ while (index <= length(arguments)) {
     index <- index + 1L
 }
 required_arguments <- c(
-    "joint", "context", "output_effect", "output_context", "context_table"
+    "joint", "context", "output_effect", "output_context", "context_table",
+    "gene_relation", "output_gene_relation_prefix", "gene_relation_table"
 )
 if (any(vapply(required_arguments, function(key) is.null(values[[key]]),
                logical(1)))) {
     usage(2L)
 }
-if (!file.exists(values$joint) || !file.exists(values$context)) {
-    stop("joint or context input not found", call. = FALSE)
+if (!file.exists(values$joint) || !file.exists(values$context) ||
+    !file.exists(values$gene_relation)) {
+    stop("joint, context, or gene-relation input not found", call. = FALSE)
 }
 
 suppressPackageStartupMessages({
     library(data.table)
     library(ggplot2)
 })
+
+safe_cor <- function(x, y) {
+    if (length(x) < 2L || !is.finite(sd(x)) || sd(x) == 0 ||
+        !is.finite(sd(y)) || sd(y) == 0) {
+        return(NA_real_)
+    }
+    cor(x, y)
+}
 
 joint <- fread(values$joint, sep = "\t", na.strings = c("NA", ""))
 required_joint <- c(
@@ -167,7 +184,7 @@ context_correlations <- context[
         is.finite(estimate),
     .(
         motifs = uniqueN(motif_id),
-        pearson_r = cor(log2(tp73_adjusted_odds_ratio), estimate),
+        pearson_r = safe_cor(log2(tp73_adjusted_odds_ratio), estimate),
         h3_q05 = sum(q_value_bh_all_motifs <= 0.05, na.rm = TRUE)
     ),
     by = .(series_id, isoform, genomic_context_class)
@@ -207,11 +224,120 @@ context_figure <- ggplot(
         strip.background = element_rect(fill = "grey94", colour = "grey70")
     )
 
-for (path in c(values$output_effect, values$output_context, values$context_table)) {
+gene_relation <- fread(
+    values$gene_relation, sep = "\t", na.strings = c("NA", "")
+)
+required_gene_relation <- c(
+    "motif_id", "factor_name", "tp73_adjusted_odds_ratio", "tp73_q",
+    "tp73_association_direction", "series_id", "isoform",
+    "gene_relation_class", "evaluation_status", "estimate",
+    "q_value_bh_all_motifs"
+)
+if (nrow(gene_relation) == 0L ||
+    length(setdiff(required_gene_relation, names(gene_relation))) > 0L) {
+    stop("gene-relation table is empty or incomplete", call. = FALSE)
+}
+gene_relation_levels <- c("promoter", "downstream", "gene_body", "intergenic")
+if (!setequal(unique(gene_relation$gene_relation_class), gene_relation_levels)) {
+    stop("gene-relation table does not contain the canonical four classes",
+         call. = FALSE)
+}
+gene_relation[, `:=`(
+    tp73_log2_odds_ratio = log2(tp73_adjusted_odds_ratio),
+    series = fifelse(series_id == "saos2", "SaOS-2", "SK-Mel-29 series 2"),
+    enrichment_class = fcase(
+        tp73_q > 0.05, "TP73 association q > 0.05",
+        tp73_association_direction == "anti_p73_enriched", "TP73 enriched",
+        tp73_association_direction == "anti_p73_depleted", "TP73 depleted",
+        default = "Other"
+    )
+)]
+gene_relation[, enrichment_class := factor(
+    enrichment_class,
+    levels = c("TP73 depleted", "TP73 association q > 0.05", "TP73 enriched")
+)]
+gene_relation[, isoform := factor(isoform, levels = c("TA", "DN"))]
+gene_relation[, series := factor(
+    series, levels = c("SaOS-2", "SK-Mel-29 series 2")
+)]
+gene_relation_correlations <- gene_relation[
+    evaluation_status == "ok" & tp73_q <= 0.05 &
+        is.finite(tp73_log2_odds_ratio) & is.finite(estimate),
+    .(
+        motifs = uniqueN(motif_id),
+        pearson_r = safe_cor(tp73_log2_odds_ratio, estimate),
+        h3_q05 = sum(q_value_bh_all_motifs <= 0.05, na.rm = TRUE)
+    ),
+    by = .(gene_relation_class, series_id, isoform)
+]
+setorder(gene_relation_correlations, gene_relation_class, series_id, isoform)
+
+gene_relation_labels <- c(
+    promoter = "Promoter", downstream = "Downstream of transcript end",
+    gene_body = "Gene body, outside promoter/downstream",
+    intergenic = "Intergenic"
+)
+gene_relation_outputs <- character()
+for (relation_class in gene_relation_levels) {
+    relation <- gene_relation[
+        gene_relation_class == relation_class & evaluation_status == "ok"
+    ]
+    relation_labels <- relation[motif_id %in% labels & isoform == "TA"]
+    relation_labels[, label := paste0(factor_name, "\n", motif_id)]
+    relation_figure <- ggplot(
+        relation,
+        aes(tp73_log2_odds_ratio, estimate, colour = enrichment_class)
+    ) +
+        geom_hline(yintercept = 0, linewidth = 0.3, colour = "grey65") +
+        geom_vline(xintercept = 0, linewidth = 0.3, colour = "grey65") +
+        geom_point(alpha = 0.55, size = 1.25) +
+        geom_smooth(
+            data = relation[tp73_q <= 0.05], method = "lm", formula = y ~ x,
+            se = FALSE, linewidth = 0.65, colour = "black"
+        ) +
+        geom_text(
+            data = relation_labels, aes(label = label), colour = "black",
+            size = 2.5, check_overlap = TRUE, vjust = -0.65,
+            show.legend = FALSE
+        ) +
+        facet_grid(rows = vars(series), cols = vars(isoform), scales = "free_y") +
+        scale_colour_manual(values = palette, drop = FALSE) +
+        labs(
+            x = expression(log[2] * " adjusted TP73 CUT&RUN odds ratio"),
+            y = expression(Delta * " H3K4me3 cofactor effect vs GFP"),
+            colour = NULL,
+            title = paste0(
+                "TP73 occupancy and H3K4me3 change: ",
+                gene_relation_labels[[relation_class]]
+            ),
+            subtitle = paste0(
+                "Strict cofactor-negative reference: score < -1; line uses ",
+                "motifs with TP73 association q <= 0.05"
+            )
+        ) +
+        theme_bw(base_size = 10.5) +
+        theme(
+            panel.grid.minor = element_blank(),
+            strip.background = element_rect(fill = "grey94", colour = "grey70"),
+            legend.position = "bottom"
+        )
+    output <- paste0(values$output_gene_relation_prefix, "_", relation_class, ".png")
+    dir.create(dirname(output), recursive = TRUE, showWarnings = FALSE)
+    ggsave(output, relation_figure, width = 10, height = 7, dpi = 180)
+    gene_relation_outputs <- c(gene_relation_outputs, output)
+}
+
+for (path in c(
+    values$output_effect, values$output_context, values$context_table,
+    values$gene_relation_table
+)) {
     dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
 }
 ggsave(values$output_effect, effect_figure, width = 10, height = 7, dpi = 180)
 ggsave(values$output_context, context_figure, width = 8.5, height = 4.8, dpi = 180)
 fwrite(context_correlations, values$context_table, sep = "\t")
+fwrite(gene_relation_correlations, values$gene_relation_table, sep = "\t")
 message("I: wrote enrichment/effect figure: ", values$output_effect)
 message("I: wrote genomic-context figure: ", values$output_context)
+message("I: wrote four gene-relation figures: ",
+        paste(gene_relation_outputs, collapse = ", "))

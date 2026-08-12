@@ -660,8 +660,10 @@ ORDER BY n.cds_start, n.cds_end, n.cds_strand,
          tc.gene_id, tc.transcript_id;
 
 -- Q23. Compact annotation covariates for one TP73 anchor. strict_intergenic
---      means no overlap with any transcript or promoter under the package's
---      versioned promoter definition; it does not mean distant from a gene.
+--      means no overlap with any transcript, promoter, or downstream region
+--      under the package's versioned definitions; it does not mean distant
+--      from a gene. gene_relation_class applies promoter > downstream >
+--      gene_body > intergenic precedence without discarding the source flags.
 --      Params: $anchor_hit_id
 SELECT
     anchor_hit_id,
@@ -682,7 +684,46 @@ SELECT
     in_any_intron,
     overlaps_any_promoter,
     n_overlapping_promoters,
+    overlaps_any_downstream_region,
+    n_overlapping_downstream_regions,
     strict_intergenic,
-    primary_genomic_context
+    primary_genomic_context,
+    gene_relation_class
 FROM tp73_context_anchor
 WHERE anchor_hit_id = $anchor_hit_id;
+
+-- Q24. Every versioned transcript-end downstream region overlapping one TP73
+--      anchor. A physical region can map to several genes; the gene bridge
+--      preserves those associations without multiplying the canonical anchor
+--      membership table.
+--      Params: $anchor_hit_id, $downstream_definition_id
+SELECT
+    ad.anchor_hit_id,
+    ad.chrom,
+    ad.anchor_start,
+    ad.anchor_end,
+    ad.downstream_region_id,
+    ad.tes_id,
+    ad.downstream_definition_id,
+    ad.downstream_start,
+    ad.downstream_end,
+    ad.tes_start,
+    ad.tes_end,
+    ad.tes_strand,
+    ad.downstream_overlap_bp,
+    ad.anchor_fully_within_downstream_region,
+    ad.tes_interval_distance_bp,
+    ad.transcription_oriented_center_offset_bp,
+    ad.anchor_tes_relation,
+    dg.gene_id,
+    dg.gene_name,
+    dg.n_transcripts
+FROM tp73_anchor_downstream_region ad
+JOIN downstream_region_gene dg
+  ON dg.genome_id = ad.genome_id
+ AND dg.annotation_release = ad.annotation_release
+ AND dg.downstream_definition_id = ad.downstream_definition_id
+ AND dg.downstream_region_id = ad.downstream_region_id
+WHERE ad.anchor_hit_id = $anchor_hit_id
+  AND ad.downstream_definition_id = $downstream_definition_id
+ORDER BY ad.tes_start, ad.tes_strand, dg.gene_id;
