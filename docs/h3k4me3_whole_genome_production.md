@@ -154,6 +154,28 @@ Array tasks contain one motif at a time for inferential output, so their local
 declared series/isoform/reference/result family. Scientific interpretation must
 use the final value.
 
+After finalization, build the compact joined tables and all six evidence plots
+(the overall and detailed-context plots plus one four-panel plot for each
+gene-relation class) with:
+
+```sh
+ENRICHMENT=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_tp73_cofactor_enrichment_autosomes_v1/final/cofactor_enrichment
+INTERPRETATION=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_h3k4me3_cofactor_interpretation_v2_schema9
+SOURCE_COMMIT=$(git -C "$SOURCE" rev-parse HEAD)
+
+"$SOURCE/scripts/run_h3k4me3_genome_cofactor_interpretation.sh" \
+  --analysis-run "$ANALYSIS_RUN" --enrichment-package "$ENRICHMENT" \
+  --h3-package "$H3_PACKAGE" --output-dir "$INTERPRETATION" \
+  --source "$SOURCE" --source-commit "$SOURCE_COMMIT" \
+  --duckdb "$RUNTIME/duckdb/bin/duckdb" \
+  --rscript "$RUNTIME/r/bin/Rscript"
+```
+
+The wrapper is restart-safe at its two publication boundaries. The compact
+summary is an atomic directory produced by the Python extractor; all figures
+are rendered into a job-specific staging directory and promoted together.
+Existing complete products are validated and reused.
+
 ## Extensibility
 
 The analysis grain remains one physical TP73 anchor by experimental series.

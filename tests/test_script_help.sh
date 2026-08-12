@@ -58,6 +58,7 @@ scripts/run_genome_scan_slurm_finalize.sh
 scripts/run_genome_scan_slurm_task.sh
 scripts/run_h3k4me3_chr1_production.py
 scripts/run_h3k4me3_cofactor_analysis_finalize.sh
+scripts/run_h3k4me3_genome_cofactor_interpretation.sh
 scripts/run_h3k4me3_genome_signal_finalize.sh
 scripts/run_motif_context_slurm_task.sh
 scripts/run_motif_density_calibration_finalize.sh
