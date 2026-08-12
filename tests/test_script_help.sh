@@ -46,6 +46,7 @@ scripts/manage_motif_threshold_calibration.py
 scripts/manage_tp73_cofactor_enrichment.py
 scripts/manage_tp73_genome_context_maxima.py
 scripts/manage_tp73_genome_evidence.py
+scripts/plot_h3k4me3_genome_cofactor_summary.R
 scripts/plot_h3k4me3_metaprofile.R
 scripts/plot_informative_threshold_distribution.py
 scripts/plot_tp73_score_distributions.R
@@ -89,6 +90,7 @@ scripts/submit_negative_threshold_sensitivity_slurm.sh
 scripts/submit_tp73_cofactor_enrichment_slurm.sh
 scripts/submit_tp73_genome_context_maxima_slurm.sh
 scripts/submit_tp73_genome_evidence_slurm.sh
+scripts/summarize_h3k4me3_genome_cofactors.py
 scripts/summarize_tp73_cutandrun_threshold.R
 scripts/summarize_tp73_patz1_cutandrun_threshold.R
 EOF

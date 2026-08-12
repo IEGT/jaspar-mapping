@@ -37,6 +37,8 @@ combined.expression.data.tsv
 *.svg
 *.jpg
 !docs/figures/h3k4me3_gfp_tp73_anchor_metaprofile_chr1_100k.png
+!docs/figures/h3k4me3_tp73_cofactor_effect_autosomes_20260812.png
+!docs/figures/h3k4me3_tp73_context_correlations_autosomes_20260812.png
 *.dSYM/
 score_distributions_*/
 renv/library/

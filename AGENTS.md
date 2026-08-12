@@ -29,6 +29,9 @@ completed chromosome-1 result is reported in
 For the schema-8 annotation rebuild and restart-safe whole-genome H3K4me3
 signal and all-JASPAR cofactor analysis, also read
 [`docs/h3k4me3_whole_genome_production.md`](docs/h3k4me3_whole_genome_production.md).
+The completed all-autosome joint TP73 enrichment/H3K4me3 interpretation is
+reported in
+[`docs/h3k4me3_tp73_cofactor_results_autosomes_20260812.md`](docs/h3k4me3_tp73_cofactor_results_autosomes_20260812.md).
 
 For TP73-local motif spacing, tandem TP73 sites, or transcript/intron context,
 also read [`docs/tp73_motif_context.md`](docs/tp73_motif_context.md).
