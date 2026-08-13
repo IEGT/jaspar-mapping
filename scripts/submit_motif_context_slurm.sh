@@ -26,6 +26,11 @@ Options:
                           requires --output-tier summary and forbids cofactors
   --motif ID              Cofactor motif accession; repeat or comma-separate
   --motif-file FILE       Cofactor accessions, one per line; comments allowed
+  --operating-threshold-parquet FILE
+                          Applied motif thresholds; maxima still use all
+                          source-retained hits
+  --operating-threshold-set-id ID
+                          threshold_set_id selected from the Parquet file
   --chrom NAME            Chromosome; repeat/comma-separate (default: 1)
   --chrom-file FILE       Chromosomes, one per line; comments allowed
   --motifs-per-task N     Cofactors built together per chromosome (default: 20)
@@ -68,6 +73,8 @@ chrom_files=(__jaspar_context_array_sentinel__)
 motifs_per_task=20
 array_chunk_size=1000
 output_tier=selected
+operating_threshold_parquet=""
+operating_threshold_set_id=""
 source=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 duckdb=duckdb
 account=cluster
@@ -96,6 +103,8 @@ while [[ $# -gt 0 ]]; do
         --anchor-only) anchor_only=1; shift ;;
         --motif) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; motif_values+=("$2"); shift 2 ;;
         --motif-file) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; motif_files+=("$2"); shift 2 ;;
+        --operating-threshold-parquet) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; operating_threshold_parquet=$2; shift 2 ;;
+        --operating-threshold-set-id) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; operating_threshold_set_id=$2; shift 2 ;;
         --chrom) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; chrom_values+=("$2"); shift 2 ;;
         --chrom-file) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; chrom_files+=("$2"); shift 2 ;;
         --motifs-per-task) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; motifs_per_task=$2; shift 2 ;;
@@ -120,6 +129,20 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n $run_root && -n $scan_package ]] || { usage >&2; exit 2; }
+if [[ -n $operating_threshold_parquet || -n $operating_threshold_set_id ]]; then
+    [[ -n $operating_threshold_parquet && -n $operating_threshold_set_id ]] || {
+        echo "E: Operating-threshold Parquet and set ID must be supplied together." >&2
+        exit 2
+    }
+    [[ -f $operating_threshold_parquet ]] || {
+        echo "E: Operating-threshold Parquet does not exist: $operating_threshold_parquet" >&2
+        exit 1
+    }
+    [[ $operating_threshold_set_id =~ ^[A-Za-z0-9._-]+$ ]] || {
+        echo "E: Operating-threshold set ID is unsafe." >&2
+        exit 2
+    }
+fi
 [[ $output_tier == selected || $output_tier == summary || $output_tier == band ]] || {
     echo "E: --output-tier must be selected, summary, or band." >&2
     exit 2
@@ -295,7 +318,26 @@ if [[ -n $gtf ]]; then
     gtf_directory=$(cd "$(dirname "$gtf")" && pwd)
     gtf="$gtf_directory/$(basename "$gtf")"
 fi
-context_schema_version=9
+context_schema_version=10
+operating_threshold_size_bytes=0
+operating_threshold_sha256=none
+if [[ -n $operating_threshold_parquet ]]; then
+    operating_threshold_parquet=$(cd "$(dirname "$operating_threshold_parquet")" && pwd)/$(basename "$operating_threshold_parquet")
+    immutable_threshold="$run_root/inputs/operating_thresholds.parquet"
+    if [[ -f $immutable_threshold ]]; then
+        cmp -s "$operating_threshold_parquet" "$immutable_threshold" || {
+            echo "E: Existing immutable operating-threshold registry differs." >&2
+            exit 1
+        }
+    else
+        cp -p "$operating_threshold_parquet" "$immutable_threshold"
+    fi
+    operating_threshold_parquet=$immutable_threshold
+    operating_threshold_size_bytes=$(wc -c < "$operating_threshold_parquet" | tr -d '[:space:]')
+    operating_threshold_sha256=$(sha256_file "$operating_threshold_parquet")
+else
+    operating_threshold_set_id=none
+fi
 gtf_size_bytes=0
 gtf_sha256=none
 if [[ $output_tier != band ]]; then
@@ -312,15 +354,17 @@ fi
 task_file="$run_root/plan/context_tasks.tsv"
 candidate=$(mktemp "$run_root/plan/.context_tasks.XXXXXX")
 trap 'rm -f "$candidate"' EXIT HUP INT TERM
-printf 'task_index\tchrom\tcofactor_motif_ids\toutput_tier\tbuilder_source_commit\tcontext_schema_version\tgtf_size_bytes\tgtf_sha256\tannotation_release\tpromoter_definition_id\tpromoter_upstream_bp\tpromoter_downstream_bp\tdownstream_definition_id\tdownstream_upstream_bp\tdownstream_downstream_bp\ttask_kind\n' \
+printf 'task_index\tchrom\tcofactor_motif_ids\toutput_tier\tbuilder_source_commit\tcontext_schema_version\tgtf_size_bytes\tgtf_sha256\toperating_threshold_size_bytes\toperating_threshold_sha256\toperating_threshold_set_id\tannotation_release\tpromoter_definition_id\tpromoter_upstream_bp\tpromoter_downstream_bp\tdownstream_definition_id\tdownstream_upstream_bp\tdownstream_downstream_bp\ttask_kind\n' \
     > "$candidate"
 task_index=0
 if [[ $anchor_only -eq 1 ]]; then
     for chromosome in "${chromosomes[@]}"; do
-        printf '%d\t%s\tnone\t%s\t%s\t%d\t%s\t%s\t%s\t%s\t%d\t%d\t%s\t%d\t%d\tanchor_annotation\n' \
+        printf '%d\t%s\tnone\t%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%s\t%d\t%d\tanchor_annotation\n' \
             "$task_index" "$chromosome" "$output_tier" \
             "$source_commit" "$context_schema_version" "$gtf_size_bytes" \
-            "$gtf_sha256" "$annotation_release" "$promoter_definition_id" \
+            "$gtf_sha256" "$operating_threshold_size_bytes" \
+            "$operating_threshold_sha256" "$operating_threshold_set_id" \
+            "$annotation_release" "$promoter_definition_id" \
             "$promoter_upstream_bp" "$promoter_downstream_bp" \
             "$downstream_definition_id" "$downstream_upstream_bp" \
             "$downstream_downstream_bp" >> "$candidate"
@@ -336,10 +380,12 @@ else
             joined+=$motif
         done
         for chromosome in "${chromosomes[@]}"; do
-            printf '%d\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\t%d\t%d\t%s\t%d\t%d\tcofactor_context\n' \
+            printf '%d\t%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%s\t%d\t%d\tcofactor_context\n' \
                 "$task_index" "$chromosome" "$joined" "$output_tier" \
                 "$source_commit" "$context_schema_version" "$gtf_size_bytes" \
-                "$gtf_sha256" "$annotation_release" "$promoter_definition_id" \
+                "$gtf_sha256" "$operating_threshold_size_bytes" \
+                "$operating_threshold_sha256" "$operating_threshold_set_id" \
+                "$annotation_release" "$promoter_definition_id" \
                 "$promoter_upstream_bp" "$promoter_downstream_bp" \
                 "$downstream_definition_id" "$downstream_upstream_bp" \
                 "$downstream_downstream_bp" >> "$candidate"
@@ -372,6 +418,12 @@ worker_arguments=(
     --downstream-downstream-bp "$downstream_downstream_bp"
 )
 if [[ -n $gtf ]]; then worker_arguments+=(--gtf "$gtf"); fi
+if [[ -n $operating_threshold_parquet ]]; then
+    worker_arguments+=(
+        --operating-threshold-parquet "$operating_threshold_parquet"
+        --operating-threshold-set-id "$operating_threshold_set_id"
+    )
+fi
 
 job_ids=()
 task_offset=0
@@ -383,7 +435,7 @@ while (( task_offset < task_index )); do
     if (( remaining < chunk_tasks )); then chunk_tasks=$remaining; fi
     submission=(
         sbatch --parsable --account="$account" --partition="$partition" --requeue
-        --job-name=tp73_context_v9
+        --job-name=tp73_context_v10
         --array="0-$((chunk_tasks - 1))%${max_concurrent}"
         --export="ALL,JASPAR_CONTEXT_TASK_OFFSET=$task_offset"
         --nodes=1 --ntasks=1 --cpus-per-task="$cpus" --mem="$memory" --time="$wall_time"

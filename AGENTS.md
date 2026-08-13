@@ -9,6 +9,9 @@ before designing or changing code.
 
 For motif-score calibration against raw CUT&RUN fragments, also read
 [`docs/cutandrun_motif_score_calibration.md`](docs/cutandrun_motif_score_calibration.md).
+For joint TP73-score/cofactor-score CUT&RUN response surfaces, fixed negative
+references, or empirical cofactor score bands, also read
+[`docs/tp73_cofactor_score_response.md`](docs/tp73_cofactor_score_response.md).
 For all-JASPAR enrichment/depletion around TP73 anchors, depth-stratified
 CUT&RUN summaries, or their Slurm production run, also read
 [`docs/jaspar2026_chr1_all_cofactor_enrichment_run.md`](docs/jaspar2026_chr1_all_cofactor_enrichment_run.md).
@@ -52,6 +55,10 @@ density calibration, or the 200 bp production ceiling, also read
 For scanner execution, scratch staging, finalization, checksum verification,
 build provenance, or exact-file DuckDB queries, also read
 [`docs/scanner_maintenance.md`](docs/scanner_maintenance.md).
+
+For TP73 context analyses, never use a density-capped threshold as the source
+retention floor. Select maxima from the low-floor scan, and keep source-floor,
+score-zero, and empirical operating-threshold counts as separate fields.
 
 Treat [`sql/schema.sql`](sql/schema.sql) and [`sql/queries.sql`](sql/queries.sql)
 as the draft query contract:

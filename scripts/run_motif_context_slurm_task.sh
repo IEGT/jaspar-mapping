@@ -23,6 +23,10 @@ Options:
   --downstream-upstream-bp N Extent toward transcript body (default: 500)
   --downstream-downstream-bp N Extent beyond transcript end (default: 2000)
   --task-file FILE        TSV written by submit_motif_context_slurm.sh
+  --operating-threshold-parquet FILE
+                          Applied per-motif analysis thresholds
+  --operating-threshold-set-id ID
+                          Registry identity selected by the task plan
   --source DIR            Repository root (default: parent of this script)
   --duckdb FILE           DuckDB executable (default: duckdb)
   --threads N             DuckDB threads (default: 4)
@@ -43,6 +47,8 @@ downstream_definition_id=tes_upstream_500_downstream_2000_v1
 downstream_upstream_bp=500
 downstream_downstream_bp=2000
 task_file=""
+operating_threshold_parquet=""
+operating_threshold_set_id=""
 source=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 duckdb=duckdb
 threads=4
@@ -61,6 +67,8 @@ while [[ $# -gt 0 ]]; do
         --downstream-upstream-bp) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; downstream_upstream_bp=$2; shift 2 ;;
         --downstream-downstream-bp) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; downstream_downstream_bp=$2; shift 2 ;;
         --task-file) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; task_file=$2; shift 2 ;;
+        --operating-threshold-parquet) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; operating_threshold_parquet=$2; shift 2 ;;
+        --operating-threshold-set-id) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; operating_threshold_set_id=$2; shift 2 ;;
         --source) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; source=$2; shift 2 ;;
         --duckdb) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; duckdb=$2; shift 2 ;;
         --threads) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; threads=$2; shift 2 ;;
@@ -122,6 +130,8 @@ task_row=$(awk -F '\t' -v task="$global_task_index" \
 }
 IFS=$'\t' read -r task_index chromosome cofactor_motif_ids output_tier \
     builder_source_commit context_schema_version gtf_size_bytes gtf_sha256 \
+    operating_threshold_size_bytes operating_threshold_sha256 \
+    task_operating_threshold_set_id \
     task_annotation_release task_promoter_definition_id \
     task_promoter_upstream_bp task_promoter_downstream_bp \
     task_downstream_definition_id task_downstream_upstream_bp \
@@ -131,10 +141,26 @@ task_kind=${task_kind:-cofactor_context}
 [[ $task_index == "$global_task_index" ]]
 [[ $chromosome =~ ^[A-Za-z0-9._-]+$ ]]
 [[ $output_tier == selected || $output_tier == summary || $output_tier == band ]]
-[[ $context_schema_version == 9 ]] || {
+[[ $context_schema_version == 10 ]] || {
     echo "E: Task $task_index requests unsupported context schema $context_schema_version." >&2
     exit 2
 }
+if [[ $task_operating_threshold_set_id == none ]]; then
+    [[ -z $operating_threshold_parquet && -z $operating_threshold_set_id \
+       && $operating_threshold_size_bytes == 0 \
+       && $operating_threshold_sha256 == none ]] || {
+        echo "E: Worker operating-threshold arguments differ from task $task_index." >&2
+        exit 2
+    }
+else
+    [[ -f $operating_threshold_parquet \
+       && $operating_threshold_set_id == "$task_operating_threshold_set_id" \
+       && $operating_threshold_size_bytes =~ ^[1-9][0-9]*$ \
+       && $operating_threshold_sha256 =~ ^[0-9a-f]{64}$ ]] || {
+        echo "E: Task $task_index lacks its operating-threshold registry." >&2
+        exit 1
+    }
+fi
 [[ $task_annotation_release == "$annotation_release" \
    && $task_promoter_definition_id == "$promoter_definition_id" \
    && $task_promoter_upstream_bp == "$promoter_upstream_bp" \
@@ -200,7 +226,6 @@ else
         exit 2
     }
 fi
-
 sha256_file() {
     if command -v sha256sum >/dev/null 2>&1; then
         sha256sum "$1" | awk '{print $1}'
@@ -211,6 +236,15 @@ sha256_file() {
         return 1
     fi
 }
+if [[ $task_operating_threshold_set_id != none ]]; then
+    actual_operating_threshold_size=$(wc -c < "$operating_threshold_parquet" | tr -d '[:space:]')
+    actual_operating_threshold_sha256=$(sha256_file "$operating_threshold_parquet")
+    [[ $actual_operating_threshold_size == "$operating_threshold_size_bytes" \
+       && $actual_operating_threshold_sha256 == "$operating_threshold_sha256" ]] || {
+        echo "E: Operating-threshold registry no longer matches task $task_index provenance." >&2
+        exit 1
+    }
+fi
 if [[ $output_tier != band ]]; then
     actual_gtf_size=$(wc -c < "$gtf" | tr -d '[:space:]')
     actual_gtf_sha256=$(sha256_file "$gtf")
@@ -250,6 +284,11 @@ if [[ $output_tier == band ]]; then
 else
     gtf_validation_sql="AND gtf_source IS NOT NULL AND gtf_sha256 = '$gtf_sha256' AND gtf_size_bytes = $gtf_size_bytes"
 fi
+if [[ $task_operating_threshold_set_id == none ]]; then
+    threshold_validation_sql="AND operating_threshold_source IS NULL AND operating_threshold_sha256 IS NULL AND operating_threshold_set_id IS NULL"
+else
+    threshold_validation_sql="AND operating_threshold_sha256 = '$operating_threshold_sha256' AND operating_threshold_set_id = '$task_operating_threshold_set_id'"
+fi
 
 validate_output() {
     local package=$1 valid unexpected
@@ -273,6 +312,9 @@ WHERE schema_version = $context_schema_version
   AND cofactor_pair_scope = 'at_least_one_member_is_a_tp73_context_locus'
   AND cofactor_motif_locus_scope = 'tp73_context_loci_plus_their_pair_partners'
   AND cofactor_locus_pair_feature_scope = 'tp73_context_loci_only'
+  AND operating_threshold_application_rule =
+      'best_locus_from_source_floor_counts_at_source_zero_and_operating'
+  $threshold_validation_sql
   AND annotation_release = '$annotation_release'
   AND promoter_definition_id = '$promoter_definition_id'
   AND promoter_upstream_bp = $promoter_upstream_bp
@@ -384,6 +426,12 @@ if [[ $output_tier != band ]]; then
     build_arguments+=(
         --gtf "$gtf" --gtf-size-bytes "$gtf_size_bytes"
         --gtf-sha256 "$gtf_sha256"
+    )
+fi
+if [[ $task_operating_threshold_set_id != none ]]; then
+    build_arguments+=(
+        --operating-threshold-parquet "$operating_threshold_parquet"
+        --operating-threshold-set-id "$task_operating_threshold_set_id"
     )
 fi
 

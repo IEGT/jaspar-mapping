@@ -1,5 +1,13 @@
 # TP73 Cofactor Enrichment and H3K4me3 Change Across the Autosomes
 
+> **Supersession note (2026-08-13):** This report faithfully describes the
+> first density-capped production analysis, but its 2,142 censored motifs make
+> the all-JASPAR ranking provisional. The corrected production path derives
+> maxima from the existing low-floor scan (`-1` for non-TP73 motifs), retains
+> score-zero and operating-threshold counts separately, and will supersede the
+> ranking below. The numerical results remain historical provenance and must
+> not be interpreted as negative evidence for censored motifs.
+
 ## Scope and provenance
 
 This report joins the completed JASPAR 2026 cofactor association and

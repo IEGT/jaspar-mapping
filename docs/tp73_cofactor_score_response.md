@@ -121,12 +121,12 @@ primary result. Its compact tables are under:
   final/cofactor_enrichment/
 ```
 
-The score surface can be run immediately only for motifs whose context maxima
-have `source_score_floor <= -1`. Motifs retained above that floor are censored,
-not negative. Extending the score surface to every JASPAR motif therefore
-requires rebuilding those motifs' 150 bp TP73 context maxima to a `-1` floor;
-it does not require rerunning TP73 CUT&RUN evidence or the genome-wide
-fixed-threshold analysis.
+The score surface can be run only for motifs whose context maxima have
+`source_score_floor <= -1`. Motifs retained above that floor are censored, not
+negative. The corrected all-JASPAR context production therefore derives maxima
+from the existing low-floor scan and retains source-floor, score-zero, and
+operating-threshold counts separately. It does not require rerunning TP73
+CUT&RUN evidence or the genome-wide motif scan.
 
 Example:
 

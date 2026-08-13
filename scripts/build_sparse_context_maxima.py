@@ -294,6 +294,12 @@ features AS (
         MAX(l.locus_score)::FLOAT AS context_score,
         COUNT(*) FILTER (
             WHERE l.hit_start IS NOT NULL
+        )::BIGINT AS source_floor_locus_count,
+        COUNT(*) FILTER (
+            WHERE l.hit_start IS NOT NULL AND l.locus_score >= 0
+        )::BIGINT AS zero_score_locus_count,
+        COUNT(*) FILTER (
+            WHERE l.hit_start IS NOT NULL
               AND l.locus_score >= t.recommended_threshold
               AND (t.context_min_interval_distance_bp IS NULL
                    OR l.interval_distance_bp >=
@@ -314,7 +320,7 @@ features AS (
     GROUP BY ALL
 )
 SELECT
-    1::INTEGER AS schema_version,
+    2::INTEGER AS schema_version,
     f.chrom,
     CASE WHEN f.target_motif_id IS NULL THEN NULL
          ELSE md5(concat_ws('|', f.genome_id, f.motif_set_id, f.chrom,
@@ -327,6 +333,10 @@ SELECT
     f.motif_id,
     f.motif_name,
     f.context_score,
+    f.source_floor_locus_count AS n_neighbor_loci_at_source_floor,
+    f.zero_score_locus_count AS n_neighbor_loci_at_or_above_zero,
+    f.source_floor_locus_count > 0 AS has_neighbor_locus_at_source_floor,
+    f.zero_score_locus_count > 0 AS has_neighbor_locus_at_or_above_zero,
     CASE WHEN f.recommended_threshold IS NULL THEN NULL
          ELSE f.qualifying_locus_count
     END AS n_neighbor_loci_above_threshold,
@@ -508,6 +518,18 @@ SELECT
     ) AS scores_below_source_floor,
     COALESCE(SUM(COALESCE(n_neighbor_loci_above_threshold, 0)), 0)::BIGINT
         AS thresholded_loci,
+    COALESCE(SUM(n_neighbor_loci_at_source_floor), 0)::BIGINT
+        AS source_floor_loci,
+    COALESCE(SUM(n_neighbor_loci_at_or_above_zero), 0)::BIGINT
+        AS zero_score_loci,
+    COUNT(*) FILTER (
+        WHERE n_neighbor_loci_at_or_above_zero > n_neighbor_loci_at_source_floor
+           OR (has_neighbor_locus_at_source_floor IS DISTINCT FROM
+               (n_neighbor_loci_at_source_floor > 0))
+           OR (has_neighbor_locus_at_or_above_zero IS DISTINCT FROM
+               (n_neighbor_loci_at_or_above_zero > 0))
+           OR (context_score IS NULL) <> (n_neighbor_loci_at_source_floor = 0)
+    )::BIGINT AS invalid_source_counts,
     COUNT(*) FILTER (WHERE n_neighbor_loci_above_threshold IS NOT NULL)::BIGINT
         AS populated_count_rows,
     COUNT(*) FILTER (
@@ -571,11 +593,13 @@ FROM output;
         )
     if result["motifs"] != expected_motifs:
         raise ContextMaximaError("output does not contain every requested motif")
-    if result["schema_versions"] != 1 or result["schema_version"] != 1:
+    if result["schema_versions"] != 1 or result["schema_version"] != 2:
         raise ContextMaximaError("output has an unsupported feature schema version")
     if result["rows"] != result["anchors"] * expected_motifs:
         raise ContextMaximaError("output is not rectangular by anchor and motif")
-    if result["duplicate_keys"] != 0 or result["scores_below_source_floor"] != 0:
+    if (result["duplicate_keys"] != 0
+            or result["scores_below_source_floor"] != 0
+            or result["invalid_source_counts"] != 0):
         raise ContextMaximaError("output failed key or source-score-floor validation")
     if any(result[key] != 1 for key in (
         "prefilter_values", "anchor_span_values",
@@ -609,7 +633,8 @@ def write_run_config(
         "output", "anchor_parquet", "motif_id", "plus_parquet",
         "minus_parquet", "context_flank_bp", "source_score_floor",
         "threshold_parquet", "threshold_set_id", "threshold_role",
-        "calibration_stratum_id", "thresholded_loci",
+        "calibration_stratum_id", "thresholded_loci", "source_floor_loci",
+        "zero_score_loci",
         "capture_prefilter_center_bp", "observed_max_anchor_span_bp",
         "observed_max_context_span_bp", "declared_max_context_span_bp",
         "effective_max_context_span_bp", "declared_context_span_bp",
@@ -640,6 +665,8 @@ def write_run_config(
                     if arguments.threshold_parquet is not None else ""
                 ),
                 "thresholded_loci": result["thresholded_loci"],
+                "source_floor_loci": result["source_floor_loci"],
+                "zero_score_loci": result["zero_score_loci"],
                 "capture_prefilter_center_bp":
                     result["capture_prefilter_center_bp"],
                 "observed_max_anchor_span_bp":

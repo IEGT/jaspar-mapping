@@ -140,7 +140,7 @@ def parse_task_plan(path: Path) -> tuple[list[dict[str, Any]], str]:
             raise ContextFinalizationError(
                 f"invalid context schema at task {task_index}: {schema_text}"
             ) from error
-        if schema_version not in {5, 6, 7, 8, 9}:
+        if schema_version not in {5, 6, 7, 8, 9, 10}:
             raise ContextFinalizationError(
                 f"unsupported context schema at task {task_index}: {schema_version}"
             )
@@ -226,6 +226,39 @@ def parse_task_plan(path: Path) -> tuple[list[dict[str, Any]], str]:
             downstream_upstream_bp = None
             downstream_downstream_bp = None
 
+        if schema_version >= 10:
+            threshold_set_id_text = row.get("operating_threshold_set_id") or ""
+            threshold_size_text = row.get("operating_threshold_size_bytes") or ""
+            threshold_sha256_text = row.get("operating_threshold_sha256") or ""
+            if threshold_set_id_text == "none":
+                if threshold_size_text != "0" or threshold_sha256_text != "none":
+                    raise ContextFinalizationError(
+                        f"invalid absent operating-threshold identity at task "
+                        f"{task_index}"
+                    )
+                operating_threshold_set_id = None
+                operating_threshold_size_bytes = None
+                operating_threshold_sha256 = None
+            else:
+                try:
+                    operating_threshold_size_bytes = int(threshold_size_text)
+                except ValueError as error:
+                    raise ContextFinalizationError(
+                        f"invalid operating-threshold size at task {task_index}"
+                    ) from error
+                if (operating_threshold_size_bytes <= 0
+                        or not SHA256.fullmatch(threshold_sha256_text)
+                        or not SAFE_IDENTIFIER.fullmatch(threshold_set_id_text)):
+                    raise ContextFinalizationError(
+                        f"invalid operating-threshold identity at task {task_index}"
+                    )
+                operating_threshold_set_id = threshold_set_id_text
+                operating_threshold_sha256 = threshold_sha256_text
+        else:
+            operating_threshold_set_id = None
+            operating_threshold_size_bytes = None
+            operating_threshold_sha256 = None
+
         tasks.append({
             "task_index": task_index,
             "task_kind": task_kind,
@@ -243,6 +276,9 @@ def parse_task_plan(path: Path) -> tuple[list[dict[str, Any]], str]:
             "downstream_definition_id": downstream_definition_id,
             "downstream_upstream_bp": downstream_upstream_bp,
             "downstream_downstream_bp": downstream_downstream_bp,
+            "operating_threshold_set_id": operating_threshold_set_id,
+            "operating_threshold_size_bytes": operating_threshold_size_bytes,
+            "operating_threshold_sha256": operating_threshold_sha256,
         })
 
     for field in (
@@ -269,6 +305,16 @@ def parse_task_plan(path: Path) -> tuple[list[dict[str, Any]], str]:
     if len(annotation_identities) != 1:
         raise ContextFinalizationError(
             "task plan mixes annotation, promoter, or downstream definitions"
+        )
+    threshold_identities = {
+        (task["operating_threshold_set_id"],
+         task["operating_threshold_size_bytes"],
+         task["operating_threshold_sha256"])
+        for task in tasks
+    }
+    if len(threshold_identities) != 1:
+        raise ContextFinalizationError(
+            "task plan mixes operating-threshold registry identities"
         )
     return tasks, plan_sha256
 
@@ -407,6 +453,20 @@ def validate_package_config(config: dict[str, Any], task: dict[str, Any],
         require_equal(
             config, "strict_intergenic_rule",
             "no_transcript_promoter_or_downstream_region_overlap", package,
+        )
+    if task["context_schema_version"] >= 10:
+        require_equal(
+            config, "operating_threshold_set_id",
+            task["operating_threshold_set_id"], package,
+        )
+        require_equal(
+            config, "operating_threshold_sha256",
+            task["operating_threshold_sha256"], package,
+        )
+        require_equal(
+            config, "operating_threshold_application_rule",
+            "best_locus_from_source_floor_counts_at_source_zero_and_operating",
+            package,
         )
 
 
@@ -758,6 +818,12 @@ def finalize(arguments: argparse.Namespace) -> None:
             "downstream_upstream_bp": task_rows[0]["downstream_upstream_bp"],
             "downstream_downstream_bp":
                 task_rows[0]["downstream_downstream_bp"],
+            "operating_threshold_set_id":
+                task_rows[0]["operating_threshold_set_id"],
+            "operating_threshold_size_bytes":
+                task_rows[0]["operating_threshold_size_bytes"],
+            "operating_threshold_sha256":
+                task_rows[0]["operating_threshold_sha256"],
             "orphan_staging_count": len(orphans),
             "finalization_validation_mode": (
                 "exact_task_plan_input_manifest_run_config_schema_probe_file_inventory"

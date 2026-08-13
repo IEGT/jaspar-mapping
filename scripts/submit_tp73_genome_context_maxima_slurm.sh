@@ -15,13 +15,16 @@ before advancing. Scan payloads are opened by exact inventory path.
 
 Options:
   --run-root DIR             Dedicated output below /data/sm718
-  --scan-package DIR         Finalized informative/density-capped genome scan
+  --scan-package DIR         Finalized low-floor genome scan
   --evidence-package DIR     Finalized whole-genome TP73 evidence package
   --threshold-registry FILE  Chromosome-1 context-threshold Parquet
   --runtime-prefix DIR       Runtime containing DuckDB
   --source DIR               Repository root (default: script parent)
   --run-id ID                Immutable run identifier
   --threshold-set-id ID      Applied whole-genome threshold-set identifier
+  --maximum-source-score-floor SCORE
+                             Reject any non-target scan retained above this
+                             floor (default: -1)
   --motifs-per-batch N       Motifs per restartable array element (default: 3)
   --scratch-root DIR         Node-local scratch parent (default: /scratch/$USER)
   --account NAME             Slurm account (default: cluster)
@@ -49,6 +52,7 @@ runtime_prefix=""
 source=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 run_id=jaspar2026_grch38_tp73_context_maxima_autosomes_v1
 threshold_set_id=jaspar2026_grch38_tp73_context_applied_scan_floor_v1
+maximum_source_score_floor=-1
 motifs_per_batch=3
 scratch_root="/scratch/${USER:-sm718}"
 account=cluster
@@ -71,6 +75,7 @@ while [[ $# -gt 0 ]]; do
         --source) source=${2:?}; shift 2 ;;
         --run-id) run_id=${2:?}; shift 2 ;;
         --threshold-set-id) threshold_set_id=${2:?}; shift 2 ;;
+        --maximum-source-score-floor) maximum_source_score_floor=${2:?}; shift 2 ;;
         --motifs-per-batch) motifs_per_batch=${2:?}; shift 2 ;;
         --scratch-root) scratch_root=${2:?}; shift 2 ;;
         --account) account=${2:?}; shift 2 ;;
@@ -136,6 +141,7 @@ batch_count=$(
         --runtime-prefix "$runtime_prefix" --source "$source" \
         --duckdb "$duckdb" --run-id "$run_id" \
         --applied-threshold-set-id "$threshold_set_id" \
+        --maximum-source-score-floor "$maximum_source_score_floor" \
         --motifs-per-batch "$motifs_per_batch" \
         --scratch-root "$scratch_root" --threads "$cpus" \
         --memory-limit 28GB --max-temp-size 100GB

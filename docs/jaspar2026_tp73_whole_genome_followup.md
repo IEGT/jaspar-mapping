@@ -46,7 +46,7 @@ chromosome-file inventory and a DuckDB catalog. Every support column must equal
 
 ## Stage 2: spatial and threshold context
 
-The existing schema-7 context-band packages remain the authoritative spatial
+The corrected schema-10 context-band packages are the authoritative spatial
 layer. Their `anchor_motif_band_feature` surface preserves the mutually
 exclusive interval-distance bands `overlap`, `adjacent_0_5`, `gap_6_20`,
 `gap_21_50`, `gap_51_100`, and `gap_101_150`, with one coupled strongest locus,
@@ -56,9 +56,11 @@ that surface with one undifferentiated 150 bp maximum.
 The complementary whole-autosome threshold run is prepared by
 `submit_tp73_genome_context_maxima_slurm.sh`. For every non-TP73 motif it emits
 one rectangular row per TP73 anchor over the complete 150 bp interval-distance
-radius. The row stores the strongest score and the number of distinct physical
-motif spans reaching the convenient threshold. Opposite-strand reports of one
-span count once; anchors with no qualifying span remain explicit zeroes.
+radius. The schema-2 row stores the strongest source-retained score plus the
+numbers of distinct physical motif spans retained at the source floor, reaching
+score zero, and reaching the convenient operating threshold. Opposite-strand
+reports of one span count once; anchors with no retained span remain explicit
+zeroes.
 
 Geometry provenance distinguishes the maximum span observed in a chromosome's
 hit payload, the catalog-declared motif span, and the effective maximum used by
@@ -72,10 +74,12 @@ max(coalesce(chromosome_1_context_recommendation, 0),
     finalized_genome_scan_retention_floor)
 ```
 
-Both inputs, the applied result, fallback status, and whether the scan floor
-raised the recommendation are retained. Preflight proves that the source
-registry covers every finalized non-TP73 scan motif. A motif with empty hit
-partitions still receives valid geometry from `motif_metadata.motif_length`.
+This is an analysis operating point, not a source-retention rule. Both inputs,
+the applied result, fallback status, and whether the scan floor raised the
+recommendation are retained. Preflight proves that the source registry covers
+every finalized non-TP73 scan motif and rejects a context source whose motif
+floor is above `-1`. A motif with empty hit partitions still receives valid
+geometry from `motif_metadata.motif_length`.
 
 Array jobs handle a bounded motif batch, stage the 22 chromosome anchor files
 once, and process chromosomes sequentially. Each completed motif is published
@@ -100,12 +104,11 @@ evidence and each motif's zero-complete context table. It reports:
   errors clustered by chromosome-qualified 5 Mb blocks.
 
 The requested negative references remain strict `< -1` and `< 0`; raising the
-positive threshold never turns intermediate scores into negatives. A negative
-reference is observable only when the motif's actual scan retention floor is
-at or below that reference. When it is not, absent context rows are censored
-rather than known negatives, and that contrast is emitted as
-`negative_reference_below_source_floor` instead of being fitted. This is
-essential for motifs whose 200 bp density cap raised the production scan floor.
+positive threshold never turns intermediate scores into negatives. The low-
+floor source makes both classes recoverable: absence from a scan retaining all
+scores `>= -1` establishes a maximum below `-1`, while the explicit score-zero
+count preserves compatibility with the previous study. A density-capped scan
+whose floor exceeds `-1` is rejected rather than silently censoring motifs.
 
 Enrichment Slurm jobs stage the shared autosomal anchor table once for a small
 motif batch. Each motif's compact results are still independently validated and
@@ -143,6 +146,7 @@ scripts/submit_tp73_genome_context_maxima_slurm.sh \
   --evidence-package "$EVIDENCE_RUN/final/genome_evidence" \
   --threshold-registry "$CHR1_CONTEXT_THRESHOLDS" \
   --runtime-prefix "$RUNTIME" \
+  --maximum-source-score-floor -1 \
   --motifs-per-batch 3 --max-concurrent 20 \
   --cpus 4 --memory 32G --time 02:00:00 \
   --dry-run
@@ -165,8 +169,9 @@ global multiple-testing family are specified in
 `tests/test_tp73_genome_evidence_manager.sh` builds a 25-region fixture,
 including scan label `25` matched to annotation label `MT`.
 `tests/test_tp73_genome_context_maxima.sh` builds 22 tiny autosomes and checks a
-real nearby hit, completely empty motif partitions, threshold raising, restart
-reuse, final catalog construction, and enrichment-plan handoff.
+real nearby hit, completely empty motif partitions, rejection of a source floor
+above `-1`, the three nested locus counts, restart reuse, final catalog
+construction, and enrichment-plan handoff.
 `tests/test_tp73_cofactor_enrichment.sh` verifies multi-chromosome adjustment
 and proves that a negative reference below the retained scan floor is not
 treated as observed evidence.

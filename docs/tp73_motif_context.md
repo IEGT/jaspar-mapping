@@ -360,10 +360,12 @@ among simultaneous retries.
 
 ```sh
 scripts/submit_motif_context_slurm.sh \
-  --run-root /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_context_band_v6 \
+  --run-root /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_context_band_lowfloor_v10 \
   --scan-package /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_sparse_v3/package \
-  --motif-file /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_context_band_v6/plan/cofactor_motifs.txt \
-  --chrom-file /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_context_band_v6/plan/chromosomes.txt \
+  --motif-file /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_context_band_lowfloor_v10/plan/cofactor_motifs.txt \
+  --chrom-file /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_context_band_lowfloor_v10/plan/chromosomes.txt \
+  --operating-threshold-parquet /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_tp73_context_maxima_autosomes_lowfloor_v2/plan/applied_context_thresholds.parquet \
+  --operating-threshold-set-id jaspar2026_grch38_tp73_context_lowfloor_v2 \
   --motifs-per-task 20 --array-chunk-size 1000 --output-tier band \
   --account cluster --partition requeue \
   --max-concurrent 20 --cpus 4 --memory 48G --time 0-02:00:00 \
@@ -380,7 +382,7 @@ submission rejects tracked changes and copies the three required Python programs
 into an immutable source snapshot below the run root. Compute workers verify the
 snapshot's plain-text commit marker and do not need Git. Motif batches are
 ordered before chromosomes so each array chunk contains a mixture of long and
-short sequence regions. Schema-7 selected/summary plans additionally pin the GTF
+short sequence regions. Annotated selected/summary plans additionally pin the GTF
 byte size and SHA-256; every worker verifies both before annotation starts.
 
 Submission always adds a small `afterany` finalizer after the last array. It
@@ -426,7 +428,8 @@ scripts/build_motif_context.py \
 and pair-attribution rows. `--output-tier summary` writes schema-stable empty
 raw surfaces while retaining `anchor_motif_band_feature`,
 `tp73_motif_context_summary`, and `tp73_cofactor_pair_summary`. The production
-`--output-tier band` retains only non-TP73 `anchor_motif_band_feature` rows and
+schema-10 `--output-tier band` retains only non-TP73
+`anchor_motif_band_feature` rows and
 writes schema-stable empty shared/compatibility surfaces. This prevents the
 same TP73 anchor and tandem tables from being stored once per cofactor batch.
 Gene/transcript annotation and the shared TP73-only tables are built once in a
@@ -434,6 +437,14 @@ separate downstream layer rather than repeated across the all-JASPAR packages.
 Each batch package also carries the stager's `input_manifest.json`, which pins
 the expected motifs (including zero-hit inputs), chromosome, inventory paths,
 file sizes, checksums, and source package-manifest checksum.
+
+Schema 10 separates evidence retention from interpretation. The strongest
+locus and its geometry are selected from every hit retained by the source scan.
+Each band then reports counts at the source floor, at score zero, and at the
+named operating threshold. The operating threshold controls the convenient
+presence/count feature and same-motif cofactor pairing; it cannot erase a
+lower-scoring maximum from the package. The run config pins the applied
+threshold registry's bytes, SHA-256, and threshold-set identity.
 
 The worker uses `--input-uniqueness validated_scan_inventory` because those
 exact finalized files have one row per scored orientation and model span. This
@@ -636,10 +647,12 @@ POU4F1, and TCF7 result is documented in
 After calibration, the same sparse builder accepts `--threshold-parquet` and
 `--threshold-set-id` to count distinct cofactor alignment spans above each
 motif-specific threshold. Identical-span strand alternatives count once and
-anchor/motif combinations with no qualifying span are retained as zero. This
-threshold-derived count is separate from `tp73_motif_context_summary`, whose
-historical `n_neighbor_loci` continues to describe every locus retained at the
-scan storage floor.
+anchor/motif combinations with no qualifying span are retained as zero. Its
+schema-2 output stores the source-floor count, score-zero count, and operating-
+threshold count together with the strongest score over all source-retained
+loci. This threshold-derived table is separate from
+`tp73_motif_context_summary`, whose historical `n_neighbor_loci` continues to
+describe every locus retained at the scan storage floor.
 
 For the whole-autosome production form of this complementary zero-complete
 table, including application of the actual genome-scan retention floor and the

@@ -17,6 +17,7 @@ scan="$temporary/scan-package"
 evidence="$temporary/evidence-package"
 runtime="$temporary/runtime"
 run_root="$temporary/context-run"
+unsafe_run_root="$temporary/unsafe-context-run"
 enrichment_root="$temporary/enrichment-run"
 mkdir -p "$scan/task_data/task_id=1" "$scan/task_data/task_id=2" \
     "$evidence/tables/by-chromosome" "$runtime/duckdb/bin"
@@ -74,8 +75,8 @@ for chrom in {1..22}; do
     for specification in \
         "M1 1 + chr${chrom}-plus.parquet -1" \
         "M1 1 - chr${chrom}-minus.parquet -1" \
-        "M2 2 + chr${chrom}-plus.parquet 2" \
-        "M2 2 - chr${chrom}-minus.parquet 2"; do
+        "M2 2 + chr${chrom}-plus.parquet -1" \
+        "M2 2 - chr${chrom}-minus.parquet -1"; do
         read -r motif task strand relative floor <<< "$specification"
         path="$scan/task_data/task_id=$task/$relative"
         bytes=$(wc -c < "$path" | tr -d ' ')
@@ -98,7 +99,7 @@ SELECT * FROM (VALUES ('M1', 10), ('M2', 12))
 CREATE TABLE scan_motif_threshold AS
 SELECT * FROM (VALUES
     ('M1', -1.0, 'scan-density200-v1', false),
-    ('M2',  2.0, 'scan-density200-v1', true),
+    ('M2', -1.0, 'scan-low-floor-v1', false),
     ('MA0861.2', -1.0, 'scan-density200-v1', false)
 ) AS v(motif_id, final_minimum_score, threshold_set_id, density_limited);
 CREATE TABLE scan_file_inventory AS
@@ -152,6 +153,32 @@ COPY (
 ) TO '$thresholds' (FORMAT PARQUET, COMPRESSION ZSTD);
 SQL
 
+unsafe_scan="$temporary/unsafe-scan-package"
+cp -R "$scan" "$unsafe_scan"
+"$duckdb" -batch "$unsafe_scan/scan.duckdb" >/dev/null <<'SQL'
+UPDATE scan_motif_threshold
+SET final_minimum_score = 2.0
+WHERE motif_id = 'M1';
+UPDATE scan_file_inventory
+SET minimum_score = 2.0
+WHERE motif_id = 'M1';
+SQL
+if "$repository_root/scripts/manage_tp73_genome_context_maxima.py" prepare \
+    --run-root "$unsafe_run_root" --scan-package "$unsafe_scan" \
+    --evidence-package "$evidence" --threshold-registry "$thresholds" \
+    --runtime-prefix "$runtime" --source "$repository_root" \
+    --duckdb "$duckdb" --run-id unsafe_genome_context \
+    --applied-threshold-set-id unsafe-context-applied-v1 \
+    --motifs-per-batch 2 --threads 1 --memory-limit 512MB \
+    --max-temp-size 1GB --scratch-root "$temporary/unsafe-scratch" \
+    --minimum-free-run-gb 0 --minimum-free-scratch-gb 0 \
+    >"$temporary/unsafe-prepare.out" 2>"$temporary/unsafe-prepare.err"; then
+    echo "E: A scan source floor above -1 passed context preflight." >&2
+    exit 1
+fi
+grep -Fq 'applied threshold registry is invalid' \
+    "$temporary/unsafe-prepare.err"
+
 batch_count=$(
     "$repository_root/scripts/manage_tp73_genome_context_maxima.py" prepare \
         --run-root "$run_root" --scan-package "$scan" \
@@ -193,21 +220,27 @@ SELECT CASE WHEN (SELECT count(*) FROM read_parquet('$m1')) <> 22
     THEN error('M1 autosomal context is incomplete') END;
 SELECT CASE WHEN EXISTS (
     SELECT 1 FROM read_parquet('$m1')
-    WHERE context_score <> 2 OR n_neighbor_loci_above_threshold <> 1
+    WHERE schema_version <> 2 OR context_score <> 2
+       OR n_neighbor_loci_at_source_floor <> 1
+       OR n_neighbor_loci_at_or_above_zero <> 1
+       OR n_neighbor_loci_above_threshold <> 1
 ) THEN error('M1 nearby hit was not retained and counted') END;
 SELECT CASE WHEN EXISTS (
     SELECT 1 FROM read_parquet('$m2')
-    WHERE context_score IS NOT NULL OR n_neighbor_loci_above_threshold <> 0
+    WHERE schema_version <> 2 OR context_score IS NOT NULL
+       OR n_neighbor_loci_at_source_floor <> 0
+       OR n_neighbor_loci_at_or_above_zero <> 0
+       OR n_neighbor_loci_above_threshold <> 0
 ) THEN error('empty M2 partitions did not produce explicit absence') END;
 SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM read_parquet(
       '$final/tables/jaspar2026/motif_score_threshold/part-000000.parquet'
     )
-    WHERE motif_id = 'M2' AND recommended_threshold = 2
+    WHERE motif_id = 'M2' AND recommended_threshold = 0
       AND source_recommended_threshold IS NULL
-      AND calibration_status = 'fallback_raised_to_scan_floor'
-      AND used_fallback AND raised_to_scan_floor
-) THEN error('fallback threshold was not raised to the scan floor') END;
+      AND calibration_status = 'fallback_zero_no_source_recommendation'
+      AND used_fallback AND NOT raised_to_scan_floor
+) THEN error('fallback threshold did not preserve the low source floor') END;
 SQL
 
 "$duckdb" -batch "$final/tp73_genome_context_maxima.duckdb" >/dev/null <<SQL

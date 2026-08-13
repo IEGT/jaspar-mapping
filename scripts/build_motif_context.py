@@ -223,9 +223,22 @@ def argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--default-neighbor-minimum-score", type=finite_float, default=0.0,
         help=(
-            "inclusive neighbor-locus threshold used when motif-hit input "
-            "does not expose its minimum_score field (default: 0)"
+            "inclusive source-retention floor used when motif-hit input does "
+            "not expose its minimum_score field (default: 0)"
         ),
+    )
+    parser.add_argument(
+        "--operating-threshold-parquet",
+        type=Path,
+        help=(
+            "optional applied motif_score_threshold Parquet; strongest loci "
+            "remain selected from every source-retained hit while presence, "
+            "counts, and cofactor pairing use its inclusive threshold"
+        ),
+    )
+    parser.add_argument(
+        "--operating-threshold-set-id",
+        help="threshold_set_id selected from --operating-threshold-parquet",
     )
     parser.add_argument(
         "--anchor-selection-mode",
@@ -1411,12 +1424,80 @@ def build_sql(arguments: argparse.Namespace, motif_glob: str,
         "COALESCE(NULLIF(motif_name::VARCHAR, ''), motif_id::VARCHAR)"
         if "motif_name" in source_columns else "motif_id::VARCHAR"
     )
-    qualifying_threshold = (
+    source_score_floor = (
         "COALESCE(TRY_CAST(minimum_score AS DOUBLE), "
         f"{sql_number(arguments.default_neighbor_minimum_score)})"
         if "minimum_score" in source_columns
         else f"{sql_number(arguments.default_neighbor_minimum_score)}::DOUBLE"
     )
+    if arguments.operating_threshold_parquet is None:
+        operating_threshold_sql = """
+CREATE TEMP TABLE requested_operating_threshold AS
+SELECT
+    NULL::VARCHAR AS motif_id,
+    NULL::VARCHAR AS threshold_set_id,
+    NULL::DOUBLE AS recommended_threshold,
+    NULL::VARCHAR AS calibration_status,
+    NULL::DOUBLE AS source_minimum_score
+WHERE false;
+"""
+        operating_threshold_source = "NULL"
+        operating_threshold_sha256 = "NULL"
+        operating_threshold_set_id = "NULL"
+        require_operating_threshold_sql = ""
+    else:
+        operating_threshold_sql = f"""
+CREATE TEMP TABLE requested_operating_threshold AS
+SELECT
+    motif_id::VARCHAR AS motif_id,
+    threshold_set_id::VARCHAR AS threshold_set_id,
+    recommended_threshold::DOUBLE AS recommended_threshold,
+    calibration_status::VARCHAR AS calibration_status,
+    source_minimum_score::DOUBLE AS source_minimum_score
+FROM read_parquet({sql_string(arguments.operating_threshold_parquet)})
+WHERE threshold_set_id = {sql_string(arguments.operating_threshold_set_id)};
+
+SELECT CASE WHEN EXISTS (
+    SELECT motif_id
+    FROM requested_operating_threshold
+    GROUP BY motif_id
+    HAVING COUNT(*) <> 1
+) THEN error('operating threshold registry contains duplicate motif rows') END;
+
+SELECT CASE WHEN EXISTS (
+    SELECT 1
+    FROM requested_operating_threshold
+    WHERE recommended_threshold IS NULL
+       OR NOT isfinite(recommended_threshold)
+       OR source_minimum_score IS NULL
+       OR NOT isfinite(source_minimum_score)
+) THEN error('operating threshold registry contains an invalid score') END;
+"""
+        operating_threshold_source = sql_string(
+            arguments.operating_threshold_parquet
+        )
+        operating_threshold_sha256 = sql_string(
+            arguments.operating_threshold_sha256
+        )
+        operating_threshold_set_id = sql_string(
+            arguments.operating_threshold_set_id
+        )
+        require_operating_threshold_sql = f"""
+SELECT CASE WHEN EXISTS (
+    SELECT 1
+    FROM source_hit h
+    LEFT JOIN requested_operating_threshold t USING (motif_id)
+    WHERE h.motif_id <> {sql_string(arguments.anchor_motif)}
+      AND t.motif_id IS NULL
+) THEN error('operating threshold registry omits an input cofactor motif') END;
+
+SELECT CASE WHEN EXISTS (
+    SELECT 1
+    FROM source_hit h
+    JOIN requested_operating_threshold t USING (motif_id)
+    WHERE ABS(h.source_score_floor - t.source_minimum_score) > 1e-9
+) THEN error('operating threshold source floor differs from motif-hit input') END;
+"""
     genome_id = (
         "genome_id::VARCHAR" if "genome_id" in source_columns
         else f"{sql_string(arguments.genome_id)}::VARCHAR"
@@ -1585,7 +1666,7 @@ PRAGMA enable_progress_bar;
 -- Arbitrary input may contain overlapping/retried Parquet parts. Deduplicate
 -- those rows by default; finalized inventory selections explicitly bypass the
 -- global window sort because their orientation/model-span identity is unique.
-CREATE TEMP TABLE configured_hit AS
+CREATE TEMP TABLE source_hit AS
 SELECT * EXCLUDE (duplicate_rank)
 FROM (
     SELECT
@@ -1611,7 +1692,7 @@ FROM (
         score_mode::VARCHAR AS score_mode,
         pseudocount::DOUBLE AS pseudocount,
         pwm_relative_score::DOUBLE AS pwm_relative_score,
-        {qualifying_threshold} AS qualifying_threshold,
+        {source_score_floor} AS source_score_floor,
         {duplicate_rank_sql} AS duplicate_rank
     FROM read_parquet({sql_string(motif_glob)}, hive_partitioning=1)
     WHERE score_mode = {sql_string(arguments.score_mode)}
@@ -1622,6 +1703,40 @@ FROM (
 WHERE duplicate_rank = 1;
 
 SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM source_hit WHERE score < source_score_floor
+) THEN error('motif-hit input contains a score below its declared source floor') END;
+
+{operating_threshold_sql}
+{require_operating_threshold_sql}
+
+CREATE TEMP TABLE configured_hit AS
+SELECT
+    h.*,
+    t.recommended_threshold,
+    GREATEST(
+        COALESCE(t.recommended_threshold, h.source_score_floor),
+        h.source_score_floor
+    )::DOUBLE AS operating_threshold,
+    GREATEST(
+        COALESCE(t.recommended_threshold, h.source_score_floor),
+        h.source_score_floor
+    )::DOUBLE AS qualifying_threshold,
+    t.threshold_set_id AS operating_threshold_set_id,
+    CASE
+        WHEN t.motif_id IS NULL THEN 'source_floor_default'
+        WHEN t.recommended_threshold < h.source_score_floor
+            THEN 'raised_to_source_floor'
+        ELSE COALESCE(t.calibration_status, 'configured')
+    END::VARCHAR AS operating_threshold_status,
+    COALESCE(t.recommended_threshold < h.source_score_floor, false)
+        AS operating_threshold_raised_to_source_floor
+FROM source_hit h
+LEFT JOIN requested_operating_threshold t USING (motif_id);
+
+DROP TABLE source_hit;
+DROP TABLE requested_operating_threshold;
+
+SELECT CASE WHEN EXISTS (
     SELECT 1 FROM configured_hit WHERE strand NOT IN ('+', '-')
 ) THEN error('motif-hit strand must be +/-, plus/minus') END;
 
@@ -1629,8 +1744,9 @@ SELECT CASE WHEN EXISTS (
     SELECT motif_id
     FROM configured_hit
     GROUP BY motif_id
-    HAVING COUNT(DISTINCT qualifying_threshold) <> 1
-) THEN error('each motif must expose one neighbor qualifying threshold') END;
+    HAVING COUNT(DISTINCT source_score_floor) <> 1
+        OR COUNT(DISTINCT qualifying_threshold) <> 1
+) THEN error('each motif must expose one source floor and operating threshold') END;
 
 -- Collapse strand alternatives before local-maximum selection. In local-peak
 -- mode, an orientation can represent a retained anchor only when it is the
@@ -1747,7 +1863,7 @@ FROM widths;
 
 CREATE TEMP TABLE context_run_config AS
 SELECT
-    9::INTEGER AS schema_version,
+    10::INTEGER AS schema_version,
     {sql_string(arguments.source_commit)}::VARCHAR AS builder_source_commit,
     {sql_string(arguments.input_uniqueness)}::VARCHAR AS input_uniqueness,
     {sql_string(arguments.genome_id)}::VARCHAR AS genome_id,
@@ -1762,7 +1878,14 @@ SELECT
     {sql_number(arguments.default_neighbor_minimum_score)}::DOUBLE
         AS default_neighbor_minimum_score,
     'source_minimum_score_else_default_inclusive'::VARCHAR
+        AS neighbor_source_score_floor_rule,
+    'registry_threshold_else_source_floor_inclusive'::VARCHAR
         AS neighbor_qualifying_threshold_rule,
+    {operating_threshold_source}::VARCHAR AS operating_threshold_source,
+    {operating_threshold_sha256}::VARCHAR AS operating_threshold_sha256,
+    {operating_threshold_set_id}::VARCHAR AS operating_threshold_set_id,
+    'best_locus_from_source_floor_counts_at_source_zero_and_operating'::VARCHAR
+        AS operating_threshold_application_rule,
     {sql_string(arguments.anchor_selection_mode)}::VARCHAR
         AS anchor_selection_mode,
     {arguments.anchor_local_peak_flank}::INTEGER AS anchor_local_peak_flank_bp,
@@ -1801,7 +1924,7 @@ SELECT
         AS anchor_motif_band_feature_grain,
     'highest_score_then_nearest_center_then_coordinates'::VARCHAR
         AS anchor_motif_band_winner_rule,
-    'both_locus_best_scores_at_or_above_neighbor_qualifying_threshold'::VARCHAR
+    'both_locus_best_scores_at_or_above_neighbor_operating_threshold'::VARCHAR
         AS cofactor_pair_score_rule,
     {sql_string(motif_hit_source)}::VARCHAR AS motif_hit_source,
     {sql_string(arguments.annotation_release)}::VARCHAR AS annotation_release,
@@ -1869,7 +1992,14 @@ WITH candidate_geometry AS (
         n.strand AS neighbor_strand,
         n.score AS neighbor_score,
         n.pwm_relative_score AS neighbor_pwm_relative_score,
+        n.source_score_floor AS neighbor_source_score_floor,
+        n.recommended_threshold AS neighbor_recommended_threshold,
+        n.operating_threshold AS neighbor_operating_threshold,
         n.qualifying_threshold AS neighbor_qualifying_threshold,
+        n.operating_threshold_set_id AS neighbor_operating_threshold_set_id,
+        n.operating_threshold_status AS neighbor_operating_threshold_status,
+        n.operating_threshold_raised_to_source_floor
+            AS neighbor_operating_threshold_raised_to_source_floor,
         (
             GREATEST(a.start, n.start) - LEAST(a."end", n."end")
         )::BIGINT AS anchor_neighbor_interval_distance_bp
@@ -1905,7 +2035,13 @@ SELECT
     a.neighbor_strand,
     a.neighbor_score,
     a.neighbor_pwm_relative_score,
+    a.neighbor_source_score_floor,
+    a.neighbor_recommended_threshold,
+    a.neighbor_operating_threshold,
     a.neighbor_qualifying_threshold,
+    a.neighbor_operating_threshold_set_id,
+    a.neighbor_operating_threshold_status,
+    a.neighbor_operating_threshold_raised_to_source_floor,
     a.neighbor_center_bp - a.center_bp AS genomic_center_distance_bp,
     CASE WHEN a.strand = '-' THEN a.center_bp - a.neighbor_center_bp
          ELSE a.neighbor_center_bp - a.center_bp END
@@ -2094,7 +2230,18 @@ WITH orientation_records AS (
         MAX(inter_motif_gap_bp)::BIGINT AS inter_motif_gap_bp,
         MAX(interval_relation) AS interval_relation,
         MAX(interval_distance_band) AS interval_distance_band,
+        MAX(neighbor_source_score_floor)::DOUBLE AS neighbor_source_score_floor,
+        MAX(neighbor_recommended_threshold)::DOUBLE
+            AS neighbor_recommended_threshold,
+        MAX(neighbor_operating_threshold)::DOUBLE
+            AS neighbor_operating_threshold,
         MAX(neighbor_qualifying_threshold) AS neighbor_qualifying_threshold,
+        MAX(neighbor_operating_threshold_set_id)
+            AS neighbor_operating_threshold_set_id,
+        MAX(neighbor_operating_threshold_status)
+            AS neighbor_operating_threshold_status,
+        BOOL_OR(neighbor_operating_threshold_raised_to_source_floor)
+            AS neighbor_operating_threshold_raised_to_source_floor,
         MAX(score_mode) AS score_mode,
         MAX(pseudocount) AS pseudocount,
         MAX(background_model_id) AS background_model_id,
@@ -2190,7 +2337,14 @@ WITH collapsed AS (
         MAX(pwm_relative_score) FILTER (WHERE strand = '-')
             AS minus_pwm_relative_score,
         MAX(score) AS best_score,
+        MAX(source_score_floor) AS source_score_floor,
+        MAX(recommended_threshold) AS recommended_threshold,
+        MAX(operating_threshold) AS operating_threshold,
         MAX(qualifying_threshold) AS qualifying_threshold,
+        MAX(operating_threshold_set_id) AS operating_threshold_set_id,
+        MAX(operating_threshold_status) AS operating_threshold_status,
+        BOOL_OR(operating_threshold_raised_to_source_floor)
+            AS operating_threshold_raised_to_source_floor,
         MAX(score_mode) AS score_mode,
         MAX(pseudocount) AS pseudocount
     FROM configured_hit
@@ -2312,6 +2466,9 @@ WITH candidate_pair AS (
         r.orientation_state AS right_orientation_state,
         r.best_score AS right_score,
         r.best_pwm_relative_score AS right_pwm_relative_score,
+        r.source_score_floor AS right_source_score_floor,
+        r.recommended_threshold AS right_recommended_threshold,
+        r.operating_threshold AS right_operating_threshold,
         r.qualifying_threshold AS right_qualifying_threshold,
         (
             GREATEST(l.start, r.start) - LEAST(l."end", r."end")
@@ -2344,7 +2501,16 @@ SELECT
     right_orientation_state,
     right_score,
     right_pwm_relative_score,
+    source_score_floor,
+    right_source_score_floor,
+    recommended_threshold,
+    right_recommended_threshold,
+    operating_threshold,
+    right_operating_threshold,
     qualifying_threshold,
+    operating_threshold_set_id,
+    operating_threshold_status,
+    operating_threshold_raised_to_source_floor,
     pair_member_interval_distance_bp,
     GREATEST(0, -pair_member_interval_distance_bp)::BIGINT
         AS pair_member_overlap_bp,
@@ -2532,7 +2698,14 @@ WITH collapsed AS (
         MAX(inter_motif_gap_bp)::BIGINT AS inter_motif_gap_bp,
         MAX(interval_relation) AS interval_relation,
         MAX(interval_distance_band) AS interval_distance_band,
+        MAX(neighbor_source_score_floor)::DOUBLE AS source_score_floor,
+        MAX(neighbor_recommended_threshold)::DOUBLE AS recommended_threshold,
+        MAX(neighbor_operating_threshold)::DOUBLE AS operating_threshold,
         MAX(neighbor_qualifying_threshold)::DOUBLE AS qualifying_threshold,
+        MAX(neighbor_operating_threshold_set_id) AS operating_threshold_set_id,
+        MAX(neighbor_operating_threshold_status) AS operating_threshold_status,
+        BOOL_OR(neighbor_operating_threshold_raised_to_source_floor)
+            AS operating_threshold_raised_to_source_floor,
         MAX(score_mode) AS score_mode,
         MAX(pseudocount)::DOUBLE AS pseudocount,
         MAX(background_model_id) AS background_model_id,
@@ -2600,10 +2773,10 @@ SELECT
 FROM oriented;
 
 CREATE TEMP TABLE anchor_motif_band_feature AS
-WITH qualifying AS (
+WITH retained AS (
     SELECT *
     FROM physical_context_neighbor_locus
-    WHERE neighbor_score >= qualifying_threshold{band_qualifying_filter_sql}
+    WHERE neighbor_score >= source_score_floor{band_qualifying_filter_sql}
 ), ranked AS (
     SELECT
         *,
@@ -2616,7 +2789,7 @@ WITH qualifying AS (
                      neighbor_end,
                      neighbor_locus_id
         ) AS best_rank
-    FROM qualifying
+    FROM retained
 ), group_stat AS (
     SELECT
         anchor_locus_id,
@@ -2624,7 +2797,11 @@ WITH qualifying AS (
         motif_set_id,
         neighbor_motif_id,
         interval_distance_band,
-        COUNT(*)::BIGINT AS n_neighbor_loci_above_threshold,
+        COUNT(*)::BIGINT AS n_neighbor_loci_at_source_floor,
+        COUNT(*) FILTER (WHERE neighbor_score >= 0)::BIGINT
+            AS n_neighbor_loci_at_or_above_zero,
+        COUNT(*) FILTER (WHERE neighbor_score >= operating_threshold)::BIGINT
+            AS n_neighbor_loci_above_threshold,
         COUNT(*) FILTER (
             WHERE neighbor_score = group_best_score
         )::BIGINT AS n_best_score_ties
@@ -2635,13 +2812,13 @@ WITH qualifying AS (
                 PARTITION BY anchor_locus_id, genome_id, motif_set_id,
                              neighbor_motif_id, interval_distance_band
             ) AS group_best_score
-        FROM qualifying
+        FROM retained
     ) counted
     GROUP BY anchor_locus_id, genome_id, motif_set_id,
              neighbor_motif_id, interval_distance_band
 )
 SELECT
-    9::INTEGER AS schema_version,
+    10::INTEGER AS schema_version,
     r.anchor_locus_id,
     r.genome_id,
     r.motif_set_id,
@@ -2666,9 +2843,22 @@ SELECT
         WHEN 'gap_101_150' THEN 5
         ELSE 6
     END::INTEGER AS interval_distance_band_order,
+    r.source_score_floor,
+    r.recommended_threshold,
+    r.operating_threshold,
     r.qualifying_threshold,
+    r.operating_threshold_set_id,
+    r.operating_threshold_status,
+    r.operating_threshold_raised_to_source_floor,
     TRUE AS threshold_inclusive,
+    s.n_neighbor_loci_at_source_floor,
+    s.n_neighbor_loci_at_or_above_zero,
     s.n_neighbor_loci_above_threshold,
+    s.n_neighbor_loci_at_source_floor > 0 AS has_neighbor_locus_at_source_floor,
+    s.n_neighbor_loci_at_or_above_zero > 0
+        AS has_neighbor_locus_at_or_above_zero,
+    s.n_neighbor_loci_above_threshold > 0
+        AS has_neighbor_locus_above_threshold,
     s.n_best_score_ties,
     r.neighbor_locus_id AS best_neighbor_locus_id,
     r.neighbor_start AS best_neighbor_start,
@@ -3392,6 +3582,23 @@ def build_package(arguments: argparse.Namespace) -> None:
         raise ContextBuildError("--context-flank cannot exceed --capture-flank")
     if arguments.tandem_flank > arguments.capture_flank:
         raise ContextBuildError("--tandem-flank cannot exceed --capture-flank")
+    if ((arguments.operating_threshold_parquet is None)
+            != (arguments.operating_threshold_set_id is None)):
+        raise ContextBuildError(
+            "--operating-threshold-parquet and "
+            "--operating-threshold-set-id must be supplied together"
+        )
+    arguments.operating_threshold_sha256 = None
+    if arguments.operating_threshold_parquet is not None:
+        threshold_path = (
+            arguments.operating_threshold_parquet.expanduser().resolve()
+        )
+        if not threshold_path.is_file():
+            raise ContextBuildError(
+                f"operating-threshold Parquet not found: {threshold_path}"
+            )
+        arguments.operating_threshold_parquet = threshold_path
+        arguments.operating_threshold_sha256 = sha256_file(threshold_path)
     identifier_pattern = re.compile(r"^[A-Za-z0-9._-]+$")
     for option, value in (
         ("--motif-set-id", arguments.motif_set_id),
@@ -3407,6 +3614,14 @@ def build_package(arguments: argparse.Namespace) -> None:
             raise ContextBuildError(
                 f"{option} must contain only letters, digits, '.', '_', or '-'"
             )
+    if (arguments.operating_threshold_set_id is not None
+            and not identifier_pattern.fullmatch(
+                arguments.operating_threshold_set_id
+            )):
+        raise ContextBuildError(
+            "--operating-threshold-set-id must contain only letters, digits, "
+            "'.', '_', or '-'"
+        )
 
     motif_glob = resolve_parquet_glob(arguments.motif_hits)
     columns = parquet_columns(arguments.duckdb, motif_glob)

@@ -403,6 +403,9 @@ SELECT count(*)::BIGINT AS rows,
            AS invalid_rows,
        count(*) FILTER (WHERE used_fallback)::BIGINT AS fallback_rows,
        count(*) FILTER (WHERE raised_to_scan_floor)::BIGINT AS raised_rows,
+       count(*) FILTER (
+         WHERE source_minimum_score > {arguments.maximum_source_score_floor}
+       )::BIGINT AS source_floors_above_contract,
        count(DISTINCT threshold_set_id)::BIGINT AS threshold_sets,
        count(DISTINCT threshold_role)::BIGINT AS threshold_roles,
        count(DISTINCT calibration_stratum_id)::BIGINT AS strata
@@ -427,6 +430,7 @@ FROM registry;
             or values["scan_target_rows"] != 1
             or values["missing_source_motifs"] != 0
             or values["extra_source_motifs"] != 0
+            or values["source_floors_above_contract"] != 0
             or values["threshold_sets"] != 1
             or values["threshold_roles"] != 1 or values["strata"] != 1):
         raise GenomeContextError(f"applied threshold registry is invalid: {values}")
@@ -569,6 +573,7 @@ COPY (
         "batch_count": batch_count,
         "fallback_threshold_count": values["fallback_rows"],
         "raised_to_scan_floor_count": values["raised_rows"],
+        "maximum_source_score_floor": arguments.maximum_source_score_floor,
         "runtime_prefix": str(runtime_prefix),
         "scratch_root": str(arguments.scratch_root),
         "threads": arguments.threads,
@@ -581,6 +586,10 @@ COPY (
         "scan_file_plan_sha256": sha256(scan_plan),
         "threshold_application_rule": (
             "max(coalesce(chr1_context_recommendation,0),scan_retention_floor)"
+        ),
+        "source_retention_contract": (
+            "every_non_target_motif_scan_floor_at_or_below_"
+            f"{arguments.maximum_source_score_floor:g}"
         ),
         "payload_discovery_policy": "exact_scan_and_anchor_inventory_paths_only",
     }
@@ -767,6 +776,13 @@ def parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--applied-threshold-set-id", required=True)
     prepare_parser.add_argument("--target-motif", default="MA0861.2")
     prepare_parser.add_argument("--flank", type=int, default=150)
+    prepare_parser.add_argument(
+        "--maximum-source-score-floor", type=float, default=-1.0,
+        help=(
+            "reject any non-target scan retained above this score; protects "
+            "negative-reference and threshold-sensitivity analyses (default: -1)"
+        ),
+    )
     prepare_parser.add_argument("--motifs-per-batch", type=int, default=3)
     prepare_parser.add_argument("--scratch-root", type=Path,
                                 default=Path("/scratch") / os.environ.get("USER", "sm718"))
@@ -799,6 +815,9 @@ def main() -> int:
         for name in ("flank", "motifs_per_batch", "threads"):
             if hasattr(arguments, name) and getattr(arguments, name) <= 0:
                 raise GenomeContextError(f"--{name.replace('_', '-')} must be positive")
+        if (hasattr(arguments, "maximum_source_score_floor")
+                and not math.isfinite(arguments.maximum_source_score_floor)):
+            raise GenomeContextError("--maximum-source-score-floor must be finite")
         arguments.function(arguments)
         return 0
     except (GenomeContextError, OSError, ValueError, json.JSONDecodeError) as error:

@@ -9,12 +9,16 @@ fi
 
 repository_root=$(cd "$(dirname "$0")/.." && pwd)
 temporary=$(mktemp -d "${TMPDIR:-/tmp}/jaspar-motif-context.XXXXXX")
-trap 'rm -rf "$temporary"' EXIT HUP INT TERM
+if [[ ${JASPAR_KEEP_TEST_OUTPUT:-0} == 1 ]]; then
+    echo "I: Retaining motif-context test output in $temporary" >&2
+else
+    trap 'rm -rf "$temporary"' EXIT HUP INT TERM
+fi
 
 cat > "$temporary/hits.sql" <<'SQL'
 COPY (
     SELECT t.*,
-           CASE WHEN motif_id = 'MTHRESH.1' THEN 3.0 ELSE 0.0 END
+           CASE WHEN motif_id = 'MA0861.2' THEN -5.0 ELSE -1.0 END
                AS minimum_score
     FROM (VALUES
         ('1', 140::BIGINT, 156::BIGINT, 'MA0861.2', 'TP73', '+', 10.0, 'log2_relative_risk', 1.0, 0.95),
@@ -51,11 +55,30 @@ COPY (
         ('1', 448::BIGINT, 454::BIGINT, 'MTHRESH.1', 'THRESH', '+', 2.0, 'log2_relative_risk', 1.0, 0.60),
         ('1', 456::BIGINT, 462::BIGINT, 'MTHRESH.1', 'THRESH', '+', 4.0, 'log2_relative_risk', 1.0, 0.80),
         ('1', 456::BIGINT, 462::BIGINT, 'MTHRESH.1', 'THRESH', '-', 3.5, 'log2_relative_risk', 1.0, 0.99),
+        ('1', 472::BIGINT, 478::BIGINT, 'MLOW.1', 'LOW', '+', -0.5, 'log2_relative_risk', 1.0, 0.45),
         ('1', 2000::BIGINT, 2006::BIGINT, 'MFAR.1', 'FAR', '+', 3.0, 'log2_relative_risk', 1.0, 0.75),
         ('1', 2006::BIGINT, 2012::BIGINT, 'MFAR.1', 'FAR', '-', 4.0, 'log2_relative_risk', 1.0, 0.80)
     ) AS t(chrom, start, "end", motif_id, motif_name, strand, score,
            score_mode, pseudocount, pwm_relative_score)
 ) TO 'motif_hit.parquet' (FORMAT PARQUET, COMPRESSION ZSTD);
+
+COPY (
+    SELECT
+        motif_id,
+        'synthetic_context_operating_v1'::VARCHAR AS threshold_set_id,
+        CASE
+            WHEN motif_id = 'MTHRESH.1' THEN 3.0
+            WHEN motif_id = 'MLOW.1' THEN 2.0
+            ELSE 0.0
+        END::DOUBLE AS recommended_threshold,
+        'synthetic_configured'::VARCHAR AS calibration_status,
+        -1.0::DOUBLE AS source_minimum_score
+    FROM (
+        SELECT DISTINCT motif_id
+        FROM read_parquet('motif_hit.parquet')
+        WHERE motif_id <> 'MA0861.2'
+    ) motif
+) TO 'operating_thresholds.parquet' (FORMAT PARQUET, COMPRESSION ZSTD);
 
 -- Match the direct sparse writer: no motif_name column and word-form strands.
 COPY (
@@ -115,6 +138,8 @@ EOF
     --downstream-definition-id synthetic_tes_up25_down50_v1 \
     --downstream-upstream-bp 25 --downstream-downstream-bp 50 \
     --anchor-minimum-score 0 --partner-minimum-score 0 \
+    --operating-threshold-parquet "$temporary/operating_thresholds.parquet" \
+    --operating-threshold-set-id synthetic_context_operating_v1 \
     --score-mode log2_relative_risk --pseudocount 1 \
     --chrom 1 --capture-flank 150 --context-flank 150 --tandem-flank 20 \
     --memory-limit 1GB --max-temp-size 1GB \
@@ -129,6 +154,8 @@ if "$repository_root/scripts/build_motif_context.py" \
     --anchor-motif MA0861.2 \
     --motif-set-id synthetic_jaspar2026 --genome-id synthetic_grch38_v1 \
     --anchor-minimum-score 0 --partner-minimum-score 0 \
+    --operating-threshold-parquet "$temporary/operating_thresholds.parquet" \
+    --operating-threshold-set-id synthetic_context_operating_v1 \
     --score-mode log2_relative_risk --pseudocount 1 \
     --chrom 1 --capture-flank 150 --context-flank 150 --tandem-flank 20 \
     --memory-limit 1GB --max-temp-size 1GB >/dev/null 2>&1; then
@@ -148,6 +175,8 @@ fi
     --anchor-motif MA0861.2 \
     --motif-set-id synthetic_jaspar2026 --genome-id synthetic_grch38_v1 \
     --anchor-minimum-score 0 --partner-minimum-score 0 \
+    --operating-threshold-parquet "$temporary/operating_thresholds.parquet" \
+    --operating-threshold-set-id synthetic_context_operating_v1 \
     --score-mode log2_relative_risk --pseudocount 1 \
     --chrom 1 --capture-flank 100 --context-flank 50 --tandem-flank 20 \
     --memory-limit 1GB --max-temp-size 1GB >/dev/null
@@ -171,6 +200,8 @@ fi
     --anchor-motif MA0861.2 \
     --motif-set-id synthetic_jaspar2026 --genome-id synthetic_grch38_v1 \
     --anchor-minimum-score 0 --partner-minimum-score 0 \
+    --operating-threshold-parquet "$temporary/operating_thresholds.parquet" \
+    --operating-threshold-set-id synthetic_context_operating_v1 \
     --score-mode log2_relative_risk --pseudocount 1 \
     --chrom 1 --capture-flank 150 --context-flank 150 --tandem-flank 20 \
     --memory-limit 1GB --max-temp-size 1GB >/dev/null
@@ -203,6 +234,8 @@ fi
     --anchor-motif MA0861.2 \
     --motif-set-id synthetic_jaspar2026 --genome-id synthetic_grch38_v1 \
     --anchor-minimum-score 0 --partner-minimum-score 0 \
+    --operating-threshold-parquet "$temporary/operating_thresholds.parquet" \
+    --operating-threshold-set-id synthetic_context_operating_v1 \
     --score-mode log2_relative_risk --pseudocount 1 \
     --chrom 1 --capture-flank 150 --context-flank 150 --tandem-flank 20 \
     --memory-limit 1GB --max-temp-size 1GB >/dev/null
@@ -469,8 +502,19 @@ SELECT CASE WHEN NOT EXISTS (
       AND neighbor_motif_id = 'MBEST.1'
       AND interval_distance_band = 'gap_6_20'
       AND interval_distance_band_order = 2
+      AND source_score_floor = -1
+      AND recommended_threshold = 0
+      AND operating_threshold = 0
       AND qualifying_threshold = 0 AND threshold_inclusive
+      AND operating_threshold_set_id = 'synthetic_context_operating_v1'
+      AND operating_threshold_status = 'synthetic_configured'
+      AND NOT operating_threshold_raised_to_source_floor
+      AND n_neighbor_loci_at_source_floor = 3
+      AND n_neighbor_loci_at_or_above_zero = 3
       AND n_neighbor_loci_above_threshold = 3
+      AND has_neighbor_locus_at_source_floor
+      AND has_neighbor_locus_at_or_above_zero
+      AND has_neighbor_locus_above_threshold
       AND n_best_score_ties = 1
       AND best_neighbor_start = 430 AND best_neighbor_end = 436
       AND best_neighbor_score = 5.0
@@ -515,14 +559,20 @@ SELECT CASE WHEN NOT EXISTS (
       AND best_relative_orientation_state = 'ambiguous'
 ) THEN error('physical-locus counting or strongest-score tie handling failed') END;
 
--- The input's per-motif minimum_score is inclusive. The score-2 locus is not
--- counted and cannot make the qualifying score-4 locus appear paired.
+-- The source floor and operating threshold are independent. Both physical loci
+-- survive at the -1 source floor, but only the score-4 locus is operating-point
+-- positive and the score-2 locus cannot create a qualifying cofactor pair.
 SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM anchor_motif_band_feature
     WHERE anchor_start = 400 AND anchor_end = 416
       AND neighbor_motif_id = 'MTHRESH.1'
       AND interval_distance_band = 'gap_21_50'
+      AND source_score_floor = -1.0
+      AND recommended_threshold = 3.0
+      AND operating_threshold = 3.0
       AND qualifying_threshold = 3.0
+      AND n_neighbor_loci_at_source_floor = 2
+      AND n_neighbor_loci_at_or_above_zero = 2
       AND n_neighbor_loci_above_threshold = 1
       AND best_neighbor_start = 456 AND best_neighbor_end = 462
       AND best_neighbor_score = 4.0
@@ -535,6 +585,25 @@ SELECT CASE WHEN NOT EXISTS (
       AND NOT best_hit_has_same_motif_partner
       AND best_hit_n_same_motif_partner_loci = 0
 ) THEN error('per-motif qualifying threshold was not applied consistently') END;
+
+-- A high operating threshold must never erase a retained lower-scoring maximum.
+-- This row is available for future threshold sensitivity even though it is not
+-- positive at score zero or at the configured operating point.
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM anchor_motif_band_feature
+    WHERE anchor_start = 400 AND anchor_end = 416
+      AND neighbor_motif_id = 'MLOW.1'
+      AND interval_distance_band = 'gap_51_100'
+      AND source_score_floor = -1.0
+      AND operating_threshold = 2.0
+      AND best_neighbor_score = -0.5
+      AND n_neighbor_loci_at_source_floor = 1
+      AND n_neighbor_loci_at_or_above_zero = 0
+      AND n_neighbor_loci_above_threshold = 0
+      AND has_neighbor_locus_at_source_floor
+      AND NOT has_neighbor_locus_at_or_above_zero
+      AND NOT has_neighbor_locus_above_threshold
+) THEN error('lower-scoring retained maximum was erased by analysis thresholds') END;
 
 -- TP73 neighbors remain useful context observations, but their tandem state is
 -- represented by tp73_pair_feature rather than the generic cofactor pair layer.
@@ -827,7 +896,7 @@ THEN error('many-to-many TP73 anchor/promoter membership is incorrect') END;
 
 SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM motif_context_run_config
-    WHERE schema_version = 9
+    WHERE schema_version = 10
       AND builder_source_commit = 'unknown'
       AND input_uniqueness = 'deduplicate'
       AND genome_id = 'synthetic_grch38_v1'
@@ -855,14 +924,20 @@ SELECT CASE WHEN NOT EXISTS (
       AND cofactor_motif_locus_scope = 'tp73_context_loci_plus_their_pair_partners'
       AND cofactor_locus_pair_feature_scope = 'tp73_context_loci_only'
       AND default_neighbor_minimum_score = 0
-      AND neighbor_qualifying_threshold_rule =
+      AND neighbor_source_score_floor_rule =
           'source_minimum_score_else_default_inclusive'
+      AND neighbor_qualifying_threshold_rule =
+          'registry_threshold_else_source_floor_inclusive'
+      AND operating_threshold_set_id = 'synthetic_context_operating_v1'
+      AND length(operating_threshold_sha256) = 64
+      AND operating_threshold_application_rule =
+          'best_locus_from_source_floor_counts_at_source_zero_and_operating'
       AND anchor_motif_band_feature_grain =
           'physical_anchor_locus_neighbor_motif_interval_distance_band'
       AND anchor_motif_band_winner_rule =
           'highest_score_then_nearest_center_then_coordinates'
       AND cofactor_pair_score_rule =
-          'both_locus_best_scores_at_or_above_neighbor_qualifying_threshold'
+          'both_locus_best_scores_at_or_above_neighbor_operating_threshold'
       AND annotation_release = 'synthetic_v1'
       AND promoter_definition_id = 'synthetic_up100_down25_v1'
       AND promoter_upstream_bp = 100 AND promoter_downstream_bp = 25

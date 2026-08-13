@@ -99,7 +99,12 @@ cells are correlated summaries, not independent evidence.
 Once a threshold set has been selected, the sparse context builder can
 materialize `tp73_motif_threshold_count`. Its grain is one physical TP73
 alignment locus, neighboring motif accession, and fully identified threshold
-set. The initial feature schema is version 1.
+set. Feature schema version 2 keeps three nested counts:
+
+- `n_neighbor_loci_at_source_floor` counts every retained physical locus;
+- `n_neighbor_loci_at_or_above_zero` supplies the historical score-zero view;
+- `n_neighbor_loci_above_threshold` applies the named operating threshold.
+
 `n_neighbor_loci_above_threshold` is the number of distinct neighboring
 alignment spans whose best orientation-specific score meets the motif's
 inclusive threshold and recorded interval-distance/relation bounds.
@@ -119,8 +124,11 @@ For a populated registry, rerun `scripts/build_sparse_context_maxima.py` with
 `--threshold-parquet` and `--threshold-set-id`. The tool validates that every
 requested motif has exactly one populated threshold row, that score and source
 floors are compatible, and that the registered interval geometry fits inside
-the supplied capture flank. The output retains `context_score` as the
-unthresholded maximum alongside the threshold-qualified count.
+the supplied capture flank. The output retains `context_score` as the maximum
+over every source-retained locus alongside all three counts. The operating
+threshold never filters the source before that maximum is selected. This
+distinction is essential: a strongest score of `0.5` remains observable when a
+convenient threshold of `6` is used for the positive/negative contrast.
 
 ## Null and status semantics
 
@@ -228,7 +236,7 @@ run rescans only the 438 motifs recommended at zero and tests every integer
 threshold from -20 through zero. It is a left-censoring and filtering-bias
 audit; it does not mutate the v1 registry or its compact export.
 
-## Density-capped production floor
+## Density-capped screening floor
 
 The next whole-genome generation combines the provisional informative result
 with a permissive default and a storage-density ceiling. For each motif:
@@ -249,6 +257,13 @@ The restart-safe calibration and whole-genome handoff are specified in
 [`jaspar2026_informative_density200_scan.md`](jaspar2026_informative_density200_scan.md).
 The resulting TSV/JSON becomes a new immutable threshold set; it does not
 rewrite the v1 TP73-context registry.
+
+This density-capped scan is suitable for compact broad screening, but it is not
+the source for threshold-sensitive TP73 context analysis when its floor exceeds
+`-1`. Context maxima, historical score-zero compatibility, and fixed `< -1`
+negative references must instead use the finalized low-floor scan (`-1` for
+non-TP73 motifs, `-5` for TP73). The empirical/density threshold remains an
+analysis operating point layered over that retained evidence.
 
 On Haumea, the scalable unit should be one neighboring motif against the fixed
 TP73 anchor/label table. Resolve its exact plus/minus chromosome files through

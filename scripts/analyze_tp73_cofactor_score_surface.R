@@ -15,7 +15,7 @@ usage <- function(status = 0L) {
         "",
         "Required:",
         "  --anchor-evidence FILE  TP73 anchor/CUT&RUN evidence Parquet",
-        "  --cofactor-maxima FILE  Rectangular schema-v4 context-maxima Parquet",
+        "  --cofactor-maxima FILE  Rectangular 150 bp context-maxima Parquet",
         "  --thresholds FILE       TSV with motif_id and positive_threshold",
         "  --output-prefix PATH    Basename for generated TSV files",
         "",
@@ -302,7 +302,7 @@ if (nrow(maxima) == 0L || !setequal(unique(maxima$motif_id), thresholds$motif_id
 }
 if (any(maxima$context_flank_bp != 150) ||
     !all(maxima$context_distance_metric == "signed_interval_edge_distance")) {
-    stop("cofactor maxima do not use the required schema-v4 150 bp geometry",
+    stop("cofactor maxima do not use the required 150 bp interval geometry",
          call. = FALSE)
 }
 source_floors <- maxima[, .(

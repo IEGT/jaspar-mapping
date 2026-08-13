@@ -190,6 +190,10 @@ SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM counts
     WHERE anchor_start = 100 AND motif_id = 'M1'
       AND recommended_threshold = 5
+      AND n_neighbor_loci_at_source_floor = 2
+      AND n_neighbor_loci_at_or_above_zero = 2
+      AND has_neighbor_locus_at_source_floor
+      AND has_neighbor_locus_at_or_above_zero
       AND n_neighbor_loci_above_threshold = 1
       AND has_neighbor_locus_above_threshold
 ) THEN error('same-span strand alternatives inflated the M1 locus count') END;
@@ -210,7 +214,7 @@ SELECT CASE WHEN NOT EXISTS (
 ) THEN error('per-motif score or interval thresholds were ignored') END;
 SELECT CASE WHEN EXISTS (
     SELECT 1 FROM counts
-    WHERE schema_version <> 1
+    WHERE schema_version <> 2
        OR anchor_locus_id IS NULL
        OR threshold_set_id <> 'synthetic_v1'
        OR genome_id <> 'genome1'
