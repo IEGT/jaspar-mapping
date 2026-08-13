@@ -14,6 +14,7 @@ scripts/analyze_cutandrun_containment.py
 scripts/analyze_dense_cutandrun_coverage.py
 scripts/analyze_h3k4me3_cofactor_change.R
 scripts/analyze_tp73_cofactor_enrichment.R
+scripts/analyze_tp73_cofactor_score_surface.R
 scripts/bedtools_map_serial.sh
 scripts/benchmark_sparse_layout.py
 scripts/build_density_capped_thresholds.py
