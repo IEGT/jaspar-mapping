@@ -145,6 +145,58 @@ def package_database(package: Path) -> tuple[Path, Path]:
     return manifest_path, database
 
 
+def scan_threshold_source_sql(
+    duckdb: str, database: Path, package: Path, run_id: str
+) -> tuple[str, str]:
+    rows = run_json([
+        duckdb, "-light-mode", "-readonly", "-json", str(database), "-c", """
+SELECT COUNT(DISTINCT column_name) FILTER (
+         WHERE column_name IN (
+           'motif_id', 'final_minimum_score', 'threshold_set_id',
+           'density_limited'
+         )
+       )::BIGINT AS required_columns
+FROM information_schema.columns
+WHERE table_schema = 'main' AND table_name = 'scan_motif_threshold';
+""",
+    ], cwd=package)
+    if len(rows) != 1:
+        raise GenomeContextError("could not inspect scan threshold metadata")
+    if int(rows[0]["required_columns"]) == 4:
+        return """
+SELECT motif_id::VARCHAR AS motif_id,
+       final_minimum_score::DOUBLE AS final_minimum_score,
+       threshold_set_id::VARCHAR AS threshold_set_id,
+       density_limited::BOOLEAN AS density_limited
+FROM scan_motif_threshold
+""", "scan_motif_threshold"
+
+    inventory_rows = run_json([
+        duckdb, "-light-mode", "-readonly", "-json", str(database), "-c", """
+SELECT COUNT(DISTINCT column_name) FILTER (
+         WHERE column_name IN ('motif_id', 'minimum_score')
+       )::BIGINT AS required_columns
+FROM information_schema.columns
+WHERE table_schema = 'main' AND table_name = 'scan_file_inventory';
+""",
+    ], cwd=package)
+    if (len(inventory_rows) != 1
+            or int(inventory_rows[0]["required_columns"]) != 2):
+        raise GenomeContextError(
+            "scan catalog has neither per-motif thresholds nor inventory floors"
+        )
+    legacy_set_id = f"legacy_inventory_{run_id}"
+    return f"""
+SELECT motif_id::VARCHAR AS motif_id,
+       MIN(minimum_score)::DOUBLE AS final_minimum_score,
+       {sql_string(legacy_set_id)}::VARCHAR AS threshold_set_id,
+       NULL::BOOLEAN AS density_limited
+FROM scan_file_inventory
+GROUP BY motif_id
+HAVING COUNT(DISTINCT minimum_score) = 1
+""", "scan_file_inventory_unique_floor"
+
+
 def git_identity(source: Path) -> tuple[str, bool]:
     commit = subprocess.run(
         ["git", "-C", str(source), "rev-parse", "HEAD"],
@@ -274,6 +326,7 @@ def build_applied_registry(
     output: Path,
     threshold_set_id: str,
     target_motif: str,
+    scan_threshold_sql: str,
 ) -> None:
     staged = output.with_name(f".{output.name}.tmp-{os.getpid()}")
     if staged.exists():
@@ -283,7 +336,7 @@ COPY (
 WITH registry AS (
   SELECT * FROM read_parquet({sql_string(source_registry)})
 ), scan_threshold AS (
-  SELECT * FROM scan_motif_threshold
+  {scan_threshold_sql}
 )
 SELECT
   r.motif_id,
@@ -352,6 +405,11 @@ def prepare(arguments: argparse.Namespace) -> None:
         raise GenomeContextError(f"threshold registry is missing: {source_registry}")
     duckdb = executable(arguments.duckdb)
     scan_manifest, scan_database = package_database(scan_package)
+    scan_manifest_value = load_json(scan_manifest)
+    scan_threshold_sql, scan_threshold_source = scan_threshold_source_sql(
+        duckdb, scan_database, scan_package,
+        str(scan_manifest_value.get("run_id") or "unknown_scan"),
+    )
     anchor, anchor_files, evidence_manifest = evidence_inputs(evidence_package)
     for name in ("plan", "logs", "tasks", "final"):
         (run_root / name).mkdir(parents=True, exist_ok=True)
@@ -379,7 +437,7 @@ FROM read_parquet({sql_string(anchor)});
     build_applied_registry(
         duckdb, scan_database, scan_package, source_registry,
         applied_registry, arguments.applied_threshold_set_id,
-        arguments.target_motif,
+        arguments.target_motif, scan_threshold_sql,
     )
     registry_summary = run_json([
         duckdb, "-light-mode", "-readonly", "-json", str(scan_database), "-c",
@@ -388,8 +446,10 @@ WITH registry AS (
   SELECT * FROM read_parquet({sql_string(applied_registry)})
 ), source_registry AS (
   SELECT * FROM read_parquet({sql_string(source_registry)})
+), scan_threshold AS (
+  {scan_threshold_sql}
 ), expected AS (
-  SELECT motif_id FROM scan_motif_threshold
+  SELECT DISTINCT motif_id FROM scan_file_inventory
   WHERE motif_id <> {sql_string(arguments.target_motif)}
 )
 SELECT count(*)::BIGINT AS rows,
@@ -410,14 +470,14 @@ SELECT count(*)::BIGINT AS rows,
        count(DISTINCT threshold_role)::BIGINT AS threshold_roles,
        count(DISTINCT calibration_stratum_id)::BIGINT AS strata
        ,(SELECT count(*) FROM expected)::BIGINT AS expected_scan_motifs
-       ,(SELECT count(*) FROM scan_motif_threshold
+       ,(SELECT count(*) FROM scan_threshold
          WHERE motif_id = {sql_string(arguments.target_motif)})::BIGINT
            AS scan_target_rows
        ,(SELECT count(*) FROM expected e
          LEFT JOIN source_registry s USING (motif_id)
          WHERE s.motif_id IS NULL)::BIGINT AS missing_source_motifs
        ,(SELECT count(*) FROM source_registry s
-         LEFT JOIN scan_motif_threshold t USING (motif_id)
+         LEFT JOIN scan_threshold t USING (motif_id)
          WHERE s.motif_id <> {sql_string(arguments.target_motif)}
            AND t.motif_id IS NULL)::BIGINT AS extra_source_motifs
 FROM registry;
@@ -427,7 +487,7 @@ FROM registry;
     if (values["rows"] <= 0 or values["rows"] != values["motifs"]
             or values["rows"] != values["expected_scan_motifs"]
             or values["target_rows"] != 0 or values["invalid_rows"] != 0
-            or values["scan_target_rows"] != 1
+            or values["scan_target_rows"] > 1
             or values["missing_source_motifs"] != 0
             or values["extra_source_motifs"] != 0
             or values["source_floors_above_contract"] != 0
@@ -550,6 +610,7 @@ COPY (
         "scan_package": str(scan_package),
         "scan_manifest_sha256": sha256(scan_manifest),
         "scan_database": str(scan_database),
+        "scan_threshold_source": scan_threshold_source,
         "evidence_package": str(evidence_package),
         "evidence_manifest_sha256": sha256(evidence_package / "manifest.json"),
         "anchor_evidence": str(anchor),

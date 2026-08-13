@@ -81,6 +81,13 @@ every finalized non-TP73 scan motif and rejects a context source whose motif
 floor is above `-1`. A motif with empty hit partitions still receives valid
 geometry from `motif_metadata.motif_length`.
 
+Modern scan catalogs provide one `scan_motif_threshold` row per motif. For the
+immutable July 2026 sparse-v3 package, which predates that table, preflight
+derives the same per-motif floor from `scan_file_inventory` and requires exactly
+one distinct floor across every chromosome and strand. The selected metadata
+source is recorded in `run_config.json`; no hit payload or package metadata is
+rewritten.
+
 Array jobs handle a bounded motif batch, stage the 22 chromosome anchor files
 once, and process chromosomes sequentially. Each completed motif is published
 atomically before the next motif starts. Requeue or timeout therefore reuses

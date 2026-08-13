@@ -17,6 +17,7 @@ scan="$temporary/scan-package"
 evidence="$temporary/evidence-package"
 runtime="$temporary/runtime"
 run_root="$temporary/context-run"
+legacy_run_root="$temporary/legacy-context-run"
 unsafe_run_root="$temporary/unsafe-context-run"
 enrichment_root="$temporary/enrichment-run"
 mkdir -p "$scan/task_data/task_id=1" "$scan/task_data/task_id=2" \
@@ -152,6 +153,36 @@ COPY (
   )
 ) TO '$thresholds' (FORMAT PARQUET, COMPRESSION ZSTD);
 SQL
+
+legacy_scan="$temporary/legacy-scan-package"
+cp -R "$scan" "$legacy_scan"
+"$duckdb" -batch "$legacy_scan/scan.duckdb" >/dev/null <<'SQL'
+DROP TABLE scan_motif_threshold;
+SQL
+legacy_batch_count=$(
+    "$repository_root/scripts/manage_tp73_genome_context_maxima.py" prepare \
+        --run-root "$legacy_run_root" --scan-package "$legacy_scan" \
+        --evidence-package "$evidence" --threshold-registry "$thresholds" \
+        --runtime-prefix "$runtime" --source "$repository_root" \
+        --duckdb "$duckdb" --run-id synthetic_legacy_genome_context \
+        --applied-threshold-set-id legacy-context-applied-v1 \
+        --motifs-per-batch 2 --threads 1 --memory-limit 512MB \
+        --max-temp-size 1GB --scratch-root "$temporary/legacy-scratch" \
+        --minimum-free-run-gb 0 --minimum-free-scratch-gb 0
+)
+[[ $legacy_batch_count -eq 1 ]] || {
+    echo "E: Legacy inventory-floor catalog was not accepted." >&2
+    exit 1
+}
+python3 - "$legacy_run_root/plan/run_config.json" <<'PY'
+import json
+import pathlib
+import sys
+
+config = json.loads(pathlib.Path(sys.argv[1]).read_text())
+assert config["scan_threshold_source"] == "scan_file_inventory_unique_floor"
+assert config["maximum_source_score_floor"] == -1
+PY
 
 unsafe_scan="$temporary/unsafe-scan-package"
 cp -R "$scan" "$unsafe_scan"
