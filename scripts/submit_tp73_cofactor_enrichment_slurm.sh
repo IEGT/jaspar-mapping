@@ -17,7 +17,8 @@ DuckDB.
 
 Options:
   --run-root DIR             New durable run below /data/sm718
-  --source-threshold-run DIR Completed threshold run below /data/sm718
+  --source-threshold-run DIR Completed context-maxima run below /data/sm718;
+                             legacy threshold-run layouts remain supported
   --run-id ID                 Unique enrichment-run identifier
   --anchor-evidence FILE    Prebuilt matched support/depth anchors; skips setup
   --threshold-registry FILE Fixed operating-point registry (default: source run)

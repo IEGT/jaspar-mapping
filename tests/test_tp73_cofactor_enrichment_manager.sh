@@ -123,6 +123,127 @@ for index, (motif, source) in enumerate((
     }, indent=2, sort_keys=True) + "\n")
 PY
 
+modern_source_run="$temporary/modern-context-run"
+modern_package="$modern_source_run/final/context_maxima"
+modern_run="$temporary/modern-enrichment-run"
+mkdir -p "$modern_source_run/plan" \
+    "$modern_package/tables/jaspar2026/motif_score_threshold"
+python3 - "$source_run" "$modern_source_run" "$modern_package" <<'PY'
+import csv
+import hashlib
+import json
+import pathlib
+import shutil
+import sys
+
+legacy, modern, package = map(pathlib.Path, sys.argv[1:])
+anchor = legacy / "input/tp73_chr1_anchor_evidence.parquet"
+(modern / "plan/run_config.json").write_text(json.dumps({
+    "analysis_scope": "all_non_target_jaspar2026_motifs_vs_tp73_autosomes",
+    "anchor_evidence": str(anchor.resolve()),
+    "context_flank_bp": 150,
+}, indent=2) + "\n")
+rows = []
+for index, (motif, name, threshold) in enumerate((
+    ("M_ENRICHED", "Synthetic enriched", 6.0),
+    ("M_DEPLETED", "Synthetic depleted", 3.0),
+)):
+    source = legacy / "tasks" / f"task-{index:06d}-{motif}"
+    target = modern / "tasks" / source.name
+    shutil.copytree(source, target)
+    marker_path = target / "complete.json"
+    marker = json.loads(marker_path.read_text())
+    marker["scan_minimum_score"] = -1.0
+    marker_path.write_text(json.dumps(marker, indent=2, sort_keys=True) + "\n")
+    maxima = target / "cofactor_maxima.parquet"
+    rows.append({
+        "task_index": index,
+        "motif_id": motif,
+        "motif_name": name,
+        "motif_length": 10,
+        "analysis_partition": "autosome",
+        "chromosome_count": 1,
+        "anchor_count": 400,
+        "scan_minimum_score": -1.0,
+        "applied_context_threshold": threshold,
+        "relative_path": str(maxima.relative_to(modern)),
+        "absolute_path": str(maxima.resolve()),
+        "bytes": maxima.stat().st_size,
+        "sha256": hashlib.sha256(maxima.read_bytes()).hexdigest(),
+    })
+inventory = package / "context_maxima_file_inventory.tsv"
+with inventory.open("w", newline="") as stream:
+    writer = csv.DictWriter(
+        stream, fieldnames=tuple(rows[0]), delimiter="\t", lineterminator="\n"
+    )
+    writer.writeheader()
+    writer.writerows(rows)
+PY
+
+"$duckdb" -light-mode -batch :memory: >/dev/null <<SQL
+COPY (
+  SELECT motif_id, motif_name, recommended_threshold,
+         recommended_threshold AS source_recommended_threshold,
+         'recommended'::VARCHAR AS calibration_status,
+         'source_recommendation_reachable'::VARCHAR
+           AS threshold_application_status,
+         'synthetic_lowfloor_v2'::VARCHAR AS threshold_set_id
+  FROM (VALUES
+    ('M_ENRICHED', 'Synthetic enriched', 6.0::DOUBLE),
+    ('M_DEPLETED', 'Synthetic depleted', 3.0::DOUBLE)
+  ) AS t(motif_id, motif_name, recommended_threshold)
+) TO '$modern_package/tables/jaspar2026/motif_score_threshold/part-000000.parquet'
+  (FORMAT PARQUET);
+SQL
+"$duckdb" -light-mode -batch "$modern_package/tp73_genome_context_maxima.duckdb" \
+    >/dev/null <<SQL
+CREATE TABLE context_maxima_file_inventory AS SELECT * FROM read_csv_auto(
+  '$modern_package/context_maxima_file_inventory.tsv', delim='\t', header=true);
+CREATE TABLE motif_score_threshold AS SELECT * FROM read_parquet(
+  '$modern_package/tables/jaspar2026/motif_score_threshold/part-000000.parquet');
+SQL
+printf '{"state":"complete","database":"tp73_genome_context_maxima.duckdb"}\n' \
+    > "$modern_package/manifest.json"
+
+modern_count=$(python3 \
+    "$repository_root/scripts/manage_tp73_cofactor_enrichment.py" prepare \
+    --run-root "$modern_run" --source-threshold-run "$modern_source_run" \
+    --anchor-evidence "$source_run/input/tp73_chr1_anchor_evidence.parquet" \
+    --source "$repository_root" --duckdb "$duckdb" \
+    --run-id synthetic_modern_context_v2)
+[[ $modern_count == 2 ]]
+python3 - "$modern_run" "$modern_package" <<'PY'
+import csv
+import json
+import pathlib
+import sys
+
+root, package = map(pathlib.Path, sys.argv[1:])
+config = json.loads((root / "plan/run_config.json").read_text())
+assert config["source_input_contract"] == "finalized_context_maxima_inventory"
+assert config["source_context_maxima_package"] == str(package.resolve())
+assert config["source_threshold_task_plan"].endswith(
+    "context_maxima_file_inventory.tsv"
+)
+assert config["source_threshold_registry"].endswith(
+    "motif_score_threshold/part-000000.parquet"
+)
+with (root / "plan/enrichment_tasks.tsv").open(newline="") as stream:
+    rows = {row["motif_id"]: row for row in csv.DictReader(stream, delimiter="\t")}
+assert rows["M_ENRICHED"]["positive_threshold"] == "6"
+assert rows["M_DEPLETED"]["positive_threshold"] == "3"
+assert rows["M_ENRICHED"]["source_task_relative_path"].startswith("tasks/")
+PY
+
+mkdir -p "$temporary/scratch-modern"
+SLURM_ARRAY_TASK_ID=0 SLURM_TMPDIR="$temporary/scratch-modern" \
+    bash "$repository_root/scripts/run_tp73_cofactor_enrichment_slurm_task.sh" \
+    --run-root "$modern_run" --source-threshold-run "$modern_source_run" \
+    --task-file "$modern_run/plan/enrichment_tasks.tsv" \
+    --run-config "$modern_run/plan/run_config.json" \
+    --source "$repository_root" --duckdb "$duckdb" --rscript Rscript \
+    --block-size 50000 --spline-df 3
+
 "$duckdb" -light-mode -batch :memory: >/dev/null <<SQL
 COPY (
     SELECT * EXCLUDE (

@@ -14,7 +14,8 @@ node-local scratch; only validated compact result tables are promoted.
 
 Options:
   --run-root DIR             Dedicated durable enrichment run
-  --source-threshold-run DIR Completed all-motif threshold-calibration run
+  --source-threshold-run DIR Completed context-maxima run (legacy threshold
+                             calibration layouts remain supported)
   --task-file FILE           Immutable enrichment_tasks.tsv
   --run-config FILE          Immutable enrichment run_config.json
   --source DIR               Repository root (default: script parent)

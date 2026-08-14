@@ -13,6 +13,8 @@ atomically by run_tp73_cofactor_enrichment_slurm_task.sh, so a requeue skips all
 motifs already completed by an earlier attempt.
 
 Options:
+  --source-threshold-run DIR Completed context-maxima run (legacy threshold
+                             calibration layouts remain supported)
   --source DIR               Repository root (default: script parent)
   --duckdb FILE              DuckDB CLI (default: duckdb)
   --rscript FILE             Rscript executable (default: Rscript)

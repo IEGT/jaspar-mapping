@@ -149,6 +149,50 @@ def read_tsv(path: Path) -> list[dict[str, str]]:
     return rows
 
 
+def finalized_context_contract(source_run: Path) -> dict[str, Any] | None:
+    package = source_run / "final" / "context_maxima"
+    manifest_path = package / "manifest.json"
+    if not manifest_path.is_file():
+        return None
+    manifest = load_json(manifest_path)
+    database = package / str(
+        manifest.get("database", "tp73_genome_context_maxima.duckdb")
+    )
+    inventory = package / "context_maxima_file_inventory.tsv"
+    registry = (
+        package / "tables" / "jaspar2026" / "motif_score_threshold" /
+        "part-000000.parquet"
+    )
+    if (manifest.get("state") != "complete" or not database.is_file()
+            or not inventory.is_file() or not registry.is_file()):
+        raise EnrichmentError(
+            f"finalized context-maxima contract is incomplete: {package}"
+        )
+    rows = read_tsv(inventory)
+    if not rows:
+        raise EnrichmentError(
+            f"context-maxima inventory contains no motif rows: {inventory}"
+        )
+    required = {
+        "task_index", "motif_id", "motif_name", "scan_minimum_score",
+        "applied_context_threshold", "absolute_path", "bytes", "sha256",
+    }
+    if not required.issubset(rows[0]):
+        missing = sorted(required - set(rows[0]))
+        raise EnrichmentError(
+            "context-maxima inventory lacks required columns: "
+            + ", ".join(missing)
+        )
+    return {
+        "package": package,
+        "manifest_path": manifest_path,
+        "database": database,
+        "inventory": inventory,
+        "registry": registry,
+        "rows": rows,
+    }
+
+
 def source_task_directory(source_run: Path, row: dict[str, str]) -> Path:
     return source_run / "tasks" / (
         f"task-{int(row['task_index']):06d}-{row['motif_id']}"
@@ -235,18 +279,33 @@ def prepare(arguments: argparse.Namespace) -> None:
 
     source_config_path = source_run / "plan" / "run_config.json"
     source_config = load_json(source_config_path)
-    source_plan_path = source_run / "plan" / "calibration_tasks.tsv"
-    source_rows = read_tsv(source_plan_path)
-    source_anchor = Path(str(source_config.get("anchor_evidence", ""))).resolve()
+    context_contract = finalized_context_contract(source_run)
+    if context_contract is None:
+        source_input_contract = "legacy_threshold_calibration_tasks"
+        source_plan_path = source_run / "plan" / "calibration_tasks.tsv"
+        source_rows = read_tsv(source_plan_path)
+        default_registry = None
+    else:
+        source_input_contract = "finalized_context_maxima_inventory"
+        source_plan_path = context_contract["inventory"]
+        source_rows = context_contract["rows"]
+        default_registry = context_contract["registry"]
+    source_anchor_value = source_config.get("anchor_evidence")
+    source_anchor = (
+        Path(str(source_anchor_value)).expanduser().resolve()
+        if source_anchor_value else None
+    )
     anchor = (
         arguments.anchor_evidence.expanduser().resolve()
         if arguments.anchor_evidence is not None else source_anchor
     )
-    if not anchor.is_file():
+    if anchor is None or not anchor.is_file():
         raise EnrichmentError(f"TP73 anchor evidence is missing: {anchor}")
     configured_registry = source_config.get("threshold_registry")
     if arguments.threshold_registry is not None:
         registry = arguments.threshold_registry.expanduser().resolve()
+    elif default_registry is not None:
+        registry = default_registry
     elif configured_registry:
         registry = Path(str(configured_registry)).expanduser().resolve()
     else:
@@ -371,6 +430,20 @@ def prepare(arguments: argparse.Namespace) -> None:
         maxima, marker, marker_path = validate_source_task(source_run, source_row)
         registry_row = registry_by_motif[motif_id]
         recommendation = registry_row.get("recommended_threshold")
+        if context_contract is not None:
+            inventory_maxima = Path(source_row["absolute_path"]).resolve()
+            marker_record = marker["files"]["cofactor_maxima.parquet"]
+            if (inventory_maxima != maxima
+                    or int(source_row["bytes"]) != maxima.stat().st_size
+                    or source_row["sha256"] != marker_record["sha256"]
+                    or recommendation is None
+                    or float(source_row["applied_context_threshold"])
+                        != float(recommendation)
+                    or float(source_row["scan_minimum_score"])
+                        != float(marker.get("scan_minimum_score", "nan"))):
+                raise EnrichmentError(
+                    f"context-maxima inventory disagrees with task {motif_id}"
+                )
         application_status = str(
             registry_row.get("threshold_application_status") or ""
         )
@@ -464,13 +537,24 @@ def prepare(arguments: argparse.Namespace) -> None:
         "task_count": len(source_rows),
         "fallback_zero_task_count": fallback_count,
         "source_threshold_run": str(source_run),
+        "source_input_contract": source_input_contract,
         "source_threshold_run_config": str(source_config_path),
         "source_threshold_run_config_sha256": sha256(source_config_path),
         "source_threshold_task_plan": str(source_plan_path),
         "source_threshold_task_plan_sha256": sha256(source_plan_path),
         "source_threshold_registry": str(registry),
         "source_threshold_registry_sha256": sha256(registry),
-        "source_threshold_anchor_evidence": str(source_anchor),
+        "source_threshold_anchor_evidence": (
+            str(source_anchor) if source_anchor is not None else None
+        ),
+        "source_context_maxima_package": (
+            str(context_contract["package"])
+            if context_contract is not None else None
+        ),
+        "source_context_maxima_manifest_sha256": (
+            sha256(context_contract["manifest_path"])
+            if context_contract is not None else None
+        ),
         "anchor_evidence": str(anchor),
         "anchor_evidence_sha256": sha256(anchor),
         "evidence_column_scheme": evidence_column_scheme,
@@ -884,7 +968,13 @@ def parser() -> argparse.ArgumentParser:
         "prepare", help="write an immutable all-motif task plan"
     )
     prepare_parser.add_argument("--run-root", type=Path, required=True)
-    prepare_parser.add_argument("--source-threshold-run", type=Path, required=True)
+    prepare_parser.add_argument(
+        "--source-threshold-run", type=Path, required=True,
+        help=(
+            "completed context-maxima run; legacy threshold-calibration run "
+            "layouts remain supported"
+        ),
+    )
     prepare_parser.add_argument("--anchor-evidence", type=Path)
     prepare_parser.add_argument(
         "--threshold-registry", type=Path,

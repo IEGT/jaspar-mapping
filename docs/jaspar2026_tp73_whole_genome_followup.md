@@ -159,10 +159,16 @@ scripts/submit_tp73_genome_context_maxima_slurm.sh \
   --dry-run
 ```
 
-After the context finalizer succeeds, pass that context run as
+After the context finalizer succeeds, pass the context run root as
 `--source-threshold-run` and the autosomal evidence Parquet as
-`--anchor-evidence` to `submit_tp73_cofactor_enrichment_slurm.sh`. Its default
-two-motif batches request 2 CPUs, 32 GB, and one hour.
+`--anchor-evidence` to `submit_tp73_cofactor_enrichment_slurm.sh`. For modern
+runs, the planner reads `final/context_maxima/context_maxima_file_inventory.tsv`
+and its applied threshold registry, then verifies each inventory row against
+the immutable task marker. It therefore selects maxima from the low-floor
+payload while using the empirical threshold only for positive-class
+classification. Legacy threshold-run layouts remain readable for historical
+reproduction. The default two-motif batches request 2 CPUs, 32 GB, and one
+hour.
 
 Stages 4 and 5 rebuild the shared nuclear annotation at schema 9, extract
 H3K4me3/input signal in five fixed windows by reusing the finalized TP73 anchor
