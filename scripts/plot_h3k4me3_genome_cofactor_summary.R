@@ -85,6 +85,18 @@ safe_cor <- function(x, y) {
     cor(x, y)
 }
 
+empty_panel_figure <- function(title, subtitle, message) {
+    ggplot(data.table(x = 0, y = 0), aes(x, y)) +
+        annotate("text", x = 0, y = 0, label = message, size = 4) +
+        coord_cartesian(xlim = c(-1, 1), ylim = c(-1, 1)) +
+        labs(title = title, subtitle = subtitle) +
+        theme_void(base_size = 10.5) +
+        theme(
+            plot.title = element_text(face = "bold"),
+            plot.subtitle = element_text(colour = "grey30")
+        )
+}
+
 joint <- fread(values$joint, sep = "\t", na.strings = c("NA", ""))
 required_joint <- c(
     "motif_id", "factor_name", "tp73_adjusted_odds_ratio", "tp73_q",
@@ -201,30 +213,38 @@ context_correlations[, `:=`(
 )]
 setorder(context_correlations, series_id, isoform, genomic_context_class)
 
-context_figure <- ggplot(
-    context_correlations,
-    aes(isoform, context_label, fill = pearson_r)
-) +
-    geom_tile(colour = "white", linewidth = 0.7) +
-    geom_text(aes(label = sprintf("%.2f", pearson_r)), size = 3.2) +
-    facet_wrap(vars(series), ncol = 2) +
-    scale_fill_gradient2(
-        low = "#b2182b", mid = "white", high = "#2166ac",
-        midpoint = 0, limits = c(-1, 1)
-    ) +
-    labs(
-        x = "p73 isoform", y = NULL, fill = "Pearson r",
-        title = "Association persists within genomic annotation classes",
-        subtitle = paste0(
-            "Correlation of TP73 log2 odds ratio with H3K4me3 cofactor effect; ",
-            "TP73 association q <= 0.05"
-        )
-    ) +
-    theme_bw(base_size = 10.5) +
-    theme(
-        panel.grid = element_blank(),
-        strip.background = element_rect(fill = "grey94", colour = "grey70")
+context_title <- "Association persists within genomic annotation classes"
+context_subtitle <- paste0(
+    "Correlation of TP73 log2 odds ratio with H3K4me3 cofactor effect; ",
+    "TP73 association q <= 0.05"
+)
+if (nrow(context_correlations) == 0L) {
+    context_figure <- empty_panel_figure(
+        context_title, context_subtitle,
+        "No genomic-context correlation is jointly estimable"
     )
+} else {
+    context_figure <- ggplot(
+        context_correlations,
+        aes(isoform, context_label, fill = pearson_r)
+    ) +
+        geom_tile(colour = "white", linewidth = 0.7) +
+        geom_text(aes(label = sprintf("%.2f", pearson_r)), size = 3.2) +
+        facet_wrap(vars(series), ncol = 2) +
+        scale_fill_gradient2(
+            low = "#b2182b", mid = "white", high = "#2166ac",
+            midpoint = 0, limits = c(-1, 1)
+        ) +
+        labs(
+            x = "p73 isoform", y = NULL, fill = "Pearson r",
+            title = context_title, subtitle = context_subtitle
+        ) +
+        theme_bw(base_size = 10.5) +
+        theme(
+            panel.grid = element_blank(),
+            strip.background = element_rect(fill = "grey94", colour = "grey70")
+        )
+}
 
 gene_relation <- fread(
     values$gene_relation, sep = "\t", na.strings = c("NA", "")
@@ -288,46 +308,61 @@ for (relation_class in gene_relation_levels) {
             is.finite(tp73_adjusted_odds_ratio) &
             tp73_adjusted_odds_ratio > 0
     ]
-    relation_labels <- relation[motif_id %in% labels & isoform == "TA"]
-    relation_labels[, label := paste0(factor_name, "\n", motif_id)]
-    relation_figure <- ggplot(
-        relation,
-        aes(tp73_log2_odds_ratio, estimate, colour = enrichment_class)
-    ) +
-        geom_hline(yintercept = 0, linewidth = 0.3, colour = "grey65") +
-        geom_vline(xintercept = 0, linewidth = 0.3, colour = "grey65") +
-        geom_point(alpha = 0.55, size = 1.25) +
-        geom_smooth(
-            data = relation[tp73_q <= 0.05], method = "lm", formula = y ~ x,
-            se = FALSE, linewidth = 0.65, colour = "black"
-        ) +
-        geom_text(
-            data = relation_labels, aes(label = label), colour = "black",
-            size = 2.5, check_overlap = TRUE, vjust = -0.65,
-            show.legend = FALSE
-        ) +
-        facet_grid(rows = vars(series), cols = vars(isoform), scales = "free_y") +
-        scale_colour_manual(values = palette, drop = FALSE) +
-        labs(
-            x = expression(log[2] * " relation-specific adjusted TP73 CUT&RUN odds ratio"),
-            y = expression(Delta * " H3K4me3 cofactor effect vs GFP"),
-            colour = NULL,
-            title = paste0(
-                "TP73 occupancy and H3K4me3 change: ",
-                gene_relation_labels[[relation_class]]
-            ),
-            subtitle = paste0(
-                "Both axes use only ", gene_relation_labels[[relation_class]],
-                " anchors; strict cofactor-negative reference: score < -1; ",
-                "line uses relation-specific TP73 q <= 0.05"
+    relation_title <- paste0(
+        "TP73 occupancy and H3K4me3 change: ",
+        gene_relation_labels[[relation_class]]
+    )
+    relation_subtitle <- paste0(
+        "Both axes use only ", gene_relation_labels[[relation_class]],
+        " anchors; strict cofactor-negative reference: score < -1; ",
+        "line uses relation-specific TP73 q <= 0.05"
+    )
+    if (nrow(relation) == 0L) {
+        relation_figure <- empty_panel_figure(
+            relation_title, relation_subtitle,
+            paste0(
+                "No motif has jointly estimable relation-specific\n",
+                "TP73 occupancy and H3K4me3 effect"
             )
-        ) +
-        theme_bw(base_size = 10.5) +
-        theme(
-            panel.grid.minor = element_blank(),
-            strip.background = element_rect(fill = "grey94", colour = "grey70"),
-            legend.position = "bottom"
         )
+    } else {
+        relation_labels <- relation[motif_id %in% labels & isoform == "TA"]
+        relation_labels[, label := paste0(factor_name, "\n", motif_id)]
+        relation_figure <- ggplot(
+            relation,
+            aes(tp73_log2_odds_ratio, estimate, colour = enrichment_class)
+        ) +
+            geom_hline(yintercept = 0, linewidth = 0.3, colour = "grey65") +
+            geom_vline(xintercept = 0, linewidth = 0.3, colour = "grey65") +
+            geom_point(alpha = 0.55, size = 1.25) +
+            geom_smooth(
+                data = relation[tp73_q <= 0.05], method = "lm", formula = y ~ x,
+                se = FALSE, linewidth = 0.65, colour = "black"
+            ) +
+            geom_text(
+                data = relation_labels, aes(label = label), colour = "black",
+                size = 2.5, check_overlap = TRUE, vjust = -0.65,
+                show.legend = FALSE
+            ) +
+            facet_grid(
+                rows = vars(series), cols = vars(isoform), scales = "free_y"
+            ) +
+            scale_colour_manual(values = palette, drop = FALSE) +
+            labs(
+                x = expression(log[2] * " relation-specific adjusted TP73 CUT&RUN odds ratio"),
+                y = expression(Delta * " H3K4me3 cofactor effect vs GFP"),
+                colour = NULL,
+                title = relation_title, subtitle = relation_subtitle
+            ) +
+            theme_bw(base_size = 10.5) +
+            theme(
+                panel.grid.minor = element_blank(),
+                strip.background = element_rect(
+                    fill = "grey94", colour = "grey70"
+                ),
+                legend.position = "bottom"
+            )
+    }
     output <- paste0(values$output_gene_relation_prefix, "_", relation_class, ".png")
     dir.create(dirname(output), recursive = TRUE, showWarnings = FALSE)
     ggsave(output, relation_figure, width = 10, height = 7, dpi = 180)

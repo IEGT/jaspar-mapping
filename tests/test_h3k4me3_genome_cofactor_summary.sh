@@ -207,10 +207,24 @@ grep -Fq '"ranking_status": "provisional_pending_baseline_covariates_and_empiric
     "$summary/manifest.json"
 if command -v Rscript >/dev/null 2>&1 && Rscript -e \
     'quit(status=ifelse(requireNamespace("data.table",quietly=TRUE) && requireNamespace("ggplot2",quietly=TRUE),0,1))'; then
+    "$duckdb" -batch :memory: >/dev/null <<SQL
+COPY (
+  SELECT * REPLACE (
+    CASE WHEN gene_relation_class = 'gene_body'
+         THEN 'not_estimable'
+         ELSE tp73_evaluation_status
+    END AS tp73_evaluation_status
+  )
+  FROM read_csv_auto(
+    '$summary/gene_relation_primary_effect.tsv', delim='\t', header=true
+  )
+) TO '$temporary/gene-relation-empty-class.tsv'
+  (HEADER, DELIMITER '\t');
+SQL
     "$repository_root/scripts/plot_h3k4me3_genome_cofactor_summary.R" \
         --joint "$summary/joint_primary_motif.tsv" \
         --context "$summary/context_primary_effect.tsv" \
-        --gene-relation "$summary/gene_relation_primary_effect.tsv" \
+        --gene-relation "$temporary/gene-relation-empty-class.tsv" \
         --output-effect "$temporary/effect.png" \
         --output-context "$temporary/context.png" \
         --context-table "$temporary/context.tsv" \
