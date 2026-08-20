@@ -30,6 +30,7 @@ usage <- function(status = 0L) {
         "  --pseudocount VALUE       Integrated-signal pseudocount (default: 1)",
         "  --block-size BP           Genomic SE cluster width (default: 5000000)",
         "  --spline-df N             TP73-score spline degrees (default: 3)",
+        "  --adjust-gfp-baseline     Add a GFP-baseline spline sensitivity term",
         "  --minimum-class-fraction F  Per-class minimum (default: 0.005)",
         "  --minimum-class-count N   Per-class minimum (default: 100)",
         "  --minimum-interaction-cell-count N  Four-cell minimum (default: 100)",
@@ -58,7 +59,8 @@ values <- list(
     minimum_class_count = 100L,
     minimum_interaction_cell_count = 100L,
     duckdb = "duckdb",
-    analysis_role = "unspecified"
+    analysis_role = "unspecified",
+    adjust_gfp_baseline = FALSE
 )
 value_options <- c(
     "--signal", "--change", "--tp73-evidence", "--cofactor-maxima", "--thresholds",
@@ -71,6 +73,11 @@ value_options <- c(
 index <- 1L
 while (index <= length(arguments)) {
     option <- arguments[[index]]
+    if (option == "--adjust-gfp-baseline") {
+        values$adjust_gfp_baseline <- TRUE
+        index <- index + 1L
+        next
+    }
     if (!option %in% value_options) {
         writeLines(paste("E: unknown argument:", option), con = stderr())
         usage(2L)
@@ -878,6 +885,22 @@ model_formula <- function(data, interaction = FALSE,
     if (annotation_available && uniqueN(data$nearest_cds_direction_class) > 1L) {
         terms <- c(terms, "factor(nearest_cds_direction_class)")
     }
+    if (values$adjust_gfp_baseline) {
+        if (!"normalized_mark_GFP" %in% names(data) ||
+            any(!is.finite(data$normalized_mark_GFP))) {
+            stop("GFP-baseline adjustment requires finite normalized GFP values",
+                 call. = FALSE)
+        }
+        baseline_values <- uniqueN(data$normalized_mark_GFP)
+        if (baseline_values > values$spline_df) {
+            terms <- c(terms, paste0(
+                "splines::ns(normalized_mark_GFP, df = ",
+                values$spline_df, ")"
+            ))
+        } else if (baseline_values > 1L) {
+            terms <- c(terms, "normalized_mark_GFP")
+        }
+    }
     exposure <- if (interaction) {
         "cofactor_present * tp73_confirmed"
     } else exposure
@@ -1002,6 +1025,7 @@ for (motif_index in seq_len(nrow(thresholds))) {
                 model_data <- current[eligible, .(
                     chrom, anchor_start, anchor_score,
                     outcome = get(outcome_column),
+                    normalized_mark_GFP,
                     cofactor_present = as.integer(cofactor_positive),
                     tp73_confirmed = as.integer(get(confirmed_column)),
                     binding_state = get(state_column),
@@ -1087,6 +1111,7 @@ for (motif_index in seq_len(nrow(thresholds))) {
                         context_data <- context[context_eligible, .(
                             chrom, anchor_start, anchor_score,
                             outcome = get(outcome_column),
+                            normalized_mark_GFP,
                             cofactor_present = as.integer(cofactor_positive),
                             tp73_confirmed = as.integer(get(confirmed_column)),
                             analysis_context_class,
@@ -1179,6 +1204,7 @@ for (motif_index in seq_len(nrow(thresholds))) {
                         relation_data <- relation[relation_eligible, .(
                             chrom, anchor_start, anchor_score,
                             outcome = get(outcome_column),
+                            normalized_mark_GFP,
                             cofactor_present = as.integer(cofactor_positive),
                             tp73_confirmed = as.integer(get(confirmed_column)),
                             analysis_context_class,
@@ -1254,7 +1280,8 @@ for (motif_index in seq_len(nrow(thresholds))) {
 
                 score_data <- current[, .(
                     chrom, anchor_start, anchor_score,
-                    outcome = get(outcome_column), context_score,
+                    outcome = get(outcome_column), normalized_mark_GFP,
+                    context_score,
                     analysis_context_class,
                     log_nearest_tss_genomic_distance,
                     log_nearest_cds_genomic_distance,
@@ -1556,7 +1583,7 @@ fwrite(score_effect, paste0(values$output_prefix, "_score_gradient.tsv"),
        sep = "\t", na = "NA", quote = FALSE)
 
 run_config <- data.table(
-    schema_version = 4L,
+    schema_version = 5L,
     analysis = "gfp_referenced_h3k4me3_cofactor_change",
     analysis_role = values$analysis_role,
     chromosomes = paste(sort(unique(wide$chrom)), collapse = ","),
@@ -1577,14 +1604,31 @@ run_config <- data.table(
     signal_formula = "log2((h3k4me3_area + alpha)/(input_area + alpha))",
     primary_outcome = "condition_minus_GFP_normalized_H3K4me3",
     primary_estimand = "cofactor_positive_minus_negative_difference_in_change",
+    adjustment_variant = if (values$adjust_gfp_baseline) {
+        "gfp_baseline_adjusted_sensitivity"
+    } else "prespecified_primary_without_gfp_baseline",
+    gfp_baseline_adjustment = if (values$adjust_gfp_baseline) {
+        paste0(
+            "spline_or_linear_term_for_normalized_mark_GFP; spline_df=",
+            values$spline_df
+        )
+    } else "none",
     secondary_score_estimand =
         "change_per_SD_of_cofactor_score_clamped_at_observable_negative_reference",
     primary_adjustment = if (annotation_available) {
         paste0(
             "TP73_score_spline + chromosome + genomic_context + ",
-            "nearest_TSS/CDS_unsigned_distance + direction_class"
+            "nearest_TSS/CDS_unsigned_distance + direction_class",
+            if (values$adjust_gfp_baseline) {
+                " + normalized_GFP_mark_term"
+            } else ""
         )
-    } else "TP73_score_spline + chromosome_when_multichromosome",
+    } else paste0(
+        "TP73_score_spline + chromosome_when_multichromosome",
+        if (values$adjust_gfp_baseline) {
+            " + normalized_GFP_mark_term"
+        } else ""
+    ),
     context_stratified_output = annotation_available,
     gene_relation_stratified_output = annotation_available,
     gene_relation_tp73_occupancy_output = annotation_available,

@@ -6,7 +6,9 @@
 > maxima from the existing low-floor scan (`-1` for non-TP73 motifs), retains
 > score-zero and operating-threshold counts separately, and will supersede the
 > ranking below. The numerical results remain historical provenance and must
-> not be interpreted as negative evidence for censored motifs.
+> not be interpreted as negative evidence for censored motifs. The estimable
+> subset is selected by motif frequency/information content and scan-floor
+> reachability, so its proportions and rankings do not generalize to JASPAR.
 
 ## Scope and provenance
 
@@ -56,6 +58,9 @@ scripts/summarize_h3k4me3_genome_cofactors.py \
 The generated `motif_coverage` is the complete estimability registry;
 `joint_primary_motif` is the primary motif table; the context, score-gradient,
 and TP73-interaction tables retain the secondary long-form effects.
+`correlation_robustness` reports both the full-estimable and TP73-selected
+Pearson/rank correlations, while `h3_design_diagnostics` places rejection
+fractions beside absolute effect-size summaries.
 
 The two committed evidence figures and their context-correlation table are
 regenerated from that compact extraction with:
@@ -101,12 +106,20 @@ association model.
 The 2,142 censored motifs are **not null results**. Their density-controlled
 sparse scans did not retain sufficiently low scores to construct the negative
 reference. This is the largest limitation of the all-JASPAR ranking and is
-carried explicitly in `motif_coverage`.
+carried explicitly in `motif_coverage`. It is also selection bias: the 486
+estimable motifs occupy a particular motif-frequency and information-content
+regime rather than a random subset of the collection.
 
 Among the 486 estimable motifs, 295 were TP73-enriched and 169 TP73-depleted at
 all-JASPAR Benjamini-Hochberg `q <= 0.05`; 22 were not significant.
 
-## Main result
+## Historical descriptive result
+
+The correlations below are Pearson correlations of motif-level point estimates
+after restricting to motifs with a significant TP73 association. They do not
+propagate the covariance from reusing the same anchors on both axes and were
+not gated by a matched null or GFP-baseline adjustment. They are therefore
+descriptive historical magnitudes, not calibrated evidence for a motif ranking.
 
 ![TP73 enrichment and H3K4me3 cofactor effects](figures/h3k4me3_tp73_cofactor_effect_autosomes_20260812.png)
 
@@ -236,12 +249,18 @@ directional control, but should be described as modulation of a global loss.
 
 Before factor-level or mechanistic claims:
 
-1. Consolidate similar matrices and add JASPAR taxon/species metadata.
-2. Regenerate lower-floor context maxima for the prespecified censored motifs;
+1. Gate the ranking with density/prevalence-matched motif controls, a
+   block-preserving null, and the GFP-baseline-adjusted sensitivity. A high
+   rejection fraction can reflect tiny effects estimated from millions of
+   anchors, shared accessibility, or both; effect sizes and the empirical null
+   must distinguish them.
+2. Add repeat/ALU, GC, mappability, and independent accessibility covariates.
+3. Report correlations over all estimable motifs as well as the TP73-selected
+   subset, and use a shared-block bootstrap or jackknife for joint uncertainty.
+4. Consolidate similar matrices and add JASPAR taxon/species metadata.
+5. Regenerate lower-floor context maxima for the prespecified censored motifs;
    do not treat their current absence as evidence against them.
-3. Add density-matched/permuted motif controls and repeat/ALU, GC, and
-   mappability covariates.
-4. Treat continuous score gradients and TP73-confirmation interactions as
+6. Treat continuous score gradients and TP73-confirmation interactions as
    sensitivity/secondary analyses, not replacements for the primary contrast.
-5. Seek biological replication. The two cell systems expose heterogeneity but
+7. Seek biological replication. The two cell systems expose heterogeneity but
    are not replicates from which a population-level variance can be estimated.

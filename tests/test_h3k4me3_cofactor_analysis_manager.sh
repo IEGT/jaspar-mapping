@@ -250,6 +250,7 @@ batch_count=$(
         --source "$repository_root" --scratch-root "$scratch" \
         --run-id synthetic_h3_cofactor --motifs-per-batch 2 \
         --block-size 1000 --spline-df 1 --minimum-class-fraction 0.001 \
+        --adjust-gfp-baseline \
         --minimum-class-count 2 --minimum-interaction-cell-count 2 \
         --minimum-free-run-gb 0 --minimum-free-scratch-gb 0
 )
@@ -322,10 +323,15 @@ SELECT CASE WHEN EXISTS (
   SELECT 1 FROM run_config
   WHERE input_reference_semantics <> 'package_provenance_selector'
      OR execution_inputs_staged_to_scratch <> true
+     OR adjustment_variant <> 'gfp_baseline_adjusted_sensitivity'
+     OR gfp_baseline_adjustment = 'none'
      OR change NOT LIKE 'provenance/fixed_inputs.tsv#%'
      OR cofactor_maxima NOT LIKE 'provenance/cofactor_tasks.tsv#motif_id=%'
 ) THEN error('portable evaluator provenance was not retained') END;
 SQL
 )
+
+grep -Fq '"adjust_gfp_baseline": true' \
+    "$final/provenance/run_config.json"
 
 echo "H3K4me3 cofactor-analysis manager tests passed."

@@ -31,6 +31,7 @@ Options:
   --final-memory SIZE          Finalizer memory (default: 32G)
   --final-time LIMIT           Finalizer wall time (default: 02:00:00)
   --rscript FILE               Rscript executable (default: Rscript)
+  --adjust-gfp-baseline        Fit the GFP-baseline-adjusted sensitivity model
   --dry-run                    Prepare and print sbatch commands only
   -h, --help                   Show this help
 
@@ -61,6 +62,7 @@ preflight_time=02:00:00
 final_memory=32G
 final_time=02:00:00
 rscript=Rscript
+adjust_gfp_baseline=0
 dry_run=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -86,6 +88,7 @@ while [[ $# -gt 0 ]]; do
         --final-memory) final_memory=${2:?}; shift 2 ;;
         --final-time) final_time=${2:?}; shift 2 ;;
         --rscript) rscript=${2:?}; shift 2 ;;
+        --adjust-gfp-baseline) adjust_gfp_baseline=1; shift ;;
         --dry-run) dry_run=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "E: Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -131,16 +134,18 @@ if ! git -C "$source" diff --quiet --ignore-submodules -- ||
     exit 1
 fi
 
-batch_count=$(
-    python3 "$source/scripts/manage_h3k4me3_cofactor_analysis.py" prepare \
-        --run-root "$run_root" --h3-package "$h3_package" \
-        --evidence-package "$evidence_package" \
-        --context-maxima-package "$context_maxima_package" \
-        --annotation-catalog "$annotation_catalog" \
-        --runtime-prefix "$runtime_prefix" --source "$source" \
-        --scratch-root "$scratch_root" --run-id "$run_id" \
-        --motifs-per-batch "$motifs_per_batch"
+prepare=(
+    python3 "$source/scripts/manage_h3k4me3_cofactor_analysis.py" prepare
+    --run-root "$run_root" --h3-package "$h3_package"
+    --evidence-package "$evidence_package"
+    --context-maxima-package "$context_maxima_package"
+    --annotation-catalog "$annotation_catalog"
+    --runtime-prefix "$runtime_prefix" --source "$source"
+    --scratch-root "$scratch_root" --run-id "$run_id"
+    --motifs-per-batch "$motifs_per_batch"
 )
+(( adjust_gfp_baseline == 1 )) && prepare+=(--adjust-gfp-baseline)
+batch_count=$("${prepare[@]}")
 [[ $batch_count =~ ^[1-9][0-9]*$ ]] || {
     echo "E: Invalid prepared batch count: $batch_count" >&2
     exit 1

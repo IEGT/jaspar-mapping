@@ -209,6 +209,44 @@ complete run configuration. PATZ1, TFAP2C, E2F1, and SP1 are sentinel biological
 motifs, not null controls. Density-matched motif labels or block-preserving
 permutations are required for a null validation.
 
+## Robustness gate before motif ranking
+
+The unadjusted GFP-referenced change model remains the prespecified primary
+estimand. A separate sensitivity run may add `--adjust-gfp-baseline`, which
+adds a spline (or a linear term when there are too few distinct values) for the
+per-anchor normalized GFP mark. The run configuration records
+`adjustment_variant = gfp_baseline_adjusted_sensitivity`; it must not be pooled
+silently with the primary run. This sensitivity asks whether the TA and DN
+coefficients survive baseline activity and regression-to-baseline structure.
+Because GFP is also subtracted in the outcome and is measured with error, this
+is a diagnostic rather than a causal correction.
+
+An enriched/depleted motif ranking is provisional until all of the following
+have been inspected:
+
+1. Full-estimable and TP73-significance-selected Pearson and rank correlations.
+   Selection on an estimated TP73 effect can bias a correlation in either
+   direction; it is not assumed to inflate or attenuate it uniformly.
+2. Per-design rejection fractions together with median and upper-tail absolute
+   effect sizes. Millions of anchors can make very small effects significant,
+   so a high rejection rate is a warning that requires an empirical null, not
+   proof by itself that the covariance estimator failed.
+3. The GFP-baseline-adjusted sensitivity, especially for DN, where a positive
+   coefficient describes preservation of a global loss rather than induction.
+4. A density/prevalence-matched motif null and a block-preserving anchor-level
+   null. The sentinel biological motifs are not valid null motifs.
+5. Pretreatment anchor covariates for GC, mappability, repeat/Alu state, and an
+   independent accessibility assay when available. These should join as a
+   keyed sidecar and must not change the physical-anchor grain.
+
+`scripts/summarize_h3k4me3_genome_cofactors.py` emits
+`correlation_robustness` for the first comparison and
+`h3_design_diagnostics` for the second. It also carries the block-clustered
+standard errors for both axes into `joint_primary_motif`. These standard errors
+do not identify the covariance created by reusing anchors on both axes; formal
+joint uncertainty still requires a shared genomic-block bootstrap or
+jackknife.
+
 The reproducible chromosome-1 pilot panel and its positive thresholds are in
 [`config/h3k4me3_chr1_pilot_cofactors_v1.tsv`](../config/h3k4me3_chr1_pilot_cofactors_v1.tsv).
 It covers E2F1, SP1, REST, POU2F2, KLF14, TCF7, POU4F1, TFAP2C, and PATZ1 and

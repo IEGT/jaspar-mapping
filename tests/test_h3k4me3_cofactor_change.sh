@@ -593,7 +593,7 @@ SELECT CASE WHEN NOT EXISTS (
 SELECT CASE WHEN NOT EXISTS (
   SELECT 1 FROM context_config
   WHERE input_mode = 'precomputed_change'
-    AND schema_version = 4
+    AND schema_version = 5
     AND annotation_schema =
       'schema9_tp73_context_anchor_collapsed_to_physical_span'
     AND gene_relation_precedence =
@@ -604,6 +604,43 @@ SELECT CASE WHEN NOT EXISTS (
     AND gene_relation_tp73_occupancy_h3_zero_policy =
       'retained_independent_of_h3k4me3_signal'
 ) THEN error('genome inference provenance is incomplete') END;
+SQL
+
+# The baseline-adjusted variant is an explicit sensitivity run. It uses the
+# same outcome and anchor set, but records the extra GFP term in provenance so
+# it cannot be mistaken for the prespecified primary model.
+Rscript "$repository_root/scripts/analyze_h3k4me3_cofactor_change.R" \
+    --change "$temporary/change-a.parquet" \
+    --change "$temporary/change-b.parquet" \
+    --tp73-evidence "$temporary/tp73-matched.parquet" \
+    --cofactor-maxima "$temporary/maxima-effect.parquet" \
+    --cofactor-maxima "$temporary/maxima-overlap.parquet" \
+    --annotation "$temporary/annotation-a.parquet" \
+    --annotation "$temporary/annotation-b.parquet" \
+    --thresholds "$temporary/thresholds.tsv" \
+    --output-prefix "$temporary/baseline-adjusted-result" \
+    --series series_a --series series_b --negative-references "-1,0" \
+    --block-size 500 --spline-df 1 --minimum-class-fraction 0.01 \
+    --minimum-class-count 2 --minimum-interaction-cell-count 2 \
+    --adjust-gfp-baseline --duckdb "$duckdb"
+"$duckdb" -batch :memory: >/dev/null <<SQL
+CREATE VIEW adjusted_effect AS SELECT * FROM read_csv_auto(
+  '$temporary/baseline-adjusted-result_intensity_effect.tsv', delim='\t',
+  header=true, nullstr='NA');
+CREATE VIEW adjusted_config AS SELECT * FROM read_csv_auto(
+  '$temporary/baseline-adjusted-result_run_config.tsv', delim='\t',
+  header=true, nullstr='NA');
+SELECT CASE WHEN NOT EXISTS (
+  SELECT 1 FROM adjusted_effect
+  WHERE motif_id='M_EFFECT' AND evaluation_status='ok'
+) THEN error('GFP-baseline-adjusted sensitivity was not fitted') END;
+SELECT CASE WHEN NOT EXISTS (
+  SELECT 1 FROM adjusted_config
+  WHERE adjustment_variant='gfp_baseline_adjusted_sensitivity'
+    AND gfp_baseline_adjustment LIKE
+      'spline_or_linear_term_for_normalized_mark_GFP%'
+    AND primary_adjustment LIKE '%normalized_GFP_mark_term%'
+) THEN error('GFP-baseline sensitivity provenance is incomplete') END;
 SQL
 
 "$duckdb" -batch :memory: >/dev/null <<SQL

@@ -428,7 +428,11 @@ ORDER BY i.task_index;
         "schema_version": 1,
         "run_id": arguments.run_id,
         "analysis": "whole_autosome_h3k4me3_cofactor_change",
-        "analysis_role": "exploratory_whole_autosome_chr1_threshold_transfer",
+        "analysis_role": (
+            "gfp_baseline_adjusted_sensitivity"
+            if arguments.adjust_gfp_baseline
+            else "exploratory_whole_autosome_chr1_threshold_transfer"
+        ),
         "source": str(source),
         "source_commit": commit,
         "source_dirty": dirty,
@@ -451,6 +455,7 @@ ORDER BY i.task_index;
         "negative_references": [-1.0, 0.0],
         "block_size_bp": arguments.block_size,
         "spline_df": arguments.spline_df,
+        "adjust_gfp_baseline": arguments.adjust_gfp_baseline,
         "minimum_class_fraction": arguments.minimum_class_fraction,
         "minimum_class_count": arguments.minimum_class_count,
         "minimum_interaction_cell_count":
@@ -697,7 +702,7 @@ def validate_result(prefix: Path, motif_id: str) -> None:
         ):
             raise AnalysisError(f"{dataset} contains another motif")
         if dataset == "run_config":
-            if (rows[0].get("schema_version") != "4"
+            if (rows[0].get("schema_version") != "5"
                     or set(rows[0].get("chromosomes", "").split(",")) !=
                     set(AUTOSOMES)):
                 raise AnalysisError("evaluator run configuration is incomplete")
@@ -897,6 +902,8 @@ def run_batch(arguments: argparse.Namespace) -> None:
                 "--duckdb", str(duckdb),
                 "--analysis-role", str(config["analysis_role"]),
             ])
+            if config.get("adjust_gfp_baseline", False):
+                command.append("--adjust-gfp-baseline")
             set_phase("evaluating_motif")
             run_process(command, cwd=Path(config["source"]))
             canonicalize_run_config(prefix, row)
@@ -1181,6 +1188,10 @@ def parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--scratch-root", type=Path, required=True)
     prepare_parser.add_argument("--block-size", type=int, default=5_000_000)
     prepare_parser.add_argument("--spline-df", type=int, default=3)
+    prepare_parser.add_argument(
+        "--adjust-gfp-baseline", action="store_true",
+        help="fit the GFP-baseline-adjusted sensitivity model",
+    )
     prepare_parser.add_argument("--minimum-class-fraction", type=float,
                                 default=0.005)
     prepare_parser.add_argument("--minimum-class-count", type=int, default=100)

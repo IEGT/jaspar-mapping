@@ -25,16 +25,17 @@ COPY (
 
 COPY (
   SELECT * FROM (VALUES
-    ('M1','Factor1',1,-1,'ok',true,2.0,1.5,2.5,0.01,
+    ('M1','Factor1',1,-1,'ok',true,2.0,1.5,2.5,0.10,0.01,
      'anti_p73_enriched',100,200),
-    ('M2','Factor2',2,-1,'ok',true,0.5,0.4,0.6,0.02,
+    ('M2','Factor2',2,-1,'ok',true,0.5,0.4,0.6,0.10,0.02,
      'anti_p73_depleted',80,220),
     ('M3','Factor3',3,1,'negative_reference_below_source_floor',false,
-     NULL,NULL,NULL,NULL,'not_estimable',40,0)
+     NULL,NULL,NULL,NULL,NULL,'not_estimable',40,0)
   ) AS t(motif_id,factor_name,positive_threshold,source_score_floor,
          evaluation_status,negative_reference_observable,adjusted_odds_ratio,
          confidence_interval_95_lower,confidence_interval_95_upper,
-         q_value_bh_all_jaspar,association_direction,anchors_positive,
+         block_clustered_standard_error,q_value_bh_all_jaspar,
+         association_direction,anchors_positive,
          anchors_negative_reference)
 ) TO '$temporary/enrichment.parquet' (FORMAT PARQUET);
 
@@ -54,6 +55,7 @@ COPY (
               THEN 'negative_reference_below_source_floor' ELSE 'ok' END
            AS evaluation_status,
          CASE WHEN motif_id='M1' THEN 0.2 ELSE -0.2 END::DOUBLE AS estimate,
+         0.05::DOUBLE AS standard_error,
          -0.3::DOUBLE AS confidence_interval_95_lower,
          0.3::DOUBLE AS confidence_interval_95_upper,
          0.01::DOUBLE AS q_value_bh_all_motifs,
@@ -158,6 +160,21 @@ SELECT CASE WHEN (SELECT count(*) FROM read_parquet(
   '$summary/joint_primary_motif.parquet')) <> 2
   THEN error('strict joint table has the wrong estimable set') END;
 SELECT CASE WHEN (SELECT count(*) FROM read_parquet(
+  '$summary/correlation_robustness.parquet')) <> 8
+  THEN error('conditioned/unconditioned correlation diagnostics are incomplete') END;
+SELECT CASE WHEN EXISTS (SELECT 1 FROM read_parquet(
+  '$summary/correlation_robustness.parquet')
+  WHERE motifs <> 2 OR pearson_correlation IS NULL
+    OR spearman_rank_correlation IS NULL)
+  THEN error('correlation diagnostics lost their estimable motif set') END;
+SELECT CASE WHEN (SELECT count(*) FROM read_parquet(
+  '$summary/h3_design_diagnostics.parquet')) <> 4
+  THEN error('H3 design diagnostics are incomplete') END;
+SELECT CASE WHEN EXISTS (SELECT 1 FROM read_parquet(
+  '$summary/joint_primary_motif.parquet')
+  WHERE tp73_standard_error IS NULL OR ta_saos_se IS NULL)
+  THEN error('joint output dropped per-axis uncertainty') END;
+SELECT CASE WHEN (SELECT count(*) FROM read_parquet(
   '$summary/joint_reference_zero_motif.parquet')) <> 3
   THEN error('score-zero sensitivity did not recover its estimable motif') END;
 SELECT CASE WHEN EXISTS (SELECT 1 FROM read_parquet(
@@ -180,6 +197,9 @@ SELECT CASE WHEN NOT EXISTS (
 SQL
 
 [[ -s $summary/manifest.json && -s $summary/summary_metrics.tsv ]]
+grep -Fq '"schema_version": 4' "$summary/manifest.json"
+grep -Fq '"ranking_status": "provisional_pending_baseline_covariates_and_empirical_null"' \
+    "$summary/manifest.json"
 if command -v Rscript >/dev/null 2>&1 && Rscript -e \
     'quit(status=ifelse(requireNamespace("data.table",quietly=TRUE) && requireNamespace("ggplot2",quietly=TRUE),0,1))'; then
     "$repository_root/scripts/plot_h3k4me3_genome_cofactor_summary.R" \

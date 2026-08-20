@@ -23,6 +23,8 @@ OUTPUT_TABLES = (
     "h3_autosome_baseline",
     "motif_coverage",
     "joint_primary_motif",
+    "correlation_robustness",
+    "h3_design_diagnostics",
     "joint_reference_zero_motif",
     "context_primary_effect",
     "gene_relation_primary_effect",
@@ -144,7 +146,8 @@ SELECT e.motif_id, e.factor_name, e.positive_threshold,
        e.source_score_floor, e.evaluation_status AS enrichment_status,
        e.negative_reference_observable AS enrichment_negative_observable,
        e.adjusted_odds_ratio, e.confidence_interval_95_lower,
-       e.confidence_interval_95_upper, e.q_value_bh_all_jaspar,
+       e.confidence_interval_95_upper, e.block_clustered_standard_error,
+       e.q_value_bh_all_jaspar,
        e.association_direction,
        coalesce(h.strict_ok_rows, 0) AS h3_strict_ok_rows,
        coalesce(h.zero_ok_rows, 0) AS h3_zero_ok_rows
@@ -156,6 +159,8 @@ SELECT motif_id, min(factor_name) AS factor_name,
   count(*) AS strict_ok_rows,
   count(DISTINCT (series_id,isoform)) AS strict_designs,
   max(estimate) FILTER (WHERE series_id='saos2' AND isoform='TA') AS ta_saos,
+  max(standard_error) FILTER
+    (WHERE series_id='saos2' AND isoform='TA') AS ta_saos_se,
   max(confidence_interval_95_lower) FILTER
     (WHERE series_id='saos2' AND isoform='TA') AS ta_saos_ci_lower,
   max(confidence_interval_95_upper) FILTER
@@ -168,6 +173,8 @@ SELECT motif_id, min(factor_name) AS factor_name,
     (WHERE series_id='saos2' AND isoform='TA') AS ta_saos_negative_anchors,
   max(estimate) FILTER
     (WHERE series_id='skmel29_2' AND isoform='TA') AS ta_skmel,
+  max(standard_error) FILTER
+    (WHERE series_id='skmel29_2' AND isoform='TA') AS ta_skmel_se,
   max(confidence_interval_95_lower) FILTER
     (WHERE series_id='skmel29_2' AND isoform='TA') AS ta_skmel_ci_lower,
   max(confidence_interval_95_upper) FILTER
@@ -179,10 +186,14 @@ SELECT motif_id, min(factor_name) AS factor_name,
   max(anchors_negative) FILTER
     (WHERE series_id='skmel29_2' AND isoform='TA') AS ta_skmel_negative_anchors,
   max(estimate) FILTER (WHERE series_id='saos2' AND isoform='DN') AS dn_saos,
+  max(standard_error) FILTER
+    (WHERE series_id='saos2' AND isoform='DN') AS dn_saos_se,
   max(q_value_bh_all_motifs) FILTER
     (WHERE series_id='saos2' AND isoform='DN') AS dn_saos_q,
   max(estimate) FILTER
     (WHERE series_id='skmel29_2' AND isoform='DN') AS dn_skmel,
+  max(standard_error) FILTER
+    (WHERE series_id='skmel29_2' AND isoform='DN') AS dn_skmel_se,
   max(q_value_bh_all_motifs) FILTER
     (WHERE series_id='skmel29_2' AND isoform='DN') AS dn_skmel_q
 FROM intensity
@@ -239,6 +250,7 @@ CREATE TABLE joint_primary_motif AS
 SELECT e.motif_id, e.factor_name, e.positive_threshold,
        e.source_score_floor, e.anchors_positive, e.anchors_negative_reference,
        e.adjusted_odds_ratio AS tp73_adjusted_odds_ratio,
+       e.block_clustered_standard_error AS tp73_standard_error,
        e.confidence_interval_95_lower AS tp73_ci_lower,
        e.confidence_interval_95_upper AS tp73_ci_upper,
        e.q_value_bh_all_jaspar AS tp73_q,
@@ -262,6 +274,71 @@ LEFT JOIN intergenic_primary i USING (motif_id)
 LEFT JOIN interaction_primary x USING (motif_id)
 WHERE e.evaluation_status='ok' AND b.strict_ok_rows=4 AND b.strict_designs=4
 ORDER BY e.motif_id;
+
+CREATE TEMP TABLE primary_effect_long AS
+SELECT motif_id, factor_name, ln(tp73_adjusted_odds_ratio) AS tp73_log_odds,
+       tp73_standard_error, tp73_q, 'saos2' AS series_id, 'TA' AS isoform,
+       ta_saos AS h3_effect, ta_saos_se AS h3_standard_error,
+       ta_saos_q AS h3_q
+FROM joint_primary_motif
+UNION ALL
+SELECT motif_id, factor_name, ln(tp73_adjusted_odds_ratio),
+       tp73_standard_error, tp73_q, 'skmel29_2', 'TA',
+       ta_skmel, ta_skmel_se, ta_skmel_q
+FROM joint_primary_motif
+UNION ALL
+SELECT motif_id, factor_name, ln(tp73_adjusted_odds_ratio),
+       tp73_standard_error, tp73_q, 'saos2', 'DN',
+       dn_saos, dn_saos_se, dn_saos_q
+FROM joint_primary_motif
+UNION ALL
+SELECT motif_id, factor_name, ln(tp73_adjusted_odds_ratio),
+       tp73_standard_error, tp73_q, 'skmel29_2', 'DN',
+       dn_skmel, dn_skmel_se, dn_skmel_q
+FROM joint_primary_motif;
+
+CREATE TABLE h3_design_diagnostics AS
+SELECT series_id, isoform, count(*)::BIGINT AS estimable_motifs,
+       count(*) FILTER (WHERE h3_q <= 0.05)::BIGINT AS motifs_q05,
+       count(*) FILTER (WHERE h3_q <= 0.05)::DOUBLE / count(*)
+         AS fraction_q05,
+       median(abs(h3_effect))::DOUBLE AS median_absolute_effect,
+       quantile_cont(abs(h3_effect), 0.9)::DOUBLE AS p90_absolute_effect,
+       median(h3_standard_error)::DOUBLE AS median_standard_error
+FROM primary_effect_long
+GROUP BY series_id, isoform
+ORDER BY isoform, series_id;
+
+CREATE TABLE correlation_robustness AS
+WITH scoped AS (
+  SELECT *, 'all_estimable'::VARCHAR AS selection_scope
+  FROM primary_effect_long
+  UNION ALL
+  SELECT *, 'tp73_q_le_0.05'::VARCHAR AS selection_scope
+  FROM primary_effect_long WHERE tp73_q <= 0.05
+), ranked AS (
+  SELECT *,
+         rank() OVER (
+           PARTITION BY selection_scope, series_id, isoform
+           ORDER BY tp73_log_odds
+         )::DOUBLE AS tp73_rank,
+         rank() OVER (
+           PARTITION BY selection_scope, series_id, isoform
+           ORDER BY h3_effect
+         )::DOUBLE AS h3_rank
+  FROM scoped
+)
+SELECT selection_scope, series_id, isoform,
+       count(*)::BIGINT AS motifs,
+       corr(tp73_log_odds, h3_effect)::DOUBLE AS pearson_correlation,
+       corr(tp73_rank, h3_rank)::DOUBLE AS spearman_rank_correlation,
+       median(tp73_standard_error)::DOUBLE AS median_tp73_standard_error,
+       median(h3_standard_error)::DOUBLE AS median_h3_standard_error,
+       'point-estimate diagnostic; joint block bootstrap still required'::VARCHAR
+         AS uncertainty_note
+FROM ranked
+GROUP BY selection_scope, series_id, isoform
+ORDER BY selection_scope, isoform, series_id;
 
 CREATE TEMP TABLE binary_zero AS
 SELECT motif_id, count(*) AS zero_ok_rows,
@@ -369,6 +446,14 @@ SELECT
   (SELECT count(*) FROM joint_primary_motif
     WHERE dn_both_q05) AS dn_both_series_q05,
   (SELECT corr(ln(tp73_adjusted_odds_ratio),ta_saos)
+    FROM joint_primary_motif) AS tp73_logor_ta_saos_correlation_all_estimable,
+  (SELECT corr(ln(tp73_adjusted_odds_ratio),ta_skmel)
+    FROM joint_primary_motif) AS tp73_logor_ta_skmel_correlation_all_estimable,
+  (SELECT corr(ln(tp73_adjusted_odds_ratio),dn_saos)
+    FROM joint_primary_motif) AS tp73_logor_dn_saos_correlation_all_estimable,
+  (SELECT corr(ln(tp73_adjusted_odds_ratio),dn_skmel)
+    FROM joint_primary_motif) AS tp73_logor_dn_skmel_correlation_all_estimable,
+  (SELECT corr(ln(tp73_adjusted_odds_ratio),ta_saos)
     FROM joint_primary_motif WHERE tp73_q<=0.05) AS tp73_logor_ta_saos_correlation,
   (SELECT corr(ln(tp73_adjusted_odds_ratio),ta_skmel)
     FROM joint_primary_motif WHERE tp73_q<=0.05) AS tp73_logor_ta_skmel_correlation,
@@ -460,13 +545,18 @@ def main() -> int:
         source = Path(__file__).resolve().parent.parent
         commit, dirty = git_identity(source)
         manifest = {
-            "schema_version": 3,
+            "schema_version": 4,
             "analysis": "joint_tp73_enrichment_h3k4me3_cofactor_summary",
             "analysis_partition": "autosome",
             "included_chromosomes": [str(value) for value in range(1, 23)],
             "created_at_utc": datetime.now(timezone.utc).isoformat(),
             "primary_negative_reference": -1,
             "historical_negative_reference": 0,
+            "correlation_scopes": ["all_estimable", "tp73_q_le_0.05"],
+            "joint_uncertainty_status":
+                "point_estimates_only_pending_shared_block_resampling",
+            "ranking_status":
+                "provisional_pending_baseline_covariates_and_empirical_null",
             "source_commit": commit,
             "source_dirty": dirty,
             "inputs": {
