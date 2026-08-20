@@ -185,6 +185,10 @@ The wrapper is restart-safe at its two publication boundaries. The compact
 summary is an atomic directory produced by the Python extractor; all figures
 are rendered into a job-specific staging directory and promoted together.
 Existing complete products are validated and reused.
+`SOURCE_COMMIT` is resolved on the login node before submission. At execution,
+the wrapper reads `.git/HEAD` and loose or packed refs directly, so compute
+nodes do not require a Git executable; the pinned commit is written into the
+summary manifest.
 
 ## Extensibility
 

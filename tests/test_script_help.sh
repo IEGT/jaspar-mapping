@@ -184,6 +184,18 @@ grep -Fq -- '--source-commit SHA' <<< "$panel_help" || {
     exit 1
 }
 
+source_commit=$(git -C "$repository_root" rev-parse HEAD)
+verified_commit=$(
+    PATH=/nonexistent /bin/bash \
+        "$repository_root/scripts/run_h3k4me3_genome_cofactor_interpretation.sh" \
+        --source "$repository_root" --source-commit "$source_commit" \
+        --verify-source-only
+)
+[[ $verified_commit == "$source_commit" ]] || {
+    echo "E: Git-free H3K4me3 source verification returned another commit." >&2
+    exit 1
+}
+
 shifted=$(printf '1\t100\t200\tplus\t0\t+\n1\t100\t200\tminus\t0\t-\n' |
     "$repository_root/scripts/shift_bed.awk")
 expected_shifted=$'1\t600\t700\tplus\t0\t+\n1\t0\t0\tminus\t0\t-'

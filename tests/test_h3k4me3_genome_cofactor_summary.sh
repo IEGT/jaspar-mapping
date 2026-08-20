@@ -150,7 +150,8 @@ summary="$temporary/summary"
     --score-gradient "$temporary/gradient.parquet" \
     --interaction "$temporary/interaction.parquet" \
     --h3-summary "$temporary/h3_summary.parquet" \
-    --output-dir "$summary" --duckdb "$duckdb"
+    --output-dir "$summary" --duckdb "$duckdb" \
+    --source-commit 0000000000000000000000000000000000000000
 
 "$duckdb" -batch :memory: >/dev/null <<SQL
 SELECT CASE WHEN (SELECT count(*) FROM read_parquet(
@@ -198,6 +199,10 @@ SQL
 
 [[ -s $summary/manifest.json && -s $summary/summary_metrics.tsv ]]
 grep -Fq '"schema_version": 4' "$summary/manifest.json"
+grep -Fq '"source_commit": "0000000000000000000000000000000000000000"' \
+    "$summary/manifest.json"
+grep -Fq '"source_identity_method": "pinned_argument_verified_by_runner"' \
+    "$summary/manifest.json"
 grep -Fq '"ranking_status": "provisional_pending_baseline_covariates_and_empirical_null"' \
     "$summary/manifest.json"
 if command -v Rscript >/dev/null 2>&1 && Rscript -e \

@@ -20,6 +20,7 @@ Options:
   --output-dir DIR          Durable interpretation directory
   --source DIR              Repository root
   --source-commit HASH      Exact source commit required at execution
+  --verify-source-only      Verify source identity without reading data
   --duckdb FILE             DuckDB executable
   --rscript FILE            Rscript executable
   -h, --help                Show this help
@@ -34,6 +35,7 @@ source=
 source_commit=
 duckdb=
 rscript=
+verify_source_only=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --analysis-run) analysis_run=${2:?}; shift 2 ;;
@@ -44,13 +46,64 @@ while [[ $# -gt 0 ]]; do
         --source-commit) source_commit=${2:?}; shift 2 ;;
         --duckdb) duckdb=${2:?}; shift 2 ;;
         --rscript) rscript=${2:?}; shift 2 ;;
+        --verify-source-only) verify_source_only=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "E: Unknown argument: $1" >&2; usage >&2; exit 2 ;;
     esac
 done
 
-for value in analysis_run enrichment_package h3_package output_dir source \
-             source_commit duckdb rscript; do
+resolve_source_head() {
+    local git_dir="$source/.git" metadata head_record reference resolved=""
+    if [[ -f $git_dir ]]; then
+        IFS= read -r metadata < "$git_dir"
+        [[ $metadata == "gitdir: "* ]] || return 1
+        git_dir=${metadata#gitdir: }
+        [[ $git_dir == /* ]] || git_dir="$source/$git_dir"
+    elif [[ ! -d $git_dir ]]; then
+        return 1
+    fi
+    [[ -f $git_dir/HEAD ]] || return 1
+    IFS= read -r head_record < "$git_dir/HEAD"
+    if [[ $head_record == "ref: "* ]]; then
+        reference=${head_record#ref: }
+        if [[ -f $git_dir/$reference ]]; then
+            IFS= read -r resolved < "$git_dir/$reference"
+        elif [[ -f $git_dir/packed-refs ]]; then
+            while IFS=' ' read -r metadata head_record; do
+                [[ $metadata == \#* || $metadata == \^* ]] && continue
+                if [[ $head_record == "$reference" ]]; then
+                    resolved=$metadata
+                    break
+                fi
+            done < "$git_dir/packed-refs"
+        fi
+    else
+        resolved=$head_record
+    fi
+    [[ $resolved =~ ^[0-9a-f]{40}$ ]] || return 1
+    printf '%s\n' "$resolved"
+}
+
+for value in source source_commit; do
+    [[ -n ${!value} ]] || { usage >&2; exit 2; }
+done
+[[ $source_commit =~ ^[0-9a-f]{40}$ ]] || {
+    echo "E: --source-commit must be a full lowercase Git hash." >&2
+    exit 2
+}
+resolved_source_commit=$(resolve_source_head) || {
+    echo "E: Cannot resolve the source checkout identity without Git." >&2
+    exit 1
+}
+[[ $resolved_source_commit == "$source_commit" ]] || {
+    echo "E: Source commit differs from --source-commit." >&2
+    exit 1
+}
+if (( verify_source_only == 1 )); then
+    printf '%s\n' "$resolved_source_commit"
+    exit 0
+fi
+for value in analysis_run enrichment_package h3_package output_dir duckdb rscript; do
     [[ -n ${!value} ]] || { usage >&2; exit 2; }
 done
 for path in "$analysis_run" "$enrichment_package" "$h3_package" \
@@ -62,15 +115,6 @@ for path in "$analysis_run" "$enrichment_package" "$h3_package" \
 done
 [[ -x $duckdb ]] || { echo "E: DuckDB is unavailable: $duckdb" >&2; exit 1; }
 [[ -x $rscript ]] || { echo "E: Rscript is unavailable: $rscript" >&2; exit 1; }
-[[ $(git -C "$source" rev-parse --verify HEAD) == "$source_commit" ]] || {
-    echo "E: Source commit differs from --source-commit." >&2
-    exit 1
-}
-if ! git -C "$source" diff --quiet --ignore-submodules -- ||
-   ! git -C "$source" diff --cached --quiet --ignore-submodules --; then
-    echo "E: Interpretation requires a tracked-clean source tree." >&2
-    exit 1
-fi
 
 analysis="$analysis_run/final/h3k4me3_cofactor_analysis"
 enrichment="$enrichment_package/tables/jaspar2026/cofactor_primary_occupancy/part-000000.parquet"
@@ -100,7 +144,7 @@ else
         --gene-relation-occupancy "$gene_relation_occupancy" \
         --score-gradient "$gradient" --interaction "$interaction" \
         --h3-summary "$h3_summary" --output-dir "$output_dir" \
-        --duckdb "$duckdb"
+        --duckdb "$duckdb" --source-commit "$source_commit"
 fi
 
 figures="$output_dir/figures"

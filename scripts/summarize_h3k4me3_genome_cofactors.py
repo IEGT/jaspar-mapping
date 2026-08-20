@@ -488,6 +488,10 @@ def parser() -> argparse.ArgumentParser:
                         help="final H3K4me3 chromosome-summary Parquet")
     result.add_argument("--output-dir", type=Path, required=True)
     result.add_argument("--duckdb", type=Path, default=Path("duckdb"))
+    result.add_argument(
+        "--source-commit",
+        help="pinned 40-character source commit when Git is unavailable",
+    )
     return result
 
 
@@ -543,7 +547,18 @@ def main() -> int:
             }
 
         source = Path(__file__).resolve().parent.parent
-        commit, dirty = git_identity(source)
+        if arguments.source_commit is not None:
+            if (len(arguments.source_commit) != 40
+                    or any(character not in "0123456789abcdef"
+                           for character in arguments.source_commit)):
+                raise SummaryError(
+                    "--source-commit must be a full lowercase Git hash"
+                )
+            commit, dirty = arguments.source_commit, None
+            source_identity_method = "pinned_argument_verified_by_runner"
+        else:
+            commit, dirty = git_identity(source)
+            source_identity_method = "git_worktree_probe"
         manifest = {
             "schema_version": 4,
             "analysis": "joint_tp73_enrichment_h3k4me3_cofactor_summary",
@@ -559,6 +574,7 @@ def main() -> int:
                 "provisional_pending_baseline_covariates_and_empirical_null",
             "source_commit": commit,
             "source_dirty": dirty,
+            "source_identity_method": source_identity_method,
             "inputs": {
                 label: {
                     "path": str(path), "bytes": path.stat().st_size,
