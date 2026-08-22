@@ -80,6 +80,20 @@ COPY (
     ) motif
 ) TO 'operating_thresholds.parquet' (FORMAT PARQUET, COMPRESSION ZSTD);
 
+-- Production registries can also contain the TP73 target. Its -5 scan floor
+-- is intentionally independent of the -1 floor used for all cofactor motifs.
+COPY (
+    SELECT * FROM read_parquet('operating_thresholds.parquet')
+    UNION ALL
+    SELECT
+        'MA0861.2'::VARCHAR AS motif_id,
+        'synthetic_context_operating_v1'::VARCHAR AS threshold_set_id,
+        0.0::DOUBLE AS recommended_threshold,
+        'synthetic_target_row'::VARCHAR AS calibration_status,
+        -1.0::DOUBLE AS source_minimum_score
+) TO 'operating_thresholds_with_target.parquet'
+  (FORMAT PARQUET, COMPRESSION ZSTD);
+
 -- Match the direct sparse writer: no motif_name column and word-form strands.
 COPY (
     SELECT * FROM (VALUES
@@ -144,6 +158,19 @@ EOF
     --chrom 1 --capture-flank 150 --context-flank 150 --tandem-flank 20 \
     --memory-limit 1GB --max-temp-size 1GB \
     --temp-directory "$temporary/external_duckdb_spill" >/dev/null
+
+"$repository_root/scripts/build_motif_context.py" \
+    --motif-hits "$temporary/motif_hit.parquet" \
+    --output "$temporary/context_registry_with_target" --output-tier band \
+    --anchor-motif MA0861.2 \
+    --motif-set-id synthetic_jaspar2026 --genome-id synthetic_grch38_v1 \
+    --anchor-minimum-score 0 --partner-minimum-score 0 \
+    --operating-threshold-parquet \
+      "$temporary/operating_thresholds_with_target.parquet" \
+    --operating-threshold-set-id synthetic_context_operating_v1 \
+    --score-mode log2_relative_risk --pseudocount 1 --chrom 1 \
+    --capture-flank 150 --context-flank 150 --tandem-flank 20 \
+    --memory-limit 1GB --max-temp-size 1GB >/dev/null
 
 if "$repository_root/scripts/build_motif_context.py" \
     --motif-hits "$temporary/motif_hit.parquet" \

@@ -1495,7 +1495,8 @@ SELECT CASE WHEN EXISTS (
     SELECT 1
     FROM source_hit h
     JOIN requested_operating_threshold t USING (motif_id)
-    WHERE ABS(h.source_score_floor - t.source_minimum_score) > 1e-9
+    WHERE h.motif_id <> {sql_string(arguments.anchor_motif)}
+      AND ABS(h.source_score_floor - t.source_minimum_score) > 1e-9
 ) THEN error('operating threshold source floor differs from motif-hit input') END;
 """
     genome_id = (
