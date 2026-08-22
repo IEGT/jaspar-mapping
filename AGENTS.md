@@ -15,6 +15,9 @@ references, or empirical cofactor score bands, also read
 For all-JASPAR enrichment/depletion around TP73 anchors, depth-stratified
 CUT&RUN summaries, or their Slurm production run, also read
 [`docs/jaspar2026_chr1_all_cofactor_enrichment_run.md`](docs/jaspar2026_chr1_all_cofactor_enrichment_run.md).
+For species-aware vertebrate filtering and the isoform-by-exclusive-distance
+TP73 cofactor ranking, also read
+[`docs/tp73_distance_species_aware_cofactor_enrichment.md`](docs/tp73_distance_species_aware_cofactor_enrichment.md).
 Join all-motif rankings to the normalized JASPAR 2026 catalog described in
 [`docs/jaspar_2026_provenance.md`](docs/jaspar_2026_provenance.md). Preserve the
 all-taxon sequence-signature result, but use `tax_group = 'vertebrates'` for the

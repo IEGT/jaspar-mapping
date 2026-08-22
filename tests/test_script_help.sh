@@ -26,6 +26,7 @@ scripts/build_motif_score_thresholds.py
 scripts/build_sparse_context_maxima.py
 scripts/build_tp73_anchor_evidence.py
 scripts/build_tp73_cutandrun_calibration_duckdb.sh
+scripts/build_tp73_distance_cofactor_counts.py
 scripts/compare_tp73_cofactor_summaries.R
 scripts/dense_tsv_to_parquet.sh
 scripts/evaluate_tp73_cofactor_thresholds.R
@@ -46,6 +47,7 @@ scripts/manage_h3k4me3_genome_signal.py
 scripts/manage_motif_density_calibration.py
 scripts/manage_motif_threshold_calibration.py
 scripts/manage_tp73_cofactor_enrichment.py
+scripts/manage_tp73_distance_cofactor_enrichment.py
 scripts/manage_tp73_genome_context_maxima.py
 scripts/manage_tp73_genome_evidence.py
 scripts/plot_h3k4me3_genome_cofactor_summary.R
@@ -91,6 +93,7 @@ scripts/submit_motif_density_calibration_slurm.sh
 scripts/submit_motif_threshold_calibration_slurm.sh
 scripts/submit_negative_threshold_sensitivity_slurm.sh
 scripts/submit_tp73_cofactor_enrichment_slurm.sh
+scripts/submit_tp73_distance_cofactor_enrichment_slurm.sh
 scripts/submit_tp73_genome_context_maxima_slurm.sh
 scripts/submit_tp73_genome_evidence_slurm.sh
 scripts/summarize_h3k4me3_genome_cofactors.py
