@@ -15,6 +15,12 @@ references, or empirical cofactor score bands, also read
 For all-JASPAR enrichment/depletion around TP73 anchors, depth-stratified
 CUT&RUN summaries, or their Slurm production run, also read
 [`docs/jaspar2026_chr1_all_cofactor_enrichment_run.md`](docs/jaspar2026_chr1_all_cofactor_enrichment_run.md).
+Join all-motif rankings to the normalized JASPAR 2026 catalog described in
+[`docs/jaspar_2026_provenance.md`](docs/jaspar_2026_provenance.md). Preserve the
+all-taxon sequence-signature result, but use `tax_group = 'vertebrates'` for the
+primary human cofactor interpretation and report `includes_homo_sapiens` as a
+separate source-provenance sensitivity. A matrix source species is not a claim
+about the only species in which its sequence pattern can function.
 For the whole-genome extension, autosome/sex/mitochondrial partitioning,
 zero-complete context counts, or scan-floor censoring of negative references,
 also read

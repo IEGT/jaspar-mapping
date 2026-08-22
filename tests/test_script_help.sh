@@ -20,6 +20,7 @@ scripts/benchmark_sparse_layout.py
 scripts/build_density_capped_thresholds.py
 scripts/build_fasta_index.py
 scripts/build_h3k4me3_anchor_signal.py
+scripts/build_jaspar_metadata_catalog.py
 scripts/build_motif_context.py
 scripts/build_motif_score_thresholds.py
 scripts/build_sparse_context_maxima.py
