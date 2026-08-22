@@ -150,6 +150,17 @@ def run_json(executable: str, database: str | Path, sql: str) -> list[dict[str, 
 def source_identity(source: Path, source_commit: str) -> dict[str, str]:
     if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
         raise DistanceEnrichmentError("source commit must be 40 lowercase hex digits")
+    git_process = subprocess.run(
+        ["git", "-C", str(source), "rev-parse", "HEAD"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if (git_process.returncode != 0
+            or git_process.stdout.strip() != source_commit):
+        raise DistanceEnrichmentError(
+            "source commit does not match the source checkout HEAD"
+        )
     result: dict[str, str] = {}
     for relative in SCIENTIFIC_FILES:
         path = source / relative

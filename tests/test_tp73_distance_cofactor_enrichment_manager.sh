@@ -8,6 +8,7 @@ if ! command -v duckdb >/dev/null 2>&1; then
 fi
 
 repository_root=$(cd "$(dirname "$0")/.." && pwd)
+source_commit=$(git -C "$repository_root" rev-parse HEAD)
 temporary=$(mktemp -d "${TMPDIR:-/tmp}/tp73-distance-manager.XXXXXX")
 trap 'rm -rf "$temporary"' EXIT HUP INT TERM
 
@@ -140,12 +141,29 @@ SQL
 printf '{}\n' > "$catalog/manifest.json"
 
 if "$repository_root/scripts/manage_tp73_distance_cofactor_enrichment.py" prepare \
+    --run-root "$temporary/wrong-commit" --scan-package "$scan" \
+    --anchor-evidence "$temporary/anchors.parquet" \
+    --thresholds "$temporary/thresholds.parquet" \
+    --threshold-set-id synthetic_thresholds --jaspar-catalog "$catalog" \
+    --source "$repository_root" \
+    --source-commit 0000000000000000000000000000000000000000 \
+    --run-id synthetic_wrong_commit --tax-group vertebrates \
+    --chromosomes 1 >/dev/null 2>&1; then
+    echo "E: mismatched source commit unexpectedly passed" >&2
+    exit 1
+fi
+[[ ! -e $temporary/wrong-commit ]] || {
+    echo "E: source-commit failure published a partial run root" >&2
+    exit 1
+}
+
+if "$repository_root/scripts/manage_tp73_distance_cofactor_enrichment.py" prepare \
     --run-root "$temporary/failed-prepare" --scan-package "$scan" \
     --anchor-evidence "$temporary/anchors.parquet" \
     --thresholds "$temporary/thresholds.parquet" \
     --threshold-set-id synthetic_thresholds --jaspar-catalog "$catalog" \
     --source "$repository_root" \
-    --source-commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+    --source-commit "$source_commit" \
     --run-id synthetic_failed_prepare --tax-group vertebrates \
     --chromosomes 1 --duckdb false >/dev/null 2>&1; then
     echo "E: deliberately failed prepare unexpectedly succeeded" >&2
@@ -163,7 +181,7 @@ task_count=$(
         --thresholds "$temporary/thresholds.parquet" \
         --threshold-set-id synthetic_thresholds --jaspar-catalog "$catalog" \
         --source "$repository_root" \
-        --source-commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+        --source-commit "$source_commit" \
         --run-id synthetic_distance_species_v1 --tax-group vertebrates \
         --chromosomes 1
 )
