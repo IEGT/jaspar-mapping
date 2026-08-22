@@ -118,7 +118,7 @@ def write_json_new(path: Path, value: dict[str, Any]) -> None:
 
 def run_duckdb(executable: str, database: str | Path, sql: str) -> None:
     process = subprocess.run(
-        [executable, "-light-mode", "-batch", str(database)],
+        [executable, "-batch", str(database)],
         input=sql,
         text=True,
         capture_output=True,
@@ -132,7 +132,7 @@ def run_duckdb(executable: str, database: str | Path, sql: str) -> None:
 
 def run_json(executable: str, database: str | Path, sql: str) -> list[dict[str, Any]]:
     process = subprocess.run(
-        [executable, "-light-mode", "-json", str(database), "-c", sql],
+        [executable, "-json", str(database), "-c", sql],
         text=True,
         capture_output=True,
         check=False,
@@ -198,14 +198,27 @@ def chromosome_directory(
 
 def prepare(arguments: argparse.Namespace) -> None:
     run_root = arguments.run_root.expanduser().resolve()
+    if run_root.exists():
+        raise DistanceEnrichmentError(f"run root already exists: {run_root}")
+    run_root.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(
+        prefix=f".{run_root.name}-prepare-", dir=run_root.parent
+    ))
+    try:
+        prepare_plan(arguments, staging)
+        os.replace(staging, run_root)
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
+
+
+def prepare_plan(arguments: argparse.Namespace, run_root: Path) -> None:
     source = arguments.source.expanduser().resolve()
     scan_package = arguments.scan_package.expanduser().resolve()
     anchors = arguments.anchor_evidence.expanduser().resolve()
     thresholds = arguments.thresholds.expanduser().resolve()
     catalog = arguments.jaspar_catalog.expanduser().resolve()
     chromosomes = parse_chromosomes(arguments.chromosomes)
-    if run_root.exists():
-        raise DistanceEnrichmentError(f"run root already exists: {run_root}")
     for path in (anchors, thresholds, catalog / "manifest.json"):
         if not path.is_file():
             raise DistanceEnrichmentError(f"input is missing: {path}")
@@ -226,7 +239,6 @@ def prepare(arguments: argparse.Namespace) -> None:
             raise DistanceEnrichmentError(f"package input is missing: {path}")
 
     scientific_hashes = source_identity(source, arguments.source_commit)
-    run_root.mkdir(parents=True)
     for name in ("plan", "input", "tasks", "checkpoints", "logs", "final"):
         (run_root / name).mkdir()
     task_file = run_root / "plan" / "tasks.tsv"

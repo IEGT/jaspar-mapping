@@ -168,7 +168,7 @@ def write_json_lines(path: Path, rows: list[dict[str, Any]]) -> None:
 
 def run_duckdb(duckdb: str, database: Path, sql: str) -> None:
     process = subprocess.run(
-        [duckdb, "-light-mode", "-batch", str(database)],
+        [duckdb, "-batch", str(database)],
         input=sql,
         text=True,
         capture_output=True,

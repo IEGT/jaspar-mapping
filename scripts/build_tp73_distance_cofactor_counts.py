@@ -301,7 +301,7 @@ ORDER BY block_index, series_id, isoform, distance_band_order
 
 def run_duckdb(executable: str, sql: str) -> None:
     process = subprocess.run(
-        [executable, "-light-mode", "-batch", ":memory:"],
+        [executable, "-batch", ":memory:"],
         input=sql,
         text=True,
         capture_output=True,

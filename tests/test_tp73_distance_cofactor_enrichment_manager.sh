@@ -139,6 +139,23 @@ CHECKPOINT;
 SQL
 printf '{}\n' > "$catalog/manifest.json"
 
+if "$repository_root/scripts/manage_tp73_distance_cofactor_enrichment.py" prepare \
+    --run-root "$temporary/failed-prepare" --scan-package "$scan" \
+    --anchor-evidence "$temporary/anchors.parquet" \
+    --thresholds "$temporary/thresholds.parquet" \
+    --threshold-set-id synthetic_thresholds --jaspar-catalog "$catalog" \
+    --source "$repository_root" \
+    --source-commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+    --run-id synthetic_failed_prepare --tax-group vertebrates \
+    --chromosomes 1 --duckdb false >/dev/null 2>&1; then
+    echo "E: deliberately failed prepare unexpectedly succeeded" >&2
+    exit 1
+fi
+[[ ! -e $temporary/failed-prepare ]] || {
+    echo "E: failed prepare published a partial run root" >&2
+    exit 1
+}
+
 task_count=$(
     "$repository_root/scripts/manage_tp73_distance_cofactor_enrichment.py" prepare \
         --run-root "$run_root" --scan-package "$scan" \
