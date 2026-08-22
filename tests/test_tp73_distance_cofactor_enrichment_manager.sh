@@ -17,7 +17,7 @@ catalog="$temporary/catalog"
 run_root="$temporary/run"
 scratch="$temporary/scratch"
 mkdir -p "$scan/tables/jaspar2026/scan_file_inventory" \
-    "$scan/tables/jaspar2026/motif_metadata" "$scan/hits" "$catalog" "$scratch"
+    "$scan/tables/jaspar2026/motif_metadata" "$catalog" "$scratch"
 
 duckdb -light-mode -batch :memory: >/dev/null <<SQL
 COPY (
@@ -78,10 +78,11 @@ COPY (
 ) TO '$temporary/thresholds.parquet' (FORMAT PARQUET);
 SQL
 
-for motif in MA0001.1 MA0002.1 MA0003.1; do
-    mkdir -p "$scan/hits/$motif"
-    cp "$temporary/hits-plus.parquet" "$scan/hits/$motif/plus.parquet"
-    cp "$temporary/hits-minus.parquet" "$scan/hits/$motif/minus.parquet"
+for task_id in 0 1 2; do
+    task_root="$scan/task_data/task_id=$task_id"
+    mkdir -p "$task_root"
+    cp "$temporary/hits-plus.parquet" "$task_root/plus.parquet"
+    cp "$temporary/hits-minus.parquet" "$task_root/minus.parquet"
 done
 
 python3 - "$scan" > "$temporary/inventory.tsv" <<'PY'
@@ -90,19 +91,20 @@ from pathlib import Path
 import sys
 
 root = Path(sys.argv[1])
-print("motif_id\tchrom\tstrand\toutput_relative_path\tbytes\tsha256\temitted_hits\tminimum_score")
-for motif in ("MA0001.1", "MA0002.1", "MA0003.1"):
+print("task_id\tmotif_id\tchrom\tstrand\toutput_relative_path\tbytes\tsha256\temitted_hits\tminimum_score")
+for task_id, motif in enumerate(("MA0001.1", "MA0002.1", "MA0003.1")):
     for strand, name in (("+", "plus.parquet"), ("-", "minus.parquet")):
-        relative = Path("hits") / motif / name
-        path = root / relative
+        relative = Path(name)
+        path = root / "task_data" / f"task_id={task_id}" / relative
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        print(motif, "1", strand, relative, path.stat().st_size, digest, 5, -1,
-              sep="\t")
+        print(task_id, motif, "1", strand, relative, path.stat().st_size,
+              digest, 5, -1, sep="\t")
 PY
 
 duckdb -light-mode -batch :memory: >/dev/null <<SQL
 COPY (
-  SELECT motif_id::VARCHAR AS motif_id, chrom::VARCHAR AS chrom,
+  SELECT task_id::VARCHAR AS task_id, motif_id::VARCHAR AS motif_id,
+         chrom::VARCHAR AS chrom,
          strand::VARCHAR AS strand,
          output_relative_path::VARCHAR AS output_relative_path,
          bytes::BIGINT AS bytes, sha256::VARCHAR AS sha256,

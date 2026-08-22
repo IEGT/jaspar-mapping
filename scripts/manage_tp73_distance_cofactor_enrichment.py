@@ -312,9 +312,11 @@ SELECT CASE WHEN EXISTS (
 COPY selected TO {sql_string(task_file)}
   (FORMAT CSV, DELIMITER '\t', HEADER, NULL 'NA');
 COPY (
-  SELECT s.task_index, s.motif_id, CAST(i.chrom AS VARCHAR) AS chrom,
+  SELECT s.task_index, s.motif_id, i.task_id::VARCHAR AS scan_task_id,
+         CAST(i.chrom AS VARCHAR) AS chrom,
          i.strand::VARCHAR AS strand,
-         {sql_string(str(scan_package) + '/')} || i.output_relative_path
+         {sql_string(str(scan_package) + '/task_data/task_id=')} ||
+             CAST(i.task_id AS VARCHAR) || '/' || i.output_relative_path
              AS absolute_path,
          i.bytes::BIGINT AS bytes,
          i.sha256::VARCHAR AS sha256,
@@ -341,6 +343,12 @@ COPY (
     }
     if len(scans) != len(observed_scan_keys) or observed_scan_keys != expected_scan_keys:
         raise DistanceEnrichmentError("prepared scan keys are incomplete or repeated")
+    for scan in scans:
+        path = Path(scan["absolute_path"])
+        if not path.is_file():
+            raise DistanceEnrichmentError(f"planned scan payload is missing: {path}")
+        if path.stat().st_size != int(scan["bytes"]):
+            raise DistanceEnrichmentError(f"planned scan payload size differs: {path}")
 
     scan_manifest = scan_package / "manifest.json"
     catalog_manifest = catalog / "manifest.json"
