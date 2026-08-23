@@ -71,6 +71,16 @@ support contribute to the odds ratio. The response therefore compares whether
 positive versus strictly negative cofactor contexts are preferentially found
 on the anti-p73-supported side of the paired technical contrast.
 
+The isoform comparison is a separate estimand, not a comparison of two
+significance labels. For every motif and distance band it reports
+`OR_TA / OR_DN`, equivalently `log(OR_TA) - log(OR_DN)`. Values above one mean
+that the cofactor association odds ratio is larger for TAp73; values below one
+mean that it is larger for DNp73. This interpretation still requires the two
+individual odds ratios: for example, a larger value can mean stronger
+enrichment or weaker depletion. Its uncertainty is calculated by deleting the
+same 5 Mb genomic block from both isoform estimates before taking their
+difference, thereby retaining the covariance induced by their shared anchors.
+
 The common odds ratio is a Mantel-Haenszel estimate stratified by series and by
 TP73 anchor-score bands `[-5,-1)`, `[-1,0)`, `[0,1)`, `[1,2)`, `[2,5)`,
 `[5,10)`, `[10,15)`, and `[15,+Inf)`. Uncertainty is a delete-one-cluster
@@ -97,6 +107,12 @@ chromosome checkpoints below the dedicated `/data/sm718` run root. Requeue and
 manual repetition reuse validated checkpoints. Completed motif outputs and the
 final package are also atomic and checksum-validated.
 
+Schema-2 finalization can reuse schema-1 task sufficient statistics without
+rerunning motif jobs. Its manifest distinguishes the task source commit from
+the finalizer source commit and records exact scientific-source hashes. An
+existing schema-1 final directory is never overwritten; use a new
+`--final-name` for the schema-2 derivative.
+
 The submission entry point is:
 
 ```bash
@@ -122,8 +138,12 @@ The final DuckDB database contains:
 - `cofactor_distance_enrichment`: one row per motif, isoform, and distance
   band, including class support, series-specific odds ratios, block-jackknife
   uncertainty, taxonomic group, and flattened source-species label;
+- `cofactor_distance_isoform_contrast`: one row per motif and distance band,
+  with the TA and DN estimates side by side, their odds-ratio ratio, a paired
+  block-jackknife confidence interval, and BH-adjusted direct isoform test;
 - `cofactor_distance_top_bottom_20`: vertebrate top and bottom 20 per isoform
-  and distance band;
+  and distance band, carrying the other isoform and direct contrast beside each
+  ranked result;
 - `cofactor_distance_top_bottom_20_human_source`: the corresponding exact-human
   source sensitivity ranking;
 - `cofactor_distance_class_count`: positive, intermediate, and strict-negative
@@ -137,12 +157,19 @@ For example:
 
 ```sql
 SELECT direction, rank, motif_id, motif_name, adjusted_odds_ratio,
-       confidence_interval_95_lower, confidence_interval_95_upper,
+       ta_adjusted_odds_ratio, dn_adjusted_odds_ratio,
+       ta_vs_dn_odds_ratio_ratio, ta_vs_dn_q_value_bh_tax_group,
        source_species
 FROM cofactor_distance_top_bottom_20
 WHERE isoform = 'TA' AND distance_band = 'gap_6_20'
 ORDER BY CASE direction WHEN 'enriched' THEN 1 ELSE 2 END, rank;
 ```
+
+Sort `cofactor_distance_isoform_contrast` directly when the question is which
+motifs differ most between isoforms. Do not infer an isoform difference merely
+because one isoform's confidence interval excludes one and the other's does
+not. A distance-agnostic TA/DN-pooled ranking may be retained as a descriptive
+supplement, but it is not the primary cofactor result.
 
 Use `cofactor_distance_top_bottom_20_human_source` for the exact-human source
 sensitivity view, or join `jaspar_matrix_species` by `matrix_id = motif_id` when

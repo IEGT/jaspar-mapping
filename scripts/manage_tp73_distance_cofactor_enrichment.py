@@ -30,6 +30,7 @@ DISTANCE_BANDS = (
     "gap_51_100",
     "gap_101_150",
 )
+FINAL_SCHEMA_VERSION = 2
 SCIENTIFIC_FILES = (
     "scripts/build_tp73_distance_cofactor_counts.py",
     "scripts/manage_tp73_distance_cofactor_enrichment.py",
@@ -168,6 +169,34 @@ def source_identity(source: Path, source_commit: str) -> dict[str, str]:
             raise DistanceEnrichmentError(f"scientific source is missing: {path}")
         result[relative] = sha256(path)
     return result
+
+
+def runtime_source_identity(source: Path) -> dict[str, Any]:
+    commit_process = subprocess.run(
+        ["git", "-C", str(source), "rev-parse", "HEAD"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    commit = commit_process.stdout.strip()
+    if (commit_process.returncode != 0
+            or not re.fullmatch(r"[0-9a-f]{40}", commit)):
+        raise DistanceEnrichmentError("cannot identify finalizer source commit")
+    hashes = source_identity(source, commit)
+    status_process = subprocess.run(
+        ["git", "-C", str(source), "status", "--porcelain", "--", *SCIENTIFIC_FILES],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if status_process.returncode != 0:
+        raise DistanceEnrichmentError("cannot inspect finalizer source status")
+    return {
+        "source": str(source),
+        "commit": commit,
+        "dirty": bool(status_process.stdout.strip()),
+        "scientific_source_sha256": hashes,
+    }
 
 
 def verify_source(config: dict[str, Any]) -> Path:
@@ -837,6 +866,23 @@ def bh_adjust(rows: list[dict[str, Any]], family_size: int) -> None:
             row["q_value_bh_tax_group"] = min(1.0, next_value)
 
 
+def bh_adjust_isoform_contrast(
+    rows: list[dict[str, Any]], family_size: int
+) -> None:
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        if (row["evaluation_status"] == "ok"
+                and math.isfinite(row["p_value"])):
+            groups.setdefault(row["distance_band"], []).append(row)
+    for group in groups.values():
+        ordered = sorted(group, key=lambda row: row["p_value"])
+        next_value = 1.0
+        for rank in range(len(ordered), 0, -1):
+            row = ordered[rank - 1]
+            next_value = min(next_value, row["p_value"] * family_size / rank)
+            row["q_value_bh_tax_group"] = min(1.0, next_value)
+
+
 def finalize(arguments: argparse.Namespace) -> None:
     run_root = arguments.run_root.expanduser().resolve()
     config = load_json(config_path(run_root))
@@ -873,14 +919,20 @@ def finalize(arguments: argparse.Namespace) -> None:
         manifest = load_json(final / "manifest.json")
         if manifest.get("run_id") != config["run_id"]:
             raise DistanceEnrichmentError("existing final output has another identity")
+        if manifest.get("schema_version") != FINAL_SCHEMA_VERSION:
+            raise DistanceEnrichmentError(
+                "existing final output uses another schema; choose a new --final-name"
+            )
         print(f"I: Reusing final output: {final}", file=sys.stderr)
         return
+    finalizer_identity = runtime_source_identity(Path(__file__).resolve().parent.parent)
     staging = Path(tempfile.mkdtemp(prefix=".distance-final-", dir=final.parent))
     try:
         table_root = staging / "tables" / "jaspar2026"
         table_root.mkdir(parents=True)
         database = staging / "tp73_distance_cofactor_enrichment.duckdb"
         raw_tsv = staging / "raw_estimate.tsv"
+        raw_contrast_tsv = staging / "raw_isoform_contrast.tsv"
         run_duckdb(arguments.duckdb, database, f"""
 SET preserve_insertion_order=false;
 ATTACH {sql_string(catalog_db)} AS jaspar (READ_ONLY);
@@ -982,6 +1034,104 @@ LEFT JOIN species_label sl ON sl.matrix_id=t.motif_id
 ORDER BY t.isoform, t.distance_band_order, t.motif_id
 ) TO {sql_string(raw_tsv)}
   (FORMAT CSV, DELIMITER '\t', HEADER, NULL 'NA');
+
+COPY (
+WITH total AS (
+  SELECT motif_id, isoform, distance_band,
+         max(distance_band_order) AS distance_band_order,
+         sum(mh_numerator)::DOUBLE AS numerator,
+         sum(mh_denominator)::DOUBLE AS denominator
+  FROM cofactor_distance_block_component
+  GROUP BY motif_id, isoform, distance_band
+), paired_total AS (
+  SELECT motif_id, distance_band, max(distance_band_order) AS distance_band_order,
+         max(numerator) FILTER (WHERE isoform='TA') AS ta_numerator,
+         max(denominator) FILTER (WHERE isoform='TA') AS ta_denominator,
+         max(numerator) FILTER (WHERE isoform='DN') AS dn_numerator,
+         max(denominator) FILTER (WHERE isoform='DN') AS dn_denominator
+  FROM total
+  GROUP BY motif_id, distance_band
+  HAVING count(DISTINCT isoform) = 2
+), block AS (
+  SELECT motif_id, distance_band, chrom, block_index,
+         coalesce(sum(mh_numerator) FILTER (WHERE isoform='TA'), 0)::DOUBLE
+           AS ta_block_numerator,
+         coalesce(sum(mh_denominator) FILTER (WHERE isoform='TA'), 0)::DOUBLE
+           AS ta_block_denominator,
+         coalesce(sum(mh_numerator) FILTER (WHERE isoform='DN'), 0)::DOUBLE
+           AS dn_block_numerator,
+         coalesce(sum(mh_denominator) FILTER (WHERE isoform='DN'), 0)::DOUBLE
+           AS dn_block_denominator
+  FROM cofactor_distance_block_component
+  GROUP BY motif_id, distance_band, chrom, block_index
+), leave_one_out AS (
+  SELECT t.motif_id, t.distance_band,
+         CASE WHEN t.ta_numerator - b.ta_block_numerator > 0
+                AND t.ta_denominator - b.ta_block_denominator > 0
+                AND t.dn_numerator - b.dn_block_numerator > 0
+                AND t.dn_denominator - b.dn_block_denominator > 0
+              THEN ln((t.ta_numerator - b.ta_block_numerator)
+                      / (t.ta_denominator - b.ta_block_denominator))
+                   - ln((t.dn_numerator - b.dn_block_numerator)
+                        / (t.dn_denominator - b.dn_block_denominator))
+              ELSE NULL END AS leave_one_out_log_or_difference
+  FROM paired_total t JOIN block b USING (motif_id, distance_band)
+), jackknife AS (
+  SELECT motif_id, distance_band,
+         count(*)::BIGINT AS genomic_blocks,
+         count(leave_one_out_log_or_difference)::BIGINT AS jackknife_blocks,
+         sqrt((count(leave_one_out_log_or_difference) - 1)
+              * var_pop(leave_one_out_log_or_difference))::DOUBLE AS jackknife_se
+  FROM leave_one_out
+  GROUP BY motif_id, distance_band
+), series AS (
+  SELECT motif_id, isoform, distance_band, series_id,
+         CASE WHEN sum(mh_numerator) > 0 AND sum(mh_denominator) > 0
+              THEN sum(mh_numerator) / sum(mh_denominator) ELSE NULL END
+              AS series_odds_ratio
+  FROM cofactor_distance_block_component
+  GROUP BY motif_id, isoform, distance_band, series_id
+), series_contrast AS (
+  SELECT motif_id, distance_band,
+         max(series_odds_ratio) FILTER (
+           WHERE isoform='TA' AND series_id='saos2'
+         ) / nullif(max(series_odds_ratio) FILTER (
+           WHERE isoform='DN' AND series_id='saos2'
+         ), 0) AS saos2_ta_vs_dn_odds_ratio_ratio,
+         max(series_odds_ratio) FILTER (
+           WHERE isoform='TA' AND series_id='skmel29_2'
+         ) / nullif(max(series_odds_ratio) FILTER (
+           WHERE isoform='DN' AND series_id='skmel29_2'
+         ), 0) AS skmel29_2_ta_vs_dn_odds_ratio_ratio
+  FROM series
+  GROUP BY motif_id, distance_band
+)
+SELECT t.motif_id, t.distance_band, t.distance_band_order,
+       CASE WHEN t.ta_numerator > 0 AND t.ta_denominator > 0
+            THEN t.ta_numerator / t.ta_denominator ELSE NULL END
+         AS ta_adjusted_odds_ratio,
+       CASE WHEN t.dn_numerator > 0 AND t.dn_denominator > 0
+            THEN t.dn_numerator / t.dn_denominator ELSE NULL END
+         AS dn_adjusted_odds_ratio,
+       CASE WHEN t.ta_numerator > 0 AND t.ta_denominator > 0
+              AND t.dn_numerator > 0 AND t.dn_denominator > 0
+            THEN ln(t.ta_numerator / t.ta_denominator)
+                 - ln(t.dn_numerator / t.dn_denominator)
+            ELSE NULL END AS ta_vs_dn_log_odds_difference,
+       CASE WHEN t.ta_numerator > 0 AND t.ta_denominator > 0
+              AND t.dn_numerator > 0 AND t.dn_denominator > 0
+            THEN (t.ta_numerator / t.ta_denominator)
+                 / (t.dn_numerator / t.dn_denominator)
+            ELSE NULL END AS ta_vs_dn_odds_ratio_ratio,
+       j.genomic_blocks, j.jackknife_blocks, j.jackknife_se,
+       s.saos2_ta_vs_dn_odds_ratio_ratio,
+       s.skmel29_2_ta_vs_dn_odds_ratio_ratio
+FROM paired_total t
+JOIN jackknife j USING (motif_id, distance_band)
+JOIN series_contrast s USING (motif_id, distance_band)
+ORDER BY t.distance_band_order, t.motif_id
+) TO {sql_string(raw_contrast_tsv)}
+  (FORMAT CSV, DELIMITER '\t', HEADER, NULL 'NA');
 """)
         raw_rows = read_tsv(raw_tsv)
         result_rows: list[dict[str, Any]] = []
@@ -1061,6 +1211,107 @@ ORDER BY t.isoform, t.distance_band_order, t.motif_id
             for row in result_rows:
                 handle.write(json.dumps(row, sort_keys=True) + "\n")
 
+        result_by_key = {
+            (row["motif_id"], row["isoform"], row["distance_band"]): row
+            for row in result_rows
+        }
+        contrast_rows: list[dict[str, Any]] = []
+        contrast_float_fields = {
+            "ta_adjusted_odds_ratio", "dn_adjusted_odds_ratio",
+            "ta_vs_dn_log_odds_difference", "ta_vs_dn_odds_ratio_ratio",
+            "jackknife_se", "saos2_ta_vs_dn_odds_ratio_ratio",
+            "skmel29_2_ta_vs_dn_odds_ratio_ratio",
+        }
+        for raw in read_tsv(raw_contrast_tsv):
+            motif_id = raw["motif_id"]
+            distance_band = raw["distance_band"]
+            ta = result_by_key[(motif_id, "TA", distance_band)]
+            dn = result_by_key[(motif_id, "DN", distance_band)]
+            row = {
+                "motif_id": motif_id,
+                "motif_name": ta["motif_name"],
+                "distance_band": distance_band,
+                "distance_band_order": int(raw["distance_band_order"]),
+                "source_score_floor": ta["source_score_floor"],
+                "positive_threshold": ta["positive_threshold"],
+                "anchors_total": ta["anchors_total"],
+                "anchors_source_present": ta["anchors_source_present"],
+                "anchors_positive": ta["anchors_positive"],
+                "anchors_intermediate": ta["anchors_intermediate"],
+                "anchors_negative": ta["anchors_negative"],
+                "positive_anchor_fraction": ta["positive_anchor_fraction"],
+                "negative_anchor_fraction": ta["negative_anchor_fraction"],
+                "class_support_flag": ta["class_support_flag"],
+                "collection": ta["collection"],
+                "tax_group": ta["tax_group"],
+                "jaspar_tf_class": ta["jaspar_tf_class"],
+                "jaspar_tf_family": ta["jaspar_tf_family"],
+                "includes_homo_sapiens": ta["includes_homo_sapiens"],
+                "includes_mus_musculus": ta["includes_mus_musculus"],
+                "includes_rattus_norvegicus": ta["includes_rattus_norvegicus"],
+                "source_species_count": ta["source_species_count"],
+                "source_species": ta["source_species"],
+                "genomic_blocks": int(raw["genomic_blocks"]),
+                "jackknife_blocks": int(raw["jackknife_blocks"]),
+            }
+            for name in contrast_float_fields:
+                row[name] = None if raw[name] == "NA" else float(raw[name])
+            for isoform_name, source in (("ta", ta), ("dn", dn)):
+                for name in (
+                    "confidence_interval_95_lower",
+                    "confidence_interval_95_upper",
+                    "q_value_bh_tax_group",
+                    "evaluation_status",
+                    "saos2_or",
+                    "skmel29_2_or",
+                    "series_direction_consistent",
+                ):
+                    row[f"{isoform_name}_{name}"] = source[name]
+            log_difference = row["ta_vs_dn_log_odds_difference"]
+            ratio = row["ta_vs_dn_odds_ratio_ratio"]
+            standard_error = row["jackknife_se"]
+            estimable = (
+                log_difference is not None and ratio is not None and ratio > 0
+                and standard_error is not None and standard_error > 0
+                and row["jackknife_blocks"] == row["genomic_blocks"]
+                and row["jackknife_blocks"] >= 20
+            )
+            if estimable:
+                z_value = log_difference / standard_error
+                row["z_value"] = z_value
+                row["p_value"] = math.erfc(abs(z_value) / math.sqrt(2))
+                row["confidence_interval_95_lower"] = math.exp(
+                    log_difference - 1.959963984540054 * standard_error
+                )
+                row["confidence_interval_95_upper"] = math.exp(
+                    log_difference + 1.959963984540054 * standard_error
+                )
+                row["evaluation_status"] = "ok"
+            else:
+                row["z_value"] = None
+                row["p_value"] = None
+                row["confidence_interval_95_lower"] = None
+                row["confidence_interval_95_upper"] = None
+                row["evaluation_status"] = "not_estimable"
+            row["q_value_bh_tax_group"] = None
+            series_ratios = (
+                row["saos2_ta_vs_dn_odds_ratio_ratio"],
+                row["skmel29_2_ta_vs_dn_odds_ratio_ratio"],
+            )
+            if all(value is not None and value > 0 for value in series_ratios):
+                row["series_contrast_direction_consistent"] = (
+                    all(value > 1 for value in series_ratios)
+                    or all(value < 1 for value in series_ratios)
+                )
+            else:
+                row["series_contrast_direction_consistent"] = None
+            contrast_rows.append(row)
+        bh_adjust_isoform_contrast(contrast_rows, len(tasks))
+        contrast_json = staging / "isoform_contrast.jsonl"
+        with contrast_json.open("x", encoding="utf-8") as handle:
+            for row in contrast_rows:
+                handle.write(json.dumps(row, sort_keys=True) + "\n")
+
         paths = {
             "cofactor_distance_block_component":
                 table_root / "cofactor_distance_block_component" / "part-000000.parquet",
@@ -1068,6 +1319,9 @@ ORDER BY t.isoform, t.distance_band_order, t.motif_id
                 table_root / "cofactor_distance_class_count" / "part-000000.parquet",
             "cofactor_distance_enrichment":
                 table_root / "cofactor_distance_enrichment" / "part-000000.parquet",
+            "cofactor_distance_isoform_contrast":
+                table_root / "cofactor_distance_isoform_contrast" /
+                "part-000000.parquet",
             "cofactor_distance_top_bottom_20":
                 table_root / "cofactor_distance_top_bottom_20" / "part-000000.parquet",
             "cofactor_distance_top_bottom_20_human_source":
@@ -1084,6 +1338,10 @@ ORDER BY t.isoform, t.distance_band_order, t.motif_id
         run_duckdb(arguments.duckdb, database, f"""
 CREATE TABLE cofactor_distance_enrichment AS
 SELECT * FROM read_json_auto({sql_string(result_json)}, format='newline_delimited');
+CREATE TABLE cofactor_distance_isoform_contrast AS
+SELECT * FROM read_json_auto(
+  {sql_string(contrast_json)}, format='newline_delimited'
+);
 CREATE TABLE cofactor_distance_top_bottom_20 AS
 WITH ranked AS (
   SELECT 'enriched'::VARCHAR AS direction,
@@ -1099,10 +1357,25 @@ WITH ranked AS (
            ORDER BY adjusted_odds_ratio ASC, motif_id
          ) AS rank, *
   FROM cofactor_distance_enrichment WHERE evaluation_status='ok'
+), selected AS (
+  SELECT * FROM ranked WHERE rank <= 20
 )
-SELECT * FROM ranked WHERE rank <= 20
-ORDER BY isoform, distance_band_order,
-         CASE direction WHEN 'enriched' THEN 1 ELSE 2 END, rank;
+SELECT s.*,
+       c.ta_adjusted_odds_ratio, c.ta_confidence_interval_95_lower,
+       c.ta_confidence_interval_95_upper, c.ta_q_value_bh_tax_group,
+       c.dn_adjusted_odds_ratio, c.dn_confidence_interval_95_lower,
+       c.dn_confidence_interval_95_upper, c.dn_q_value_bh_tax_group,
+       c.ta_vs_dn_odds_ratio_ratio, c.ta_vs_dn_log_odds_difference,
+       c.confidence_interval_95_lower AS ta_vs_dn_confidence_interval_95_lower,
+       c.confidence_interval_95_upper AS ta_vs_dn_confidence_interval_95_upper,
+       c.p_value AS ta_vs_dn_p_value,
+       c.q_value_bh_tax_group AS ta_vs_dn_q_value_bh_tax_group,
+       c.evaluation_status AS ta_vs_dn_evaluation_status,
+       c.series_contrast_direction_consistent
+FROM selected s
+JOIN cofactor_distance_isoform_contrast c USING (motif_id, distance_band)
+ORDER BY s.isoform, s.distance_band_order,
+         CASE s.direction WHEN 'enriched' THEN 1 ELSE 2 END, s.rank;
 CREATE TABLE cofactor_distance_top_bottom_20_human_source AS
 WITH ranked AS (
   SELECT 'enriched'::VARCHAR AS direction,
@@ -1120,12 +1393,29 @@ WITH ranked AS (
          ) AS rank, *
   FROM cofactor_distance_enrichment
   WHERE evaluation_status='ok' AND includes_homo_sapiens
+), selected AS (
+  SELECT * FROM ranked WHERE rank <= 20
 )
-SELECT * FROM ranked WHERE rank <= 20
-ORDER BY isoform, distance_band_order,
-         CASE direction WHEN 'enriched' THEN 1 ELSE 2 END, rank;
+SELECT s.*,
+       c.ta_adjusted_odds_ratio, c.ta_confidence_interval_95_lower,
+       c.ta_confidence_interval_95_upper, c.ta_q_value_bh_tax_group,
+       c.dn_adjusted_odds_ratio, c.dn_confidence_interval_95_lower,
+       c.dn_confidence_interval_95_upper, c.dn_q_value_bh_tax_group,
+       c.ta_vs_dn_odds_ratio_ratio, c.ta_vs_dn_log_odds_difference,
+       c.confidence_interval_95_lower AS ta_vs_dn_confidence_interval_95_lower,
+       c.confidence_interval_95_upper AS ta_vs_dn_confidence_interval_95_upper,
+       c.p_value AS ta_vs_dn_p_value,
+       c.q_value_bh_tax_group AS ta_vs_dn_q_value_bh_tax_group,
+       c.evaluation_status AS ta_vs_dn_evaluation_status,
+       c.series_contrast_direction_consistent
+FROM selected s
+JOIN cofactor_distance_isoform_contrast c USING (motif_id, distance_band)
+ORDER BY s.isoform, s.distance_band_order,
+         CASE s.direction WHEN 'enriched' THEN 1 ELSE 2 END, s.rank;
 CREATE UNIQUE INDEX distance_result_idx
   ON cofactor_distance_enrichment(motif_id, isoform, distance_band);
+CREATE UNIQUE INDEX distance_isoform_contrast_idx
+  ON cofactor_distance_isoform_contrast(motif_id, distance_band);
 COPY cofactor_distance_block_component
   TO {sql_string(paths['cofactor_distance_block_component'])}
   (FORMAT PARQUET, COMPRESSION ZSTD);
@@ -1134,6 +1424,9 @@ COPY cofactor_distance_class_count
   (FORMAT PARQUET, COMPRESSION ZSTD);
 COPY cofactor_distance_enrichment
   TO {sql_string(paths['cofactor_distance_enrichment'])}
+  (FORMAT PARQUET, COMPRESSION ZSTD);
+COPY cofactor_distance_isoform_contrast
+  TO {sql_string(paths['cofactor_distance_isoform_contrast'])}
   (FORMAT PARQUET, COMPRESSION ZSTD);
 COPY cofactor_distance_top_bottom_20
   TO {sql_string(paths['cofactor_distance_top_bottom_20'])}
@@ -1150,6 +1443,9 @@ COPY jaspar_motif_set_matrix TO {sql_string(paths['jaspar_motif_set_matrix'])}
 COPY cofactor_distance_enrichment
   TO {sql_string(staging / 'cofactor_distance_enrichment.tsv')}
   (FORMAT CSV, DELIMITER '\t', HEADER, NULL 'NA');
+COPY cofactor_distance_isoform_contrast
+  TO {sql_string(staging / 'cofactor_distance_isoform_contrast.tsv')}
+  (FORMAT CSV, DELIMITER '\t', HEADER, NULL 'NA');
 COPY cofactor_distance_top_bottom_20
   TO {sql_string(staging / 'cofactor_distance_top_bottom_20.tsv')}
   (FORMAT CSV, DELIMITER '\t', HEADER, NULL 'NA');
@@ -1159,18 +1455,27 @@ COPY cofactor_distance_top_bottom_20_human_source
 CHECKPOINT;
 """)
         result_json.unlink()
+        contrast_json.unlink()
         raw_tsv.unlink()
+        raw_contrast_tsv.unlink()
         counts = run_json(arguments.duckdb, database, """
 SELECT (SELECT count(*) FROM cofactor_distance_enrichment)::BIGINT AS results,
        (SELECT count(*) FROM cofactor_distance_top_bottom_20)::BIGINT AS rankings,
        (SELECT count(*) FROM cofactor_distance_enrichment
-        WHERE evaluation_status='ok')::BIGINT AS estimable;
+        WHERE evaluation_status='ok')::BIGINT AS estimable,
+       (SELECT count(*) FROM cofactor_distance_isoform_contrast)::BIGINT
+         AS isoform_contrasts,
+       (SELECT count(*) FROM cofactor_distance_isoform_contrast
+        WHERE evaluation_status='ok')::BIGINT AS estimable_isoform_contrasts;
 """)[0]
         expected_results = len(tasks) * len(DISTANCE_BANDS) * 2
         if int(counts["results"]) != expected_results:
             raise DistanceEnrichmentError("final result cardinality differs")
+        expected_contrasts = len(tasks) * len(DISTANCE_BANDS)
+        if int(counts["isoform_contrasts"]) != expected_contrasts:
+            raise DistanceEnrichmentError("isoform-contrast cardinality differs")
         manifest = {
-            "schema_version": 1,
+            "schema_version": FINAL_SCHEMA_VERSION,
             "run_id": config["run_id"],
             "analysis": config["analysis"],
             "tax_group": config["tax_group"],
@@ -1178,6 +1483,12 @@ SELECT (SELECT count(*) FROM cofactor_distance_enrichment)::BIGINT AS results,
             "source_species_semantics": config["source_species_semantics"],
             "chromosomes": config["chromosomes"],
             "source_commit": config["source_commit"],
+            "task_source_commit": config["source_commit"],
+            "finalizer_source": finalizer_identity["source"],
+            "finalizer_source_commit": finalizer_identity["commit"],
+            "finalizer_source_dirty": finalizer_identity["dirty"],
+            "finalizer_scientific_source_sha256":
+                finalizer_identity["scientific_source_sha256"],
             "task_count": len(tasks),
             "human_source_task_count": config["human_source_task_count"],
             "source_species_unspecified_task_count":
@@ -1185,8 +1496,14 @@ SELECT (SELECT count(*) FROM cofactor_distance_enrichment)::BIGINT AS results,
             "result_rows": int(counts["results"]),
             "estimable_rows": int(counts["estimable"]),
             "ranking_rows": int(counts["rankings"]),
+            "isoform_contrast_rows": int(counts["isoform_contrasts"]),
+            "estimable_isoform_contrast_rows":
+                int(counts["estimable_isoform_contrasts"]),
             "multiple_testing_family_size_per_isoform_band": len(tasks),
+            "multiple_testing_family_size_per_isoform_contrast_band": len(tasks),
             "uncertainty": "5Mb genomic-block delete-one-cluster jackknife",
+            "isoform_contrast_uncertainty":
+                "paired 5Mb genomic-block delete-one-cluster jackknife",
             "common_effect": "Mantel-Haenszel across TP73 score strata and series",
             "distance_bands": list(DISTANCE_BANDS),
             "excluded_series": config["excluded_series"],

@@ -31,41 +31,59 @@ COPY (
 
 COPY (
   WITH anchor AS (
-    SELECT i, (100 + 200 * i)::BIGINT AS anchor_start,
-           (116 + 200 * i)::BIGINT AS anchor_end,
+    SELECT b, i, (5000000 * b + 100 + 200 * i)::BIGINT AS anchor_start,
+           (5000000 * b + 116 + 200 * i)::BIGINT AS anchor_end,
            CASE WHEN i < 4 THEN 'positive'
                 WHEN i = 4 THEN 'intermediate' ELSE 'negative' END AS class
-    FROM range(8) r(i)
+    FROM range(24) blocks(b) CROSS JOIN range(8) anchors(i)
   )
   SELECT '1'::VARCHAR AS chrom, anchor_start, anchor_end,
          3.0::FLOAT AS anchor_score,
-         (class = 'positive' AND i <> 3 OR class = 'negative' AND i = 5)
+         (class = 'positive' AND (
+              b <> 23 AND i <> 3 OR b = 23 AND i < 2
+          ) OR class = 'negative' AND i = 5)
            AS supported_tp73_saos2_TA,
-         (class = 'positive' AND i = 3 OR class = 'negative' AND i <> 5)
+         (class = 'positive' AND (
+              b <> 23 AND i = 3 OR b = 23 AND i >= 2
+          ) OR class = 'negative' AND i <> 5)
            AS supported_negative_control_saos2_TA,
-         (class = 'positive' AND i = 3 OR class = 'negative' AND i <> 7)
+         (class = 'positive' AND (
+              b <> 22 AND i = 3 OR b = 22 AND i < 2
+          ) OR class = 'negative' AND i <> 7)
            AS supported_tp73_saos2_DN,
-         (class = 'positive' AND i <> 3 OR class = 'negative' AND i = 7)
+         (class = 'positive' AND (
+              b <> 22 AND i <> 3 OR b = 22 AND i >= 2
+          ) OR class = 'negative' AND i = 7)
            AS supported_negative_control_saos2_DN,
-         (class = 'positive' AND i <> 3 OR class = 'negative' AND i = 5)
+         (class = 'positive' AND (
+              b <> 23 AND i <> 3 OR b = 23 AND i < 2
+          ) OR class = 'negative' AND i = 5)
            AS supported_tp73_skmel29_2_TA,
-         (class = 'positive' AND i = 3 OR class = 'negative' AND i <> 5)
+         (class = 'positive' AND (
+              b <> 23 AND i = 3 OR b = 23 AND i >= 2
+          ) OR class = 'negative' AND i <> 5)
            AS supported_negative_control_skmel29_2_TA,
-         (class = 'positive' AND i = 3 OR class = 'negative' AND i <> 7)
+         (class = 'positive' AND (
+              b <> 22 AND i = 3 OR b = 22 AND i < 2
+          ) OR class = 'negative' AND i <> 7)
            AS supported_tp73_skmel29_2_DN,
-         (class = 'positive' AND i <> 3 OR class = 'negative' AND i = 7)
+         (class = 'positive' AND (
+              b <> 22 AND i <> 3 OR b = 22 AND i >= 2
+          ) OR class = 'negative' AND i = 7)
            AS supported_negative_control_skmel29_2_DN
   FROM anchor
 ) TO '$temporary/anchors.parquet' (FORMAT PARQUET);
 
 COPY (
-  SELECT (116 + 200 * i)::BIGINT AS start,
-         (125 + 200 * i)::BIGINT AS "end",
+  SELECT (5000000 * b + 116 + 200 * i)::BIGINT AS start,
+         (5000000 * b + 125 + 200 * i)::BIGINT AS "end",
          CASE WHEN i < 4 THEN 3.0 ELSE 0.0 END::FLOAT AS score
-  FROM range(5) r(i)
+  FROM range(24) blocks(b) CROSS JOIN range(5) anchors(i)
 ) TO '$temporary/hits-plus.parquet' (FORMAT PARQUET);
 COPY (
-  SELECT 116::BIGINT AS start, 125::BIGINT AS "end", 2.5::FLOAT AS score
+  SELECT (5000000 * b + 116)::BIGINT AS start,
+         (5000000 * b + 125)::BIGINT AS "end", 2.5::FLOAT AS score
+  FROM range(24) blocks(b)
 ) TO '$temporary/hits-minus.parquet' (FORMAT PARQUET);
 
 COPY (
@@ -235,6 +253,23 @@ database="$run_root/final/distance_enrichment/tp73_distance_cofactor_enrichment.
 duckdb -light-mode -batch "$database" >/dev/null <<SQL
 SELECT CASE WHEN (SELECT count(*) FROM cofactor_distance_enrichment) <> 24
   THEN error('result cardinality is wrong') END;
+SELECT CASE WHEN (SELECT count(*) FROM cofactor_distance_isoform_contrast) <> 12
+  THEN error('isoform-contrast cardinality is wrong') END;
+SELECT CASE WHEN (
+  SELECT ta_vs_dn_odds_ratio_ratio IS NULL
+      OR abs(ta_vs_dn_odds_ratio_ratio - 32.2624) > 1e-7
+  FROM cofactor_distance_isoform_contrast
+  WHERE motif_id='MA0001.1' AND distance_band='adjacent_0_5'
+)
+  THEN error('TA-versus-DN point contrast is wrong') END;
+SELECT CASE WHEN NOT EXISTS (
+  SELECT 1 FROM cofactor_distance_isoform_contrast
+  WHERE motif_id='MA0001.1' AND distance_band='adjacent_0_5'
+    AND evaluation_status='ok' AND jackknife_blocks>=20
+    AND confidence_interval_95_lower IS NOT NULL
+    AND confidence_interval_95_upper IS NOT NULL
+    AND q_value_bh_tax_group IS NOT NULL
+) THEN error('paired isoform jackknife was not evaluated') END;
 SELECT CASE WHEN EXISTS (
   SELECT 1 FROM cofactor_distance_enrichment WHERE tax_group <> 'vertebrates'
 ) THEN error('non-vertebrate motif entered the primary result') END;
@@ -257,6 +292,11 @@ SELECT CASE WHEN NOT EXISTS (
   SELECT 1 FROM information_schema.tables
   WHERE table_name='cofactor_distance_top_bottom_20_human_source'
 ) THEN error('exact-human sensitivity ranking table is absent') END;
+SELECT CASE WHEN NOT EXISTS (
+  SELECT 1 FROM information_schema.columns
+  WHERE table_name='cofactor_distance_top_bottom_20_human_source'
+    AND column_name='ta_vs_dn_q_value_bh_tax_group'
+) THEN error('rankings do not expose the direct isoform contrast') END;
 SQL
 
 python3 - "$run_root" <<'PY'
@@ -274,6 +314,8 @@ assert config["source_species_unspecified_task_count"] == 0
 assert "not a binding-species restriction" in config["source_species_semantics"]
 assert manifest["chromosomes"] == ["1"]
 assert manifest["tax_group"] == "vertebrates"
+assert manifest["schema_version"] == 2
+assert manifest["isoform_contrast_rows"] == 12
 PY
 
 echo "TP73 distance cofactor enrichment manager tests passed."
