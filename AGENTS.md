@@ -15,6 +15,11 @@ references, or empirical cofactor score bands, also read
 For all-JASPAR enrichment/depletion around TP73 anchors, depth-stratified
 CUT&RUN summaries, or their Slurm production run, also read
 [`docs/jaspar2026_chr1_all_cofactor_enrichment_run.md`](docs/jaspar2026_chr1_all_cofactor_enrichment_run.md).
+For motif co-occurrence networks, outcome-interaction edges, WGCNA sensitivity,
+or later expression-linked regulatory networks, read
+[`docs/tp73_cofactor_network_analysis.md`](docs/tp73_cofactor_network_analysis.md).
+The named-POU family result and common-score-zero sensitivity design are in
+[`docs/tp73_pou_family_autosomes_20260823.md`](docs/tp73_pou_family_autosomes_20260823.md).
 For species-aware vertebrate filtering and the isoform-by-exclusive-distance
 TP73 cofactor ranking, also read
 [`docs/tp73_distance_species_aware_cofactor_enrichment.md`](docs/tp73_distance_species_aware_cofactor_enrichment.md).

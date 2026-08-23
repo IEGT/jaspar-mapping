@@ -19,6 +19,7 @@ scripts/bedtools_map_serial.sh
 scripts/benchmark_sparse_layout.py
 scripts/build_density_capped_thresholds.py
 scripts/build_fasta_index.py
+scripts/build_fixed_threshold_subset.py
 scripts/build_h3k4me3_anchor_signal.py
 scripts/build_jaspar_metadata_catalog.py
 scripts/build_motif_context.py

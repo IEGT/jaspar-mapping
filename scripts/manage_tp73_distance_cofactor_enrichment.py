@@ -30,7 +30,7 @@ DISTANCE_BANDS = (
     "gap_51_100",
     "gap_101_150",
 )
-FINAL_SCHEMA_VERSION = 3
+FINAL_SCHEMA_VERSION = 4
 PRESPECIFIED_COFACTOR_NAMES = (
     "POU2F2",
     "SP1",
@@ -38,6 +38,7 @@ PRESPECIFIED_COFACTOR_NAMES = (
     "REST",
     "E2F1",
 )
+POU_NAMED_MOTIF_RULE = "case-insensitive JASPAR motif_name prefix POU"
 SCIENTIFIC_FILES = (
     "scripts/build_tp73_distance_cofactor_counts.py",
     "scripts/manage_tp73_distance_cofactor_enrichment.py",
@@ -932,6 +933,13 @@ SELECT 'prespecified_panel'::VARCHAR, 'tracked'::VARCHAR,
        c.*
 FROM {source_table} c
 WHERE c.motif_name IN {panel}
+UNION ALL
+SELECT 'pou_family_panel'::VARCHAR, 'tracked'::VARCHAR,
+       c.ta_vs_dn_odds_ratio_ratio::DOUBLE,
+       NULL::DOUBLE,
+       c.*
+FROM {source_table} c
+WHERE upper(c.motif_name) LIKE 'POU%'
 """
 
 
@@ -1515,7 +1523,8 @@ CREATE TEMP VIEW cofactor_distance_highlight_candidate AS
 {highlight_candidate_sql('cofactor_distance_isoform_comparison')};
 CREATE TABLE cofactor_distance_highlight_20 AS
 WITH ranked AS (
-  SELECT CASE WHEN selection_criterion='prespecified_panel' THEN NULL
+  SELECT CASE WHEN selection_criterion IN
+                         ('prespecified_panel', 'pou_family_panel') THEN NULL
               ELSE row_number() OVER (
                 PARTITION BY selection_criterion, selection_direction,
                              distance_band
@@ -1525,14 +1534,16 @@ WITH ranked AS (
   FROM cofactor_distance_highlight_candidate
 )
 SELECT * FROM ranked
-WHERE selection_criterion='prespecified_panel' OR selection_rank <= 20
+WHERE selection_criterion IN ('prespecified_panel', 'pou_family_panel')
+   OR selection_rank <= 20
 ORDER BY distance_band_order, selection_criterion, selection_direction,
          selection_rank NULLS LAST, motif_name, motif_id;
 CREATE TEMP VIEW cofactor_distance_highlight_candidate_human_source AS
 {highlight_candidate_sql('cofactor_distance_isoform_comparison_human_source')};
 CREATE TABLE cofactor_distance_highlight_20_human_source AS
 WITH ranked AS (
-  SELECT CASE WHEN selection_criterion='prespecified_panel' THEN NULL
+  SELECT CASE WHEN selection_criterion IN
+                         ('prespecified_panel', 'pou_family_panel') THEN NULL
               ELSE row_number() OVER (
                 PARTITION BY selection_criterion, selection_direction,
                              distance_band
@@ -1542,7 +1553,8 @@ WITH ranked AS (
   FROM cofactor_distance_highlight_candidate_human_source
 )
 SELECT * FROM ranked
-WHERE selection_criterion='prespecified_panel' OR selection_rank <= 20
+WHERE selection_criterion IN ('prespecified_panel', 'pou_family_panel')
+   OR selection_rank <= 20
 ORDER BY distance_band_order, selection_criterion, selection_direction,
          selection_rank NULLS LAST, motif_name, motif_id;
 CREATE TABLE cofactor_distance_top_bottom_20 AS
@@ -1708,7 +1720,13 @@ SELECT (SELECT count(*) FROM cofactor_distance_enrichment)::BIGINT AS results,
          AS human_source_highlights,
        (SELECT count(*) FROM cofactor_distance_highlight_20
         WHERE selection_criterion='prespecified_panel')::BIGINT
-         AS prespecified_panel_rows;
+         AS prespecified_panel_rows,
+       (SELECT count(*) FROM cofactor_distance_highlight_20
+        WHERE selection_criterion='pou_family_panel')::BIGINT
+         AS pou_named_panel_rows,
+       (SELECT count(*) FROM cofactor_distance_highlight_20_human_source
+        WHERE selection_criterion='pou_family_panel')::BIGINT
+         AS human_source_pou_named_panel_rows;
 """)[0]
         expected_results = len(tasks) * len(DISTANCE_BANDS) * 2
         if int(counts["results"]) != expected_results:
@@ -1759,6 +1777,10 @@ SELECT (SELECT count(*) FROM cofactor_distance_enrichment)::BIGINT AS results,
                 int(counts["human_source_highlights"]),
             "prespecified_panel_rows": int(counts["prespecified_panel_rows"]),
             "prespecified_cofactor_names": list(PRESPECIFIED_COFACTOR_NAMES),
+            "pou_named_panel_rows": int(counts["pou_named_panel_rows"]),
+            "human_source_pou_named_panel_rows":
+                int(counts["human_source_pou_named_panel_rows"]),
+            "pou_named_motif_rule": POU_NAMED_MOTIF_RULE,
             "multiple_testing_family_size_per_isoform_band": len(tasks),
             "multiple_testing_family_size_per_isoform_contrast_band": len(tasks),
             "uncertainty": "5Mb genomic-block delete-one-cluster jackknife",

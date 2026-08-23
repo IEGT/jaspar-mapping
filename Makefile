@@ -192,6 +192,7 @@ check-duckdb: cutandrun_score_calibration pssm_scan_parquet
 	bash tests/test_motif_context.sh
 	bash tests/test_finalize_motif_context_run.sh
 	bash tests/test_motif_score_thresholds.sh
+	bash tests/test_fixed_threshold_subset.sh
 	bash tests/test_motif_threshold_calibration_manager.sh
 	bash tests/test_stage_motif_context_inputs.sh
 	bash tests/test_sparse_context_maxima.sh

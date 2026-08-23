@@ -115,8 +115,10 @@ existing schema-1 final directory is never overwritten; use a new
 task source, the submission command supplies `--finalizer-source-commit`; the
 compute node verifies file hashes and does not need a Git executable.
 
-Schema 3 adds presentation tables only; it reuses the same block components
-and does not alter any scientific estimate.
+Schema 3 added presentation tables only. Schema 4 additionally appends every
+vertebrate JASPAR matrix whose name begins with `POU` (case-insensitive) under
+the separate `pou_family_panel` criterion. Both schemas reuse the same block
+components and do not alter any scientific estimate.
 
 ## Colleague-facing highlight criteria
 
@@ -139,6 +141,13 @@ POU2F2, SP1, PATZ1, REST, and E2F1 are appended under
 data-driven rank. Their rows retain their actual ranks under all three complete
 ranking systems, making absence from a top 20 distinguishable from absence
 from the analysis.
+
+Schema 4 also appends the complete named POU family under `pou_family_panel`.
+This is deliberately distinct from the historical panel and includes both
+POU6F1 matrices and POU-SOX2 heteromeric matrices. It does not silently include
+HNF1A, HNF1B, or HMBOX1 merely because JASPAR classifies them as POU-domain
+factors; those are related controls rather than names matching the declared
+`POU*` rule.
 
 The submission entry point is:
 
