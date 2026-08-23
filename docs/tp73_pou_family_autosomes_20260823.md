@@ -88,3 +88,44 @@ the compact count/block aggregation against the existing score-floor `-1`
 Parquet. No genome or motif rescan is required. The common-zero result must be
 reported beside, not in place of, the calibrated result because very frequent
 motifs may lose a useful strict-negative comparison class at score 0.
+
+The production sensitivity run completed across autosomes 1-22. All 108
+motif-by-distance estimates remain depleted for both isoforms, all 108 retain
+the same direction in Saos-2 and `skmel29_2`, and DNp73 depletion remains
+stronger than TAp73 depletion in every cell. Thus the family-wide direction is
+not an artifact of using motif-specific thresholds between 3 and 6.
+
+| Matrix | Common-0 TA OR range | Common-0 DN OR range | Common-0 TA/DN OR range |
+|---|---:|---:|---:|
+| POU5F1 `MA1115.2` | 0.440-0.800 | 0.365-0.654 | 1.179-1.268 |
+| POU5F1B `MA0792.1` | 0.505-0.759 | 0.408-0.588 | 1.224-1.322 |
+| POU3F1 `MA0786.2` | 0.544-0.760 | 0.425-0.573 | 1.266-1.352 |
+| POU6F1 `MA0628.2` | 0.567-0.811 | 0.443-0.667 | 1.216-1.390 |
+| POU3F3 `MA0788.1` | 0.584-0.764 | 0.451-0.584 | 1.297-1.368 |
+| POU2F1 `MA0785.2` | 0.598-0.777 | 0.472-0.612 | 1.250-1.309 |
+| POU4F1 `MA0790.2` | 0.589-0.779 | 0.451-0.625 | 1.246-1.408 |
+| POU4F3 `MA0791.2` | 0.602-0.781 | 0.462-0.626 | 1.249-1.404 |
+| Pou5f1::Sox2 `MA0142.1` | 0.607-0.798 | 0.485-0.643 | 1.215-1.265 |
+| POU6F1 `MA1549.2` | 0.641-0.890 | 0.531-0.810 | 1.098-1.221 |
+| POU3F2 `MA0787.1` | 0.641-0.794 | 0.502-0.635 | 1.251-1.350 |
+| POU2F3 `MA0627.3` | 0.651-0.789 | 0.517-0.618 | 1.244-1.306 |
+| POU3F4 `MA0789.1` | 0.700-0.790 | 0.544-0.631 | 1.217-1.312 |
+| POU6F2 `MA0793.2` | 0.687-0.880 | 0.557-0.786 | 1.119-1.250 |
+| POU2F2 `MA0507.3` | 0.720-0.831 | 0.501-0.681 | 1.221-1.438 |
+| POU4F2 `MA0683.2` | 0.747-0.833 | 0.482-0.710 | 1.173-1.551 |
+| POU1F1 `MA0784.3` | 0.725-0.826 | 0.508-0.664 | 1.244-1.426 |
+| POU2F1::SOX2 `MA1962.1` | 0.749-0.815 | 0.550-0.670 | 1.217-1.360 |
+
+POU2F1 is more depleted than POU2F2 in most non-overlapping bands, especially
+at gaps of 51-150 bp, whereas POU2F2 is more depleted in the overlap band.
+This makes a recollection of POU2F1 as the stronger distal inhibitor
+understandable, but it does not change the source audit: the publication code
+selected POU2F2.
+
+The score-zero package is
+`/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_tp73_distance_pou_common0_v1`
+and its schema-4 final was produced by source commit `e20ff49`. The calibrated
+schema-4 comparison is under
+`jaspar2026_grch38_tp73_distance_species_vertebrates_v1/final/`
+`distance_enrichment_isoform_highlights_v4`. Both manifests record the full
+finalizer commit and a clean source tree.
