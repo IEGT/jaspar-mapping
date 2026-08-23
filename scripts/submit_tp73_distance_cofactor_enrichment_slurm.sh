@@ -299,7 +299,8 @@ final_submission=(
     "${dependency[@]}" --output="$run_root/logs/finalize-%j.out"
     --error="$run_root/logs/finalize-%j.err"
     "$source/scripts/manage_tp73_distance_cofactor_enrichment.py"
-    finalize --run-root "$run_root" --duckdb "$duckdb"
+    finalize --run-root "$run_root" --finalizer-source "$source"
+    --duckdb "$duckdb"
 )
 if [[ $dry_run -eq 1 ]]; then
     printf '%q ' "${final_submission[@]}"; printf '\n'

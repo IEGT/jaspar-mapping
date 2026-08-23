@@ -249,6 +249,22 @@ grep -q $'complete\t2' <<<"$status"
 "$repository_root/scripts/manage_tp73_distance_cofactor_enrichment.py" finalize \
     --run-root "$run_root"
 
+# Slurm copies a directly submitted executable into its spool directory. The
+# finalizer must use the provenance-recorded repository, not its staged __file__.
+staged_manager="$temporary/slurm-spool/manage_tp73_distance_cofactor_enrichment.py"
+mkdir -p "$(dirname "$staged_manager")"
+cp "$repository_root/scripts/manage_tp73_distance_cofactor_enrichment.py" \
+    "$staged_manager"
+chmod +x "$staged_manager"
+"$staged_manager" finalize --run-root "$run_root" \
+    --final-name distance_enrichment_staged
+[[ -f $run_root/final/distance_enrichment_staged/manifest.json ]] || {
+    echo "E: spool-staged finalizer did not publish its output" >&2
+    exit 1
+}
+grep -Fq "\"finalizer_source\": \"$repository_root\"" \
+    "$run_root/final/distance_enrichment_staged/manifest.json"
+
 database="$run_root/final/distance_enrichment/tp73_distance_cofactor_enrichment.duckdb"
 duckdb -light-mode -batch "$database" >/dev/null <<SQL
 SELECT CASE WHEN (SELECT count(*) FROM cofactor_distance_enrichment) <> 24

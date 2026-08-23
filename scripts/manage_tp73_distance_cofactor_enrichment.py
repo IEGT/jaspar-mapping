@@ -985,7 +985,9 @@ def finalize(arguments: argparse.Namespace) -> None:
             )
         print(f"I: Reusing final output: {final}", file=sys.stderr)
         return
-    finalizer_source = Path(__file__).resolve().parent.parent
+    finalizer_source = (
+        arguments.finalizer_source or Path(config["source"])
+    ).resolve()
     finalizer_commit = arguments.finalizer_source_commit or config["source_commit"]
     finalizer_identity = runtime_source_identity(
         finalizer_source, finalizer_commit, arguments.finalizer_source_dirty
@@ -1865,6 +1867,11 @@ def parser() -> argparse.ArgumentParser:
     )
     finalize_parser.add_argument("--run-root", type=Path, required=True)
     finalize_parser.add_argument("--final-name", default="distance_enrichment")
+    finalize_parser.add_argument(
+        "--finalizer-source", type=Path,
+        help=("repository root containing the finalizer's scientific source; "
+              "defaults to the task source recorded by prepare"),
+    )
     finalize_parser.add_argument(
         "--finalizer-source-commit",
         help="commit of a finalizer newer than the task source (40 lowercase hex digits)",
