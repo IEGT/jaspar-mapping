@@ -22,7 +22,7 @@ mkdir -p "$scan/tables/jaspar2026/scan_file_inventory" \
 duckdb -light-mode -batch :memory: >/dev/null <<SQL
 COPY (
   SELECT * FROM (VALUES
-    ('MA0001.1', 'HUMAN_TEST', 9::BIGINT),
+    ('MA0001.1', 'POU2F2', 9::BIGINT),
     ('MA0002.1', 'MOUSE_TEST', 9::BIGINT),
     ('MA0003.1', 'PLANT_TEST', 9::BIGINT)
   ) AS v(motif_id, motif_name, motif_length)
@@ -137,7 +137,7 @@ printf '{}\n' > "$scan/manifest.json"
 duckdb -light-mode -batch "$catalog/jaspar_metadata.duckdb" >/dev/null <<SQL
 CREATE TABLE jaspar_matrix AS
 SELECT * FROM (VALUES
-  ('CORE', 'vertebrates', 'MA0001.1', 'MA0001', 1, 'HUMAN_TEST',
+  ('CORE', 'vertebrates', 'MA0001.1', 'MA0001', 1, 'POU2F2',
    'Class A', 'Family A', true, false, false, 1::BIGINT),
   ('CORE', 'vertebrates', 'MA0002.1', 'MA0002', 1, 'MOUSE_TEST',
    'Class B', 'Family B', false, true, false, 1::BIGINT),
@@ -209,7 +209,7 @@ task_count=$(
     echo "E: expected two vertebrate motif tasks, found $task_count" >&2
     exit 1
 }
-grep -q $'^0\tMA0001.1\tHUMAN_TEST' "$run_root/plan/tasks.tsv"
+grep -q $'^0\tMA0001.1\tPOU2F2' "$run_root/plan/tasks.tsv"
 grep -q $'^1\tMA0002.1\tMOUSE_TEST' "$run_root/plan/tasks.tsv"
 if grep -q 'MA0003.1' "$run_root/plan/tasks.tsv"; then
     echo "E: plant motif entered the vertebrate task family" >&2
@@ -270,6 +270,27 @@ SELECT CASE WHEN NOT EXISTS (
     AND confidence_interval_95_upper IS NOT NULL
     AND q_value_bh_tax_group IS NOT NULL
 ) THEN error('paired isoform jackknife was not evaluated') END;
+SELECT CASE WHEN NOT EXISTS (
+  SELECT 1 FROM cofactor_distance_isoform_contrast
+  WHERE motif_id='MA0001.1' AND distance_band='adjacent_0_5'
+    AND point_direction_pattern='TA_enriched_DN_depleted'
+    AND supported_direction_pattern='TA_enriched_DN_depleted'
+) THEN error('supported opposite-direction pattern was not classified') END;
+SELECT CASE WHEN NOT EXISTS (
+  SELECT 1 FROM cofactor_distance_isoform_comparison
+  WHERE motif_id='MA0001.1' AND distance_band='adjacent_0_5'
+    AND ta_enrichment_rank IS NOT NULL AND dn_depletion_rank IS NOT NULL
+    AND isoform_difference_absolute_rank IS NOT NULL
+) THEN error('side-by-side comparison ranks are absent') END;
+SELECT CASE WHEN (
+  SELECT count(DISTINCT selection_criterion)
+  FROM cofactor_distance_highlight_20
+  WHERE motif_id='MA0001.1' AND distance_band='adjacent_0_5'
+) <> 5 THEN error('all four highlight criteria plus panel are not represented') END;
+SELECT CASE WHEN (
+  SELECT count(*) FROM cofactor_distance_highlight_20
+  WHERE motif_id='MA0001.1' AND selection_criterion='prespecified_panel'
+) <> 6 THEN error('prespecified motif was not retained in every distance band') END;
 SELECT CASE WHEN EXISTS (
   SELECT 1 FROM cofactor_distance_enrichment WHERE tax_group <> 'vertebrates'
 ) THEN error('non-vertebrate motif entered the primary result') END;
@@ -314,8 +335,12 @@ assert config["source_species_unspecified_task_count"] == 0
 assert "not a binding-species restriction" in config["source_species_semantics"]
 assert manifest["chromosomes"] == ["1"]
 assert manifest["tax_group"] == "vertebrates"
-assert manifest["schema_version"] == 2
+assert manifest["schema_version"] == 3
 assert manifest["isoform_contrast_rows"] == 12
+assert manifest["prespecified_panel_rows"] == 6
+assert manifest["prespecified_cofactor_names"] == [
+    "POU2F2", "SP1", "PATZ1", "REST", "E2F1"
+]
 PY
 
 echo "TP73 distance cofactor enrichment manager tests passed."

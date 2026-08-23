@@ -30,7 +30,14 @@ DISTANCE_BANDS = (
     "gap_51_100",
     "gap_101_150",
 )
-FINAL_SCHEMA_VERSION = 2
+FINAL_SCHEMA_VERSION = 3
+PRESPECIFIED_COFACTOR_NAMES = (
+    "POU2F2",
+    "SP1",
+    "PATZ1",
+    "REST",
+    "E2F1",
+)
 SCIENTIFIC_FILES = (
     "scripts/build_tp73_distance_cofactor_counts.py",
     "scripts/manage_tp73_distance_cofactor_enrichment.py",
@@ -63,6 +70,10 @@ def sql_string(value: str | Path) -> str:
 
 def sql_path_list(paths: list[Path]) -> str:
     return "[" + ",".join(sql_string(path) for path in paths) + "]"
+
+
+def sql_string_list(values: tuple[str, ...]) -> str:
+    return "(" + ",".join(sql_string(value) for value in values) + ")"
 
 
 def parse_chromosomes(value: str) -> tuple[str, ...]:
@@ -874,6 +885,56 @@ def bh_adjust_isoform_contrast(
             row["q_value_bh_tax_group"] = min(1.0, next_value)
 
 
+def highlight_candidate_sql(source_table: str) -> str:
+    panel = sql_string_list(PRESPECIFIED_COFACTOR_NAMES)
+    return f"""
+SELECT 'TA_association'::VARCHAR AS selection_criterion,
+       CASE WHEN c.ta_adjusted_odds_ratio > 1
+            THEN 'enriched' ELSE 'depleted' END::VARCHAR AS selection_direction,
+       c.ta_adjusted_odds_ratio::DOUBLE AS selection_estimate,
+       abs(ln(c.ta_adjusted_odds_ratio))::DOUBLE AS selection_score,
+       c.*
+FROM {source_table} c
+WHERE c.ta_evaluation_status='ok' AND c.ta_q_value_bh_tax_group <= 0.05
+  AND c.ta_adjusted_odds_ratio <> 1
+UNION ALL
+SELECT 'DN_association'::VARCHAR,
+       CASE WHEN c.dn_adjusted_odds_ratio > 1
+            THEN 'enriched' ELSE 'depleted' END::VARCHAR,
+       c.dn_adjusted_odds_ratio::DOUBLE,
+       abs(ln(c.dn_adjusted_odds_ratio))::DOUBLE,
+       c.*
+FROM {source_table} c
+WHERE c.dn_evaluation_status='ok' AND c.dn_q_value_bh_tax_group <= 0.05
+  AND c.dn_adjusted_odds_ratio <> 1
+UNION ALL
+SELECT 'isoform_difference'::VARCHAR,
+       CASE WHEN c.ta_vs_dn_odds_ratio_ratio > 1
+            THEN 'TA_larger_OR' ELSE 'DN_larger_OR' END::VARCHAR,
+       c.ta_vs_dn_odds_ratio_ratio::DOUBLE,
+       abs(c.ta_vs_dn_log_odds_difference)::DOUBLE,
+       c.*
+FROM {source_table} c
+WHERE c.evaluation_status='ok' AND c.q_value_bh_tax_group <= 0.05
+  AND c.ta_vs_dn_odds_ratio_ratio <> 1
+UNION ALL
+SELECT 'opposite_direction'::VARCHAR,
+       c.supported_direction_pattern::VARCHAR,
+       c.ta_vs_dn_odds_ratio_ratio::DOUBLE,
+       abs(c.ta_vs_dn_log_odds_difference)::DOUBLE,
+       c.*
+FROM {source_table} c
+WHERE c.supported_direction_pattern <> 'not_supported'
+UNION ALL
+SELECT 'prespecified_panel'::VARCHAR, 'tracked'::VARCHAR,
+       c.ta_vs_dn_odds_ratio_ratio::DOUBLE,
+       NULL::DOUBLE,
+       c.*
+FROM {source_table} c
+WHERE c.motif_name IN {panel}
+"""
+
+
 def finalize(arguments: argparse.Namespace) -> None:
     run_root = arguments.run_root.expanduser().resolve()
     config = load_json(config_path(run_root))
@@ -1309,6 +1370,43 @@ ORDER BY t.distance_band_order, t.motif_id
                 row["series_contrast_direction_consistent"] = None
             contrast_rows.append(row)
         bh_adjust_isoform_contrast(contrast_rows, len(tasks))
+        for row in contrast_rows:
+            ta_odds_ratio = row["ta_adjusted_odds_ratio"]
+            dn_odds_ratio = row["dn_adjusted_odds_ratio"]
+            if ta_odds_ratio is None or dn_odds_ratio is None:
+                row["point_direction_pattern"] = "not_estimable"
+            elif ta_odds_ratio > 1 and dn_odds_ratio > 1:
+                row["point_direction_pattern"] = "both_enriched"
+            elif ta_odds_ratio < 1 and dn_odds_ratio < 1:
+                row["point_direction_pattern"] = "both_depleted"
+            elif ta_odds_ratio > 1 and dn_odds_ratio < 1:
+                row["point_direction_pattern"] = "TA_enriched_DN_depleted"
+            elif ta_odds_ratio < 1 and dn_odds_ratio > 1:
+                row["point_direction_pattern"] = "DN_enriched_TA_depleted"
+            else:
+                row["point_direction_pattern"] = "on_null_boundary"
+
+            contrast_q = row["q_value_bh_tax_group"]
+            ta_q = row["ta_q_value_bh_tax_group"]
+            dn_q = row["dn_q_value_bh_tax_group"]
+            all_tests_supported = (
+                row["evaluation_status"] == "ok"
+                and row["ta_evaluation_status"] == "ok"
+                and row["dn_evaluation_status"] == "ok"
+                and contrast_q is not None and contrast_q <= 0.05
+                and ta_q is not None and ta_q <= 0.05
+                and dn_q is not None and dn_q <= 0.05
+            )
+            if (all_tests_supported
+                    and row["ta_confidence_interval_95_lower"] > 1
+                    and row["dn_confidence_interval_95_upper"] < 1):
+                row["supported_direction_pattern"] = "TA_enriched_DN_depleted"
+            elif (all_tests_supported
+                  and row["dn_confidence_interval_95_lower"] > 1
+                  and row["ta_confidence_interval_95_upper"] < 1):
+                row["supported_direction_pattern"] = "DN_enriched_TA_depleted"
+            else:
+                row["supported_direction_pattern"] = "not_supported"
         contrast_json = staging / "isoform_contrast.jsonl"
         with contrast_json.open("x", encoding="utf-8") as handle:
             for row in contrast_rows:
@@ -1323,6 +1421,18 @@ ORDER BY t.distance_band_order, t.motif_id
                 table_root / "cofactor_distance_enrichment" / "part-000000.parquet",
             "cofactor_distance_isoform_contrast":
                 table_root / "cofactor_distance_isoform_contrast" /
+                "part-000000.parquet",
+            "cofactor_distance_isoform_comparison":
+                table_root / "cofactor_distance_isoform_comparison" /
+                "part-000000.parquet",
+            "cofactor_distance_isoform_comparison_human_source":
+                table_root / "cofactor_distance_isoform_comparison_human_source" /
+                "part-000000.parquet",
+            "cofactor_distance_highlight_20":
+                table_root / "cofactor_distance_highlight_20" /
+                "part-000000.parquet",
+            "cofactor_distance_highlight_20_human_source":
+                table_root / "cofactor_distance_highlight_20_human_source" /
                 "part-000000.parquet",
             "cofactor_distance_top_bottom_20":
                 table_root / "cofactor_distance_top_bottom_20" / "part-000000.parquet",
@@ -1344,6 +1454,97 @@ CREATE TABLE cofactor_distance_isoform_contrast AS
 SELECT * FROM read_json_auto(
   {sql_string(contrast_json)}, format='newline_delimited'
 );
+CREATE TABLE cofactor_distance_isoform_comparison AS
+SELECT c.*,
+       CASE WHEN ta_evaluation_status='ok' THEN row_number() OVER (
+         PARTITION BY distance_band
+         ORDER BY CASE WHEN ta_evaluation_status='ok' THEN 0 ELSE 1 END,
+                  ta_adjusted_odds_ratio DESC NULLS LAST, motif_id
+       ) END::BIGINT AS ta_enrichment_rank,
+       CASE WHEN ta_evaluation_status='ok' THEN row_number() OVER (
+         PARTITION BY distance_band
+         ORDER BY CASE WHEN ta_evaluation_status='ok' THEN 0 ELSE 1 END,
+                  ta_adjusted_odds_ratio ASC NULLS LAST, motif_id
+       ) END::BIGINT AS ta_depletion_rank,
+       CASE WHEN dn_evaluation_status='ok' THEN row_number() OVER (
+         PARTITION BY distance_band
+         ORDER BY CASE WHEN dn_evaluation_status='ok' THEN 0 ELSE 1 END,
+                  dn_adjusted_odds_ratio DESC NULLS LAST, motif_id
+       ) END::BIGINT AS dn_enrichment_rank,
+       CASE WHEN dn_evaluation_status='ok' THEN row_number() OVER (
+         PARTITION BY distance_band
+         ORDER BY CASE WHEN dn_evaluation_status='ok' THEN 0 ELSE 1 END,
+                  dn_adjusted_odds_ratio ASC NULLS LAST, motif_id
+       ) END::BIGINT AS dn_depletion_rank,
+       CASE WHEN evaluation_status='ok' THEN row_number() OVER (
+         PARTITION BY distance_band
+         ORDER BY CASE WHEN evaluation_status='ok' THEN 0 ELSE 1 END,
+                  abs(ta_vs_dn_log_odds_difference) DESC NULLS LAST, motif_id
+       ) END::BIGINT AS isoform_difference_absolute_rank
+FROM cofactor_distance_isoform_contrast c;
+CREATE TABLE cofactor_distance_isoform_comparison_human_source AS
+SELECT c.*,
+       CASE WHEN ta_evaluation_status='ok' THEN row_number() OVER (
+         PARTITION BY distance_band
+         ORDER BY CASE WHEN ta_evaluation_status='ok' THEN 0 ELSE 1 END,
+                  ta_adjusted_odds_ratio DESC NULLS LAST, motif_id
+       ) END::BIGINT AS ta_enrichment_rank,
+       CASE WHEN ta_evaluation_status='ok' THEN row_number() OVER (
+         PARTITION BY distance_band
+         ORDER BY CASE WHEN ta_evaluation_status='ok' THEN 0 ELSE 1 END,
+                  ta_adjusted_odds_ratio ASC NULLS LAST, motif_id
+       ) END::BIGINT AS ta_depletion_rank,
+       CASE WHEN dn_evaluation_status='ok' THEN row_number() OVER (
+         PARTITION BY distance_band
+         ORDER BY CASE WHEN dn_evaluation_status='ok' THEN 0 ELSE 1 END,
+                  dn_adjusted_odds_ratio DESC NULLS LAST, motif_id
+       ) END::BIGINT AS dn_enrichment_rank,
+       CASE WHEN dn_evaluation_status='ok' THEN row_number() OVER (
+         PARTITION BY distance_band
+         ORDER BY CASE WHEN dn_evaluation_status='ok' THEN 0 ELSE 1 END,
+                  dn_adjusted_odds_ratio ASC NULLS LAST, motif_id
+       ) END::BIGINT AS dn_depletion_rank,
+       CASE WHEN evaluation_status='ok' THEN row_number() OVER (
+         PARTITION BY distance_band
+         ORDER BY CASE WHEN evaluation_status='ok' THEN 0 ELSE 1 END,
+                  abs(ta_vs_dn_log_odds_difference) DESC NULLS LAST, motif_id
+       ) END::BIGINT AS isoform_difference_absolute_rank
+FROM cofactor_distance_isoform_contrast c
+WHERE includes_homo_sapiens;
+CREATE TEMP VIEW cofactor_distance_highlight_candidate AS
+{highlight_candidate_sql('cofactor_distance_isoform_comparison')};
+CREATE TABLE cofactor_distance_highlight_20 AS
+WITH ranked AS (
+  SELECT CASE WHEN selection_criterion='prespecified_panel' THEN NULL
+              ELSE row_number() OVER (
+                PARTITION BY selection_criterion, selection_direction,
+                             distance_band
+                ORDER BY selection_score DESC NULLS LAST, motif_id
+              ) END::BIGINT AS selection_rank,
+         *
+  FROM cofactor_distance_highlight_candidate
+)
+SELECT * FROM ranked
+WHERE selection_criterion='prespecified_panel' OR selection_rank <= 20
+ORDER BY distance_band_order, selection_criterion, selection_direction,
+         selection_rank NULLS LAST, motif_name, motif_id;
+CREATE TEMP VIEW cofactor_distance_highlight_candidate_human_source AS
+{highlight_candidate_sql('cofactor_distance_isoform_comparison_human_source')};
+CREATE TABLE cofactor_distance_highlight_20_human_source AS
+WITH ranked AS (
+  SELECT CASE WHEN selection_criterion='prespecified_panel' THEN NULL
+              ELSE row_number() OVER (
+                PARTITION BY selection_criterion, selection_direction,
+                             distance_band
+                ORDER BY selection_score DESC NULLS LAST, motif_id
+              ) END::BIGINT AS selection_rank,
+         *
+  FROM cofactor_distance_highlight_candidate_human_source
+)
+SELECT * FROM ranked
+WHERE selection_criterion='prespecified_panel' OR selection_rank <= 20
+ORDER BY distance_band_order, selection_criterion, selection_direction,
+         selection_rank NULLS LAST, motif_name, motif_id;
 CREATE TABLE cofactor_distance_top_bottom_20 AS
 WITH ranked AS (
   SELECT 'enriched'::VARCHAR AS direction,
@@ -1418,6 +1619,10 @@ CREATE UNIQUE INDEX distance_result_idx
   ON cofactor_distance_enrichment(motif_id, isoform, distance_band);
 CREATE UNIQUE INDEX distance_isoform_contrast_idx
   ON cofactor_distance_isoform_contrast(motif_id, distance_band);
+CREATE UNIQUE INDEX distance_isoform_comparison_idx
+  ON cofactor_distance_isoform_comparison(motif_id, distance_band);
+CREATE UNIQUE INDEX distance_isoform_comparison_human_idx
+  ON cofactor_distance_isoform_comparison_human_source(motif_id, distance_band);
 COPY cofactor_distance_block_component
   TO {sql_string(paths['cofactor_distance_block_component'])}
   (FORMAT PARQUET, COMPRESSION ZSTD);
@@ -1429,6 +1634,18 @@ COPY cofactor_distance_enrichment
   (FORMAT PARQUET, COMPRESSION ZSTD);
 COPY cofactor_distance_isoform_contrast
   TO {sql_string(paths['cofactor_distance_isoform_contrast'])}
+  (FORMAT PARQUET, COMPRESSION ZSTD);
+COPY cofactor_distance_isoform_comparison
+  TO {sql_string(paths['cofactor_distance_isoform_comparison'])}
+  (FORMAT PARQUET, COMPRESSION ZSTD);
+COPY cofactor_distance_isoform_comparison_human_source
+  TO {sql_string(paths['cofactor_distance_isoform_comparison_human_source'])}
+  (FORMAT PARQUET, COMPRESSION ZSTD);
+COPY cofactor_distance_highlight_20
+  TO {sql_string(paths['cofactor_distance_highlight_20'])}
+  (FORMAT PARQUET, COMPRESSION ZSTD);
+COPY cofactor_distance_highlight_20_human_source
+  TO {sql_string(paths['cofactor_distance_highlight_20_human_source'])}
   (FORMAT PARQUET, COMPRESSION ZSTD);
 COPY cofactor_distance_top_bottom_20
   TO {sql_string(paths['cofactor_distance_top_bottom_20'])}
@@ -1447,6 +1664,18 @@ COPY cofactor_distance_enrichment
   (FORMAT CSV, DELIMITER '\t', HEADER, NULL 'NA');
 COPY cofactor_distance_isoform_contrast
   TO {sql_string(staging / 'cofactor_distance_isoform_contrast.tsv')}
+  (FORMAT CSV, DELIMITER '\t', HEADER, NULL 'NA');
+COPY cofactor_distance_isoform_comparison
+  TO {sql_string(staging / 'cofactor_distance_isoform_comparison.tsv')}
+  (FORMAT CSV, DELIMITER '\t', HEADER, NULL 'NA');
+COPY cofactor_distance_isoform_comparison_human_source
+  TO {sql_string(staging / 'cofactor_distance_isoform_comparison_human_source.tsv')}
+  (FORMAT CSV, DELIMITER '\t', HEADER, NULL 'NA');
+COPY cofactor_distance_highlight_20
+  TO {sql_string(staging / 'cofactor_distance_highlight_20.tsv')}
+  (FORMAT CSV, DELIMITER '\t', HEADER, NULL 'NA');
+COPY cofactor_distance_highlight_20_human_source
+  TO {sql_string(staging / 'cofactor_distance_highlight_20_human_source.tsv')}
   (FORMAT CSV, DELIMITER '\t', HEADER, NULL 'NA');
 COPY cofactor_distance_top_bottom_20
   TO {sql_string(staging / 'cofactor_distance_top_bottom_20.tsv')}
@@ -1468,7 +1697,18 @@ SELECT (SELECT count(*) FROM cofactor_distance_enrichment)::BIGINT AS results,
        (SELECT count(*) FROM cofactor_distance_isoform_contrast)::BIGINT
          AS isoform_contrasts,
        (SELECT count(*) FROM cofactor_distance_isoform_contrast
-        WHERE evaluation_status='ok')::BIGINT AS estimable_isoform_contrasts;
+        WHERE evaluation_status='ok')::BIGINT AS estimable_isoform_contrasts,
+       (SELECT count(*) FROM cofactor_distance_isoform_comparison)::BIGINT
+         AS isoform_comparisons,
+       (SELECT count(*) FROM cofactor_distance_isoform_comparison_human_source)
+         ::BIGINT AS human_source_isoform_comparisons,
+       (SELECT count(*) FROM cofactor_distance_highlight_20)::BIGINT
+         AS highlights,
+       (SELECT count(*) FROM cofactor_distance_highlight_20_human_source)::BIGINT
+         AS human_source_highlights,
+       (SELECT count(*) FROM cofactor_distance_highlight_20
+        WHERE selection_criterion='prespecified_panel')::BIGINT
+         AS prespecified_panel_rows;
 """)[0]
         expected_results = len(tasks) * len(DISTANCE_BANDS) * 2
         if int(counts["results"]) != expected_results:
@@ -1476,6 +1716,16 @@ SELECT (SELECT count(*) FROM cofactor_distance_enrichment)::BIGINT AS results,
         expected_contrasts = len(tasks) * len(DISTANCE_BANDS)
         if int(counts["isoform_contrasts"]) != expected_contrasts:
             raise DistanceEnrichmentError("isoform-contrast cardinality differs")
+        if int(counts["isoform_comparisons"]) != expected_contrasts:
+            raise DistanceEnrichmentError("isoform-comparison cardinality differs")
+        expected_human_comparisons = (
+            int(config["human_source_task_count"]) * len(DISTANCE_BANDS)
+        )
+        if int(counts["human_source_isoform_comparisons"]) \
+                != expected_human_comparisons:
+            raise DistanceEnrichmentError(
+                "human-source isoform-comparison cardinality differs"
+            )
         manifest = {
             "schema_version": FINAL_SCHEMA_VERSION,
             "run_id": config["run_id"],
@@ -1501,6 +1751,14 @@ SELECT (SELECT count(*) FROM cofactor_distance_enrichment)::BIGINT AS results,
             "isoform_contrast_rows": int(counts["isoform_contrasts"]),
             "estimable_isoform_contrast_rows":
                 int(counts["estimable_isoform_contrasts"]),
+            "isoform_comparison_rows": int(counts["isoform_comparisons"]),
+            "human_source_isoform_comparison_rows":
+                int(counts["human_source_isoform_comparisons"]),
+            "highlight_rows": int(counts["highlights"]),
+            "human_source_highlight_rows":
+                int(counts["human_source_highlights"]),
+            "prespecified_panel_rows": int(counts["prespecified_panel_rows"]),
+            "prespecified_cofactor_names": list(PRESPECIFIED_COFACTOR_NAMES),
             "multiple_testing_family_size_per_isoform_band": len(tasks),
             "multiple_testing_family_size_per_isoform_contrast_band": len(tasks),
             "uncertainty": "5Mb genomic-block delete-one-cluster jackknife",

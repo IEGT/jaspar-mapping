@@ -115,6 +115,31 @@ existing schema-1 final directory is never overwritten; use a new
 task source, the submission command supplies `--finalizer-source-commit`; the
 compute node verifies file hashes and does not need a Git executable.
 
+Schema 3 adds presentation tables only; it reuses the same block components
+and does not alter any scientific estimate.
+
+## Colleague-facing highlight criteria
+
+The complete side-by-side comparison retains `OR_TA`, `OR_DN`, and
+`OR_TA / OR_DN`, their confidence intervals and q-values, and ranks for TA
+enrichment/depletion, DN enrichment/depletion, and absolute isoform difference.
+The compact highlight table then selects up to 20 rows per distance band and
+direction for four explicitly labelled criteria:
+
+1. `TA_association`: strongest significant enrichment and depletion for TAp73;
+2. `DN_association`: the same selection for DNp73;
+3. `isoform_difference`: strongest significant direct differences, separated
+   into larger TA and larger DN odds ratios;
+4. `opposite_direction`: the strict subset in which both individual 95%
+   intervals lie on opposite sides of OR 1, both individual BH tests and the
+   direct isoform test pass at 0.05.
+
+POU2F2, SP1, PATZ1, REST, and E2F1 are appended under
+`prespecified_panel` in every distance band. This does not alter any
+data-driven rank. Their rows retain their actual ranks under all three complete
+ranking systems, making absence from a top 20 distinguishable from absence
+from the analysis.
+
 The submission entry point is:
 
 ```bash
@@ -143,6 +168,11 @@ The final DuckDB database contains:
 - `cofactor_distance_isoform_contrast`: one row per motif and distance band,
   with the TA and DN estimates side by side, their odds-ratio ratio, a paired
   block-jackknife confidence interval, and BH-adjusted direct isoform test;
+- `cofactor_distance_isoform_comparison` and its `_human_source` subset: the
+  complete side-by-side table with TA, DN, and absolute isoform-difference
+  ranks;
+- `cofactor_distance_highlight_20` and its `_human_source` subset: the four
+  labelled highlight selections plus the prespecified five-motif panel;
 - `cofactor_distance_top_bottom_20`: vertebrate top and bottom 20 per isoform
   and distance band, carrying the other isoform and direct contrast beside each
   ranked result;
@@ -172,6 +202,19 @@ motifs differ most between isoforms. Do not infer an isoform difference merely
 because one isoform's confidence interval excludes one and the other's does
 not. A distance-agnostic TA/DN-pooled ranking may be retained as a descriptive
 supplement, but it is not the primary cofactor result.
+
+The presentation table can be queried without reconstructing any ranking:
+
+```sql
+SELECT selection_criterion, selection_direction, selection_rank,
+       motif_name, motif_id, ta_adjusted_odds_ratio, dn_adjusted_odds_ratio,
+       ta_vs_dn_odds_ratio_ratio, ta_q_value_bh_tax_group,
+       dn_q_value_bh_tax_group, q_value_bh_tax_group
+FROM cofactor_distance_highlight_20_human_source
+WHERE distance_band = 'gap_21_50'
+ORDER BY selection_criterion, selection_direction,
+         selection_rank NULLS LAST, motif_name;
+```
 
 Use `cofactor_distance_top_bottom_20_human_source` for the exact-human source
 sensitivity view, or join `jaspar_matrix_species` by `matrix_id = motif_id` when
