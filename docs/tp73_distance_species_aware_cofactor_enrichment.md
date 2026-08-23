@@ -111,7 +111,9 @@ Schema-2 finalization can reuse schema-1 task sufficient statistics without
 rerunning motif jobs. Its manifest distinguishes the task source commit from
 the finalizer source commit and records exact scientific-source hashes. An
 existing schema-1 final directory is never overwritten; use a new
-`--final-name` for the schema-2 derivative.
+`--final-name` for the schema-2 derivative. If the finalizer is newer than the
+task source, the submission command supplies `--finalizer-source-commit`; the
+compute node verifies file hashes and does not need a Git executable.
 
 The submission entry point is:
 

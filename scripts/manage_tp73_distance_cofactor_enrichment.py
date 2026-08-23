@@ -171,30 +171,21 @@ def source_identity(source: Path, source_commit: str) -> dict[str, str]:
     return result
 
 
-def runtime_source_identity(source: Path) -> dict[str, Any]:
-    commit_process = subprocess.run(
-        ["git", "-C", str(source), "rev-parse", "HEAD"],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    commit = commit_process.stdout.strip()
-    if (commit_process.returncode != 0
-            or not re.fullmatch(r"[0-9a-f]{40}", commit)):
-        raise DistanceEnrichmentError("cannot identify finalizer source commit")
-    hashes = source_identity(source, commit)
-    status_process = subprocess.run(
-        ["git", "-C", str(source), "status", "--porcelain", "--", *SCIENTIFIC_FILES],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if status_process.returncode != 0:
-        raise DistanceEnrichmentError("cannot inspect finalizer source status")
+def runtime_source_identity(
+    source: Path, commit: str, dirty: bool
+) -> dict[str, Any]:
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise DistanceEnrichmentError("finalizer source commit must be 40 hex digits")
+    hashes: dict[str, str] = {}
+    for relative in SCIENTIFIC_FILES:
+        path = source / relative
+        if not path.is_file():
+            raise DistanceEnrichmentError(f"finalizer source is missing: {path}")
+        hashes[relative] = sha256(path)
     return {
         "source": str(source),
         "commit": commit,
-        "dirty": bool(status_process.stdout.strip()),
+        "dirty": dirty,
         "scientific_source_sha256": hashes,
     }
 
@@ -925,7 +916,18 @@ def finalize(arguments: argparse.Namespace) -> None:
             )
         print(f"I: Reusing final output: {final}", file=sys.stderr)
         return
-    finalizer_identity = runtime_source_identity(Path(__file__).resolve().parent.parent)
+    finalizer_source = Path(__file__).resolve().parent.parent
+    finalizer_commit = arguments.finalizer_source_commit or config["source_commit"]
+    finalizer_identity = runtime_source_identity(
+        finalizer_source, finalizer_commit, arguments.finalizer_source_dirty
+    )
+    if (arguments.finalizer_source_commit is None
+            and finalizer_identity["scientific_source_sha256"]
+            != config["scientific_source_sha256"]):
+        raise DistanceEnrichmentError(
+            "finalizer source differs from the task source; declare its commit with "
+            "--finalizer-source-commit"
+        )
     staging = Path(tempfile.mkdtemp(prefix=".distance-final-", dir=final.parent))
     try:
         table_root = staging / "tables" / "jaspar2026"
@@ -1583,6 +1585,14 @@ def parser() -> argparse.ArgumentParser:
     )
     finalize_parser.add_argument("--run-root", type=Path, required=True)
     finalize_parser.add_argument("--final-name", default="distance_enrichment")
+    finalize_parser.add_argument(
+        "--finalizer-source-commit",
+        help="commit of a finalizer newer than the task source (40 lowercase hex digits)",
+    )
+    finalize_parser.add_argument(
+        "--finalizer-source-dirty", action="store_true",
+        help="record that finalizer scientific files differ from the declared commit",
+    )
     finalize_parser.add_argument("--duckdb", default="duckdb")
     finalize_parser.set_defaults(function=finalize)
     return result
