@@ -49,6 +49,15 @@ check. The project still needs its own outcome extension because TF-COMB does
 not model a matched anti-p73-versus-negative-control CUT&RUN response or direct
 TA-versus-DN differences.
 
+The transaction universe must be named. In the current exact-distance analysis,
+one physical TP73 anchor is one transaction and every transaction therefore
+contains TP73. TP73-to-candidate lift is then identically 1, reverse confidence
+is identically 1, and cosine is a deterministic transform of support. Only
+support and forward confidence are useful there. Global motif-pair lift and
+network edges require a separate unconditioned regulatory-region universe.
+The implemented boundary and exact-spacing outputs are specified in
+[`tp73_exact_distance_isoform_analysis.md`](tp73_exact_distance_isoform_analysis.md).
+
 ### WGCNA: secondary module sensitivity only
 
 [WGCNA](https://pmc.ncbi.nlm.nih.gov/articles/PMC2631488/) clusters variables

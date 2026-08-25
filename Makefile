@@ -202,6 +202,7 @@ check-duckdb: cutandrun_score_calibration pssm_scan_parquet
 	bash tests/test_tp73_cofactor_thresholds.sh
 	bash tests/test_tp73_cofactor_enrichment.sh
 	bash tests/test_tp73_distance_cofactor_counts.sh
+	bash tests/test_tp73_exact_distance_response.sh
 	bash tests/test_tp73_distance_cofactor_enrichment_manager.sh
 	bash tests/test_tp73_cofactor_score_surface.sh
 	bash tests/test_h3k4me3_cofactor_change.sh

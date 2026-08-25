@@ -18,6 +18,9 @@ CUT&RUN summaries, or their Slurm production run, also read
 For motif co-occurrence networks, outcome-interaction edges, WGCNA sensitivity,
 or later expression-linked regulatory networks, read
 [`docs/tp73_cofactor_network_analysis.md`](docs/tp73_cofactor_network_analysis.md).
+For exact TP73-oriented cofactor spacing, 10.5 bp periodicity, or direct
+TAp73-versus-DNp73 peak and doublet shifts, also read
+[`docs/tp73_exact_distance_isoform_analysis.md`](docs/tp73_exact_distance_isoform_analysis.md).
 The named-POU family result and common-score-zero sensitivity design are in
 [`docs/tp73_pou_family_autosomes_20260823.md`](docs/tp73_pou_family_autosomes_20260823.md).
 For species-aware vertebrate filtering and the isoform-by-exclusive-distance

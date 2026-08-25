@@ -28,6 +28,7 @@ scripts/build_sparse_context_maxima.py
 scripts/build_tp73_anchor_evidence.py
 scripts/build_tp73_cutandrun_calibration_duckdb.sh
 scripts/build_tp73_distance_cofactor_counts.py
+scripts/build_tp73_exact_distance_counts.py
 scripts/compare_tp73_cofactor_summaries.R
 scripts/dense_tsv_to_parquet.sh
 scripts/evaluate_tp73_cofactor_thresholds.R
@@ -99,6 +100,7 @@ scripts/submit_tp73_genome_context_maxima_slurm.sh
 scripts/submit_tp73_genome_evidence_slurm.sh
 scripts/summarize_h3k4me3_genome_cofactors.py
 scripts/summarize_tp73_cutandrun_threshold.R
+scripts/summarize_tp73_exact_distance_response.py
 scripts/summarize_tp73_patz1_cutandrun_threshold.R
 EOF
 

@@ -319,6 +319,12 @@ feature classes, per-distance-band occurrence counts with coupled strongest-hit
 geometry, pair-stratified promoter predictors, and transcript/intron features
 are documented in
 [`docs/tp73_motif_context.md`](docs/tp73_motif_context.md).
+The candidate-level exact-distance extension preserves half-base motif-center
+offsets and orientation, estimates matched anti-p73/control response curves for
+TAp73 and DNp73, and reports prespecified 10.5 bp periodicity plus coherent
+single-peak and doublet shifts. Its TF-COMB-derived reporting contract and
+commands are documented in
+[`docs/tp73_exact_distance_isoform_analysis.md`](docs/tp73_exact_distance_isoform_analysis.md).
 The separate, versioned registry of evidence-derived convenient score
 thresholds, including explicit pending/no-gain states and the distinction from
 scan storage floors, is documented in
