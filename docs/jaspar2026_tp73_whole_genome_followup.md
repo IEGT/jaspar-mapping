@@ -56,11 +56,18 @@ that surface with one undifferentiated 150 bp maximum.
 The complementary whole-autosome threshold run is prepared by
 `submit_tp73_genome_context_maxima_slurm.sh`. For every non-TP73 motif it emits
 one rectangular row per TP73 anchor over the complete 150 bp interval-distance
-radius. The schema-2 row stores the strongest source-retained score plus the
+radius. The schema-3 row stores the strongest source-retained score plus the
 numbers of distinct physical motif spans retained at the source floor, reaching
 score zero, and reaching the convenient operating threshold. Opposite-strand
 reports of one span count once; anchors with no retained span remain explicit
 zeroes.
+
+Schema 3 additionally stores the source-floor maximum and the source-floor and
+score-zero locus counts separately for six mutually exclusive signed
+interval-distance bands: overlap, 0-5, 6-20, 21-50, 51-100, and 101-150 bp.
+Their counts must sum to the all-150 bp count, and their maximum must reproduce
+the all-150 bp maximum. The original columns remain the band-agnostic summary,
+so historical downstream queries do not silently change meaning.
 
 Geometry provenance distinguishes the maximum span observed in a chromosome's
 hit payload, the catalog-declared motif span, and the effective maximum used by
@@ -183,8 +190,8 @@ global multiple-testing family are specified in
 including scan label `25` matched to annotation label `MT`.
 `tests/test_tp73_genome_context_maxima.sh` builds 22 tiny autosomes and checks a
 real nearby hit, completely empty motif partitions, rejection of a source floor
-above `-1`, the three nested locus counts, restart reuse, final catalog
-construction, and enrichment-plan handoff.
+above `-1`, the nested locus counts, the exclusive-band partition, restart
+reuse, final catalog construction, and enrichment-plan handoff.
 `tests/test_tp73_cofactor_enrichment.sh` verifies multi-chromosome adjustment
 and proves that a negative reference below the retained scan floor is not
 treated as observed evidence.

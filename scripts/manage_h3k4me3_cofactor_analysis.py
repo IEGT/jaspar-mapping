@@ -28,8 +28,18 @@ class AnalysisError(RuntimeError):
 
 
 AUTOSOMES = tuple(str(value) for value in range(1, 23))
+DISTANCE_BAND_COLUMNS = {
+    "all_150": "context_score",
+    "overlap": "context_score_overlap",
+    "adjacent_0_5": "context_score_adjacent_0_5",
+    "gap_6_20": "context_score_gap_6_20",
+    "gap_21_50": "context_score_gap_21_50",
+    "gap_51_100": "context_score_gap_51_100",
+    "gap_101_150": "context_score_gap_101_150",
+}
 OUTPUTS = {
     "intensity_effect": "intensity_effect.tsv",
+    "isoform_contrast": "isoform_contrast.tsv",
     "tp73_interaction": "tp73_interaction.tsv",
     "series_summary": "series_summary.tsv",
     "binding_state_summary": "binding_state_summary.tsv",
@@ -45,24 +55,28 @@ OUTPUTS = {
 }
 BH_PARTITIONS = {
     "intensity_effect": (
-        "series_id", "isoform", "negative_reference_threshold",
+        "series_id", "isoform", "negative_reference_threshold", "distance_band",
+    ),
+    "isoform_contrast": (
+        "series_id", "negative_reference_threshold", "distance_band",
     ),
     "tp73_interaction": (
         "series_id", "isoform", "negative_reference_threshold", "contrast",
+        "distance_band",
     ),
     "context_stratified_intensity_effect": (
         "series_id", "isoform", "negative_reference_threshold",
-        "genomic_context_class",
+        "genomic_context_class", "distance_band",
     ),
     "gene_relation_stratified_intensity_effect": (
         "series_id", "isoform", "negative_reference_threshold",
-        "gene_relation_class",
+        "gene_relation_class", "distance_band",
     ),
     "gene_relation_stratified_tp73_occupancy": (
-        "negative_reference_threshold", "gene_relation_class",
+        "negative_reference_threshold", "gene_relation_class", "distance_band",
     ),
     "score_gradient": (
-        "series_id", "isoform", "score_clamp_reference",
+        "series_id", "isoform", "score_clamp_reference", "distance_band",
     ),
 }
 SCIENTIFIC_SOURCE_FILES = (
@@ -277,6 +291,15 @@ def prepare(arguments: argparse.Namespace) -> None:
     context_package = arguments.context_maxima_package.expanduser().resolve()
     annotation_catalog = arguments.annotation_catalog.expanduser().resolve()
     runtime = arguments.runtime_prefix.expanduser().resolve()
+    distance_bands = tuple(
+        item.strip() for item in arguments.distance_bands.split(",")
+    )
+    if (not distance_bands or any(not item for item in distance_bands)
+            or len(set(distance_bands)) != len(distance_bands)
+            or set(distance_bands) - set(DISTANCE_BAND_COLUMNS)):
+        raise AnalysisError(
+            "--distance-bands contains an empty, duplicate, or unknown band"
+        )
     for path, label in (
         (source, "source"), (h3_package, "H3K4me3 package"),
         (evidence_package, "evidence package"),
@@ -402,24 +425,64 @@ ORDER BY i.task_index;
                 or maxima.stat().st_size != int(row["maxima_bytes"])
                 or re.fullmatch(r"[0-9a-f]{64}", str(row["maxima_sha256"])) is None):
             raise AnalysisError(f"invalid context-maxima task: {motif_id}")
+        source_floor = float(row["source_score_floor"])
+        source_positive_threshold = float(row["positive_threshold"])
+        positive_threshold = (
+            arguments.fixed_positive_threshold
+            if arguments.fixed_positive_threshold is not None
+            else source_positive_threshold
+        )
+        if positive_threshold < source_floor:
+            raise AnalysisError(
+                f"positive threshold {positive_threshold:g} is below the "
+                f"source floor {source_floor:g} for {motif_id}"
+            )
         planned.append({
             "task_index": task_index,
             "source_task_index": int(row["source_task_index"]),
             "motif_id": motif_id,
             "factor_name": str(row["factor_name"]),
-            "positive_threshold": format(float(row["positive_threshold"]), ".17g"),
-            "source_score_floor": format(float(row["source_score_floor"]), ".17g"),
-            "threshold_set_id": str(row["threshold_set_id"]),
-            "calibration_status": str(row["calibration_status"]),
+            "positive_threshold": format(positive_threshold, ".17g"),
+            "source_applied_context_threshold": format(
+                source_positive_threshold, ".17g"
+            ),
+            "source_score_floor": format(source_floor, ".17g"),
+            "threshold_set_id": (
+                "fixed_score_zero_v1"
+                if arguments.fixed_positive_threshold is not None
+                else str(row["threshold_set_id"])
+            ),
+            "calibration_status": (
+                "fixed_common_score_zero_positive"
+                if arguments.fixed_positive_threshold is not None
+                else str(row["calibration_status"])
+            ),
             "maxima_path": str(maxima),
             "maxima_bytes": int(row["maxima_bytes"]),
             "maxima_sha256": str(row["maxima_sha256"]),
         })
+    if any(band != "all_150" for band in distance_bands):
+        schema_rows = query_json(
+            duckdb, ":memory:",
+            "DESCRIBE SELECT * FROM read_parquet("
+            f"{sql_string(planned[0]['maxima_path'])});",
+        )
+        columns = {str(row["column_name"]) for row in schema_rows}
+        required_columns = {
+            DISTANCE_BAND_COLUMNS[band] for band in distance_bands
+        } | {"distance_band_schema_id"}
+        missing_columns = sorted(required_columns - columns)
+        if missing_columns:
+            raise AnalysisError(
+                "context-maxima package lacks distance-band columns: "
+                + ", ".join(missing_columns)
+            )
     task_path = run_root / "plan" / "cofactor_tasks.tsv"
     task_fields = (
         "task_index", "source_task_index", "motif_id", "factor_name",
-        "positive_threshold", "source_score_floor", "threshold_set_id",
-        "calibration_status", "maxima_path", "maxima_bytes", "maxima_sha256",
+        "positive_threshold", "source_applied_context_threshold",
+        "source_score_floor", "threshold_set_id", "calibration_status",
+        "maxima_path", "maxima_bytes", "maxima_sha256",
     )
     write_rows(task_path, planned, task_fields)
 
@@ -452,6 +515,12 @@ ORDER BY i.task_index;
         "analysis_partition": "autosome",
         "chromosomes": list(AUTOSOMES),
         "primary_window": "flank_150_1000",
+        "distance_bands": list(distance_bands),
+        "positive_threshold_policy": (
+            f"fixed_{arguments.fixed_positive_threshold:g}"
+            if arguments.fixed_positive_threshold is not None
+            else "context_package_applied_threshold"
+        ),
         "negative_references": [-1.0, 0.0],
         "block_size_bp": arguments.block_size,
         "spline_df": arguments.spline_df,
@@ -680,14 +749,18 @@ def validate_task(row: dict[str, str], directory: Path,
     return marker
 
 
-def validate_result(prefix: Path, motif_id: str) -> None:
+def validate_result(
+    prefix: Path, motif_id: str, expected_distance_bands: tuple[str, ...]
+) -> None:
+    band_count = len(expected_distance_bands)
     expected_counts = {
-        "intensity_effect": 8,
-        "tp73_interaction": 24,
-        "series_summary": 4,
-        "gene_relation_stratified_intensity_effect": 32,
-        "gene_relation_stratified_tp73_occupancy": 8,
-        "score_gradient": 8,
+        "intensity_effect": 8 * band_count,
+        "isoform_contrast": 4 * band_count,
+        "tp73_interaction": 24 * band_count,
+        "series_summary": 4 * band_count,
+        "gene_relation_stratified_intensity_effect": 32 * band_count,
+        "gene_relation_stratified_tp73_occupancy": 8 * band_count,
+        "score_gradient": 8 * band_count,
         "run_config": 1,
     }
     for dataset, name in OUTPUTS.items():
@@ -701,10 +774,16 @@ def validate_result(prefix: Path, motif_id: str) -> None:
             row["motif_id"] != motif_id for row in rows
         ):
             raise AnalysisError(f"{dataset} contains another motif")
+        if "distance_band" in rows[0] and {
+            row["distance_band"] for row in rows
+        } != set(expected_distance_bands):
+            raise AnalysisError(f"{dataset} lacks a requested distance band")
         if dataset == "run_config":
-            if (rows[0].get("schema_version") != "5"
+            if (rows[0].get("schema_version") != "6"
                     or set(rows[0].get("chromosomes", "").split(",")) !=
-                    set(AUTOSOMES)):
+                    set(AUTOSOMES)
+                    or tuple(rows[0].get("distance_bands", "").split(",")) !=
+                    expected_distance_bands):
                 raise AnalysisError("evaluator run configuration is incomplete")
 
 
@@ -892,6 +971,7 @@ def run_batch(arguments: argparse.Namespace) -> None:
                 "--thresholds", str(threshold),
                 "--output-prefix", str(prefix),
                 "--negative-references", "-1,0",
+                "--distance-bands", ",".join(config["distance_bands"]),
                 "--block-size", str(config["block_size_bp"]),
                 "--spline-df", str(config["spline_df"]),
                 "--minimum-class-fraction",
@@ -908,7 +988,9 @@ def run_batch(arguments: argparse.Namespace) -> None:
             run_process(command, cwd=Path(config["source"]))
             canonicalize_run_config(prefix, row)
             set_phase("validating_motif")
-            validate_result(prefix, row["motif_id"])
+            validate_result(
+                prefix, row["motif_id"], tuple(config["distance_bands"])
+            )
 
             attempt = run_root / "tasks" / (
                 f".attempt-task-{int(row['task_index']):06d}-"
@@ -1102,6 +1184,7 @@ COPY ({selected}) TO {sql_string(output)}
 SELECT
   (SELECT count(DISTINCT motif_id) FROM intensity_effect)::BIGINT AS motifs,
   (SELECT count(*) FROM intensity_effect)::BIGINT AS intensity_rows,
+  (SELECT count(*) FROM isoform_contrast)::BIGINT AS isoform_contrast_rows,
   (SELECT count(*) FROM tp73_interaction)::BIGINT AS interaction_rows,
   (SELECT count(*) FROM gene_relation_stratified_intensity_effect)::BIGINT
     AS gene_relation_rows,
@@ -1112,6 +1195,9 @@ SELECT
   (SELECT count(*) FROM intensity_effect
     WHERE p_value IS NOT NULL AND q_value_bh_all_motifs IS NULL)::BIGINT
     AS missing_global_q,
+  (SELECT count(*) FROM isoform_contrast
+    WHERE p_value IS NOT NULL AND q_value_bh_all_motifs IS NULL)::BIGINT
+    AS missing_isoform_contrast_q,
   (SELECT count(*) FROM gene_relation_stratified_intensity_effect
     WHERE p_value IS NOT NULL AND q_value_bh_all_motifs IS NULL)::BIGINT
     AS missing_gene_relation_q,
@@ -1123,14 +1209,20 @@ SELECT
             raise AnalysisError("final validation returned no summary")
         values = {key: int(value) for key, value in validation[0].items()}
         task_count = int(config["task_count"])
+        distance_band_count = len(config["distance_bands"])
         if (values["motifs"] != task_count
-                or values["intensity_rows"] != task_count * 8
-                or values["interaction_rows"] != task_count * 24
-                or values["gene_relation_rows"] != task_count * 32
-                or values["gene_relation_occupancy_rows"] != task_count * 8
-                or values["score_rows"] != task_count * 8
+                or values["intensity_rows"] != task_count * 8 * distance_band_count
+                or values["isoform_contrast_rows"] !=
+                    task_count * 4 * distance_band_count
+                or values["interaction_rows"] != task_count * 24 * distance_band_count
+                or values["gene_relation_rows"] !=
+                    task_count * 32 * distance_band_count
+                or values["gene_relation_occupancy_rows"] !=
+                    task_count * 8 * distance_band_count
+                or values["score_rows"] != task_count * 8 * distance_band_count
                 or values["run_config_rows"] != task_count
                 or values["missing_global_q"] != 0
+                or values["missing_isoform_contrast_q"] != 0
                 or values["missing_gene_relation_q"] != 0
                 or values["missing_gene_relation_occupancy_q"] != 0):
             raise AnalysisError(f"final analysis validation failed: {values}")
@@ -1143,6 +1235,8 @@ SELECT
             "source_commit": config["source_commit"],
             "analysis_partition": config["analysis_partition"],
             "primary_window": config["primary_window"],
+            "distance_bands": config["distance_bands"],
+            "positive_threshold_policy": config["positive_threshold_policy"],
             "motifs": task_count,
             "multiple_testing_scope":
                 "all_planned_non_TP73_JASPAR_motifs_by_declared_result_family",
@@ -1184,6 +1278,17 @@ def parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--source", type=Path, required=True)
     prepare_parser.add_argument("--run-id", required=True)
     prepare_parser.add_argument("--target-motif", default="MA0861.2")
+    prepare_parser.add_argument(
+        "--distance-bands", default="all_150",
+        help=(
+            "comma-separated all_150/overlap/adjacent_0_5/gap_6_20/"
+            "gap_21_50/gap_51_100/gap_101_150 selections"
+        ),
+    )
+    prepare_parser.add_argument(
+        "--fixed-positive-threshold", type=float,
+        help="override every motif's positive threshold (use 0 for common-score analysis)",
+    )
     prepare_parser.add_argument("--motifs-per-batch", type=int, default=8)
     prepare_parser.add_argument("--scratch-root", type=Path, required=True)
     prepare_parser.add_argument("--block-size", type=int, default=5_000_000)
@@ -1248,6 +1353,10 @@ def main() -> int:
             0 < arguments.minimum_class_fraction < 0.5
         ):
             raise AnalysisError("--minimum-class-fraction must be in (0,0.5)")
+        if (hasattr(arguments, "fixed_positive_threshold")
+                and arguments.fixed_positive_threshold is not None
+                and not math.isfinite(arguments.fixed_positive_threshold)):
+            raise AnalysisError("--fixed-positive-threshold must be finite")
         arguments.function(arguments)
         return 0
     except (AnalysisError, OSError, ValueError, json.JSONDecodeError) as error:

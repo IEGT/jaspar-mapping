@@ -214,7 +214,7 @@ SELECT CASE WHEN NOT EXISTS (
 ) THEN error('per-motif score or interval thresholds were ignored') END;
 SELECT CASE WHEN EXISTS (
     SELECT 1 FROM counts
-    WHERE schema_version <> 2
+    WHERE schema_version <> 3
        OR anchor_locus_id IS NULL
        OR threshold_set_id <> 'synthetic_v1'
        OR genome_id <> 'genome1'
@@ -222,6 +222,29 @@ SELECT CASE WHEN EXISTS (
        OR target_motif_id <> 'MA0861.2'
        OR calibration_stratum_id <> 'all_tp73_anchors'
 ) THEN error('threshold count identity or provenance is incomplete') END;
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM counts
+    WHERE anchor_start = 100 AND motif_id = 'M1'
+      AND context_score_gap_21_50 = 6
+      AND n_neighbor_loci_at_source_floor_gap_21_50 = 1
+      AND context_score_gap_101_150 = 5
+      AND n_neighbor_loci_at_source_floor_gap_101_150 = 1
+) THEN error('exclusive distance-band maxima or counts are incorrect') END;
+SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM counts
+    WHERE n_neighbor_loci_at_source_floor <>
+          n_neighbor_loci_at_source_floor_overlap +
+          n_neighbor_loci_at_source_floor_adjacent_0_5 +
+          n_neighbor_loci_at_source_floor_gap_6_20 +
+          n_neighbor_loci_at_source_floor_gap_21_50 +
+          n_neighbor_loci_at_source_floor_gap_51_100 +
+          n_neighbor_loci_at_source_floor_gap_101_150
+       OR context_score IS DISTINCT FROM list_max([
+          context_score_overlap, context_score_adjacent_0_5,
+          context_score_gap_6_20, context_score_gap_21_50,
+          context_score_gap_51_100, context_score_gap_101_150
+       ])
+) THEN error('distance bands do not partition the all-150-bp context') END;
 SELECT CASE WHEN (SELECT COUNT(DISTINCT anchor_locus_id) FROM counts) <> 2
     THEN error('physical TP73 anchor IDs are unstable across motifs') END;
 SQL

@@ -31,6 +31,10 @@ Options:
   --final-memory SIZE          Finalizer memory (default: 32G)
   --final-time LIMIT           Finalizer wall time (default: 02:00:00)
   --rscript FILE               Rscript executable (default: Rscript)
+  --distance-bands CSV         Cofactor bands (default: all_150)
+  --fixed-positive-threshold N Override motif thresholds (use 0 for score zero)
+  --ranking-metadata FILE      JASPAR metadata for an afterok top-TF export
+  --ranking-top N              TFs per criterion and band (default: 25)
   --adjust-gfp-baseline        Fit the GFP-baseline-adjusted sensitivity model
   --dry-run                    Prepare and print sbatch commands only
   -h, --help                   Show this help
@@ -62,6 +66,10 @@ preflight_time=02:00:00
 final_memory=32G
 final_time=02:00:00
 rscript=Rscript
+distance_bands=all_150
+fixed_positive_threshold=""
+ranking_metadata=""
+ranking_top=25
 adjust_gfp_baseline=0
 dry_run=0
 while [[ $# -gt 0 ]]; do
@@ -88,6 +96,10 @@ while [[ $# -gt 0 ]]; do
         --final-memory) final_memory=${2:?}; shift 2 ;;
         --final-time) final_time=${2:?}; shift 2 ;;
         --rscript) rscript=${2:?}; shift 2 ;;
+        --distance-bands) distance_bands=${2:?}; shift 2 ;;
+        --fixed-positive-threshold) fixed_positive_threshold=${2:?}; shift 2 ;;
+        --ranking-metadata) ranking_metadata=${2:?}; shift 2 ;;
+        --ranking-top) ranking_top=${2:?}; shift 2 ;;
         --adjust-gfp-baseline) adjust_gfp_baseline=1; shift ;;
         --dry-run) dry_run=1; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -98,7 +110,8 @@ done
 [[ -n $run_root && -n $h3_package && -n $evidence_package &&
    -n $context_maxima_package && -n $annotation_catalog &&
    -n $runtime_prefix ]] || { usage >&2; exit 2; }
-for value in "$motifs_per_batch" "$max_concurrent" "$array_size" "$cpus"; do
+for value in "$motifs_per_batch" "$max_concurrent" "$array_size" "$cpus" \
+             "$ranking_top"; do
     [[ $value =~ ^[1-9][0-9]*$ ]] || {
         echo "E: Batch, concurrency, array, and CPU values must be positive." >&2
         exit 2
@@ -122,6 +135,19 @@ evidence_package=$(cd "$evidence_package" && pwd -P)
 context_maxima_package=$(cd "$context_maxima_package" && pwd -P)
 annotation_catalog=$(cd "$annotation_catalog" && pwd -P)
 runtime_prefix=$(cd "$runtime_prefix" && pwd -P)
+if [[ -n $ranking_metadata ]]; then
+    ranking_metadata=$(cd "$(dirname "$ranking_metadata")" && pwd -P)/$(
+        basename "$ranking_metadata"
+    )
+    [[ -f $ranking_metadata ]] || {
+        echo "E: Ranking metadata is unavailable: $ranking_metadata" >&2
+        exit 1
+    }
+    case "$ranking_metadata" in
+        /data/sm718/*) ;;
+        *) echo "E: Ranking metadata must be below /data/sm718." >&2; exit 2 ;;
+    esac
+fi
 mkdir -p "$run_root/plan" "$run_root/logs"
 run_root=$(cd "$run_root" && pwd -P)
 duckdb="$runtime_prefix/duckdb/bin/duckdb"
@@ -143,7 +169,10 @@ prepare=(
     --runtime-prefix "$runtime_prefix" --source "$source"
     --scratch-root "$scratch_root" --run-id "$run_id"
     --motifs-per-batch "$motifs_per_batch"
+    --distance-bands "$distance_bands"
 )
+[[ -n $fixed_positive_threshold ]] &&
+    prepare+=(--fixed-positive-threshold "$fixed_positive_threshold")
 (( adjust_gfp_baseline == 1 )) && prepare+=(--adjust-gfp-baseline)
 batch_count=$("${prepare[@]}")
 [[ $batch_count =~ ^[1-9][0-9]*$ ]] || {
@@ -216,15 +245,44 @@ final_submission=(
 )
 if [[ $dry_run -eq 1 ]]; then
     printf '%q ' "${final_submission[@]}"; printf '\n'
+    if [[ -n $ranking_metadata ]]; then
+        printf '%q ' sbatch --parsable --dependency=afterok:FINALIZER_JOB_ID \
+            --account="$account" --partition="$partition" --requeue \
+            --job-name=h3_cofactor_rank --nodes=1 --ntasks=1 \
+            --cpus-per-task=1 --mem=8G --time=01:00:00 --chdir="$source" \
+            "$source/scripts/summarize_h3k4me3_isoform_rankings.py" \
+            --analysis-database \
+            "$run_root/final/h3k4me3_cofactor_analysis/h3k4me3_cofactor_analysis.duckdb" \
+            --jaspar-metadata "$ranking_metadata" \
+            --output-dir "$run_root/final/human_score0_isoform_rankings" \
+            --duckdb "$duckdb" --top "$ranking_top"
+        printf '\n'
+    fi
     exit 0
 fi
 final_job=$("${final_submission[@]}")
 
+ranking_job=""
+if [[ -n $ranking_metadata ]]; then
+    ranking_job=$(sbatch --parsable --account="$account" \
+        --partition="$partition" --requeue --dependency="afterok:$final_job" \
+        --job-name=h3_cofactor_rank --nodes=1 --ntasks=1 --cpus-per-task=1 \
+        --mem=8G --time=01:00:00 --chdir="$source" \
+        --output="$run_root/logs/ranking-%j.out" \
+        --error="$run_root/logs/ranking-%j.err" \
+        "$source/scripts/summarize_h3k4me3_isoform_rankings.py" \
+        --analysis-database \
+        "$run_root/final/h3k4me3_cofactor_analysis/h3k4me3_cofactor_analysis.duckdb" \
+        --jaspar-metadata "$ranking_metadata" \
+        --output-dir "$run_root/final/human_score0_isoform_rankings" \
+        --duckdb "$duckdb" --top "$ranking_top")
+fi
+
 source_commit=$(git -C "$source" rev-parse HEAD)
 array_jobs_text=$(IFS=,; printf '%s' "${array_jobs[*]}")
-printf 'preflight_job_id\tarray_job_ids\tfinalizer_job_id\tbatch_count\tmotifs_per_batch\tsource_commit\trun_id\n' \
+printf 'preflight_job_id\tarray_job_ids\tfinalizer_job_id\tranking_job_id\tbatch_count\tmotifs_per_batch\tsource_commit\trun_id\n' \
     > "$submission_record"
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$preflight_job" \
-    "$array_jobs_text" "$final_job" "$batch_count" "$motifs_per_batch" \
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$preflight_job" \
+    "$array_jobs_text" "$final_job" "$ranking_job" "$batch_count" "$motifs_per_batch" \
     "$source_commit" "$run_id" >> "$submission_record"
-echo "I: Submitted H3K4me3 preflight $preflight_job, arrays $array_jobs_text, finalizer $final_job" >&2
+echo "I: Submitted H3K4me3 preflight $preflight_job, arrays $array_jobs_text, finalizer $final_job, ranking ${ranking_job:-not-requested}" >&2

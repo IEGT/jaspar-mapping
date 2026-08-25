@@ -214,13 +214,24 @@ COPY (
   SELECT chrom, (100 + i * 1000000)::BIGINT AS anchor_start,
          (116 + i * 1000000)::BIGINT AS anchor_end,
          '$motif'::VARCHAR AS motif_id,
-         CASE WHEN ($task = 0 AND i % 3 = 0)
-                    OR ($task = 1 AND i % 4 = 0)
-              THEN 5.0 ELSE -2.0 END::DOUBLE
-           AS context_score,
+         CASE WHEN i < 6 THEN 5.0 ELSE -2.0 END::DOUBLE AS context_score,
+         CASE WHEN i % 6 = 0 THEN CASE WHEN i < 6 THEN 5.0 ELSE -2.0 END
+              END::DOUBLE AS context_score_overlap,
+         CASE WHEN i % 6 = 1 THEN CASE WHEN i < 6 THEN 5.0 ELSE -2.0 END
+              END::DOUBLE AS context_score_adjacent_0_5,
+         CASE WHEN i % 6 = 2 THEN CASE WHEN i < 6 THEN 5.0 ELSE -2.0 END
+              END::DOUBLE AS context_score_gap_6_20,
+         CASE WHEN i % 6 = 3 THEN CASE WHEN i < 6 THEN 5.0 ELSE -2.0 END
+              END::DOUBLE AS context_score_gap_21_50,
+         CASE WHEN i % 6 = 4 THEN CASE WHEN i < 6 THEN 5.0 ELSE -2.0 END
+              END::DOUBLE AS context_score_gap_51_100,
+         CASE WHEN i % 6 = 5 THEN CASE WHEN i < 6 THEN 5.0 ELSE -2.0 END
+              END::DOUBLE AS context_score_gap_101_150,
          -2.0::DOUBLE AS source_score_floor,
          150::BIGINT AS context_flank_bp,
-         'signed_interval_edge_distance'::VARCHAR AS context_distance_metric
+         'signed_interval_edge_distance'::VARCHAR AS context_distance_metric,
+         'exclusive_overlap_adjacent_0_5_gap_6_20_gap_21_50_gap_51_100_gap_101_150_v1'
+           ::VARCHAR AS distance_band_schema_id
   FROM chromosomes CROSS JOIN range(12) AS r(i)
 ) TO '$maxima' (FORMAT PARQUET, COMPRESSION ZSTD);
 SQL
@@ -249,6 +260,8 @@ batch_count=$(
         --annotation-catalog "$annotation" --runtime-prefix "$runtime" \
         --source "$repository_root" --scratch-root "$scratch" \
         --run-id synthetic_h3_cofactor --motifs-per-batch 2 \
+        --fixed-positive-threshold 0 \
+        --distance-bands all_150,overlap,adjacent_0_5,gap_6_20,gap_21_50,gap_51_100,gap_101_150 \
         --block-size 1000 --spline-df 1 --minimum-class-fraction 0.001 \
         --adjust-gfp-baseline \
         --minimum-class-count 2 --minimum-interaction-cell-count 2 \
@@ -291,17 +304,19 @@ done
 (
     cd "$final"
     "$duckdb" -batch h3k4me3_cofactor_analysis.duckdb >/dev/null <<'SQL'
-SELECT CASE WHEN (SELECT count(*) FROM intensity_effect) <> 16
+SELECT CASE WHEN (SELECT count(*) FROM intensity_effect) <> 112
   THEN error('combined intensity output is incomplete') END;
-SELECT CASE WHEN (SELECT count(*) FROM tp73_interaction) <> 48
+SELECT CASE WHEN (SELECT count(*) FROM isoform_contrast) <> 56
+  THEN error('combined paired isoform contrast is incomplete') END;
+SELECT CASE WHEN (SELECT count(*) FROM tp73_interaction) <> 336
   THEN error('combined interaction output is incomplete') END;
-SELECT CASE WHEN (SELECT count(*) FROM score_gradient) <> 16
+SELECT CASE WHEN (SELECT count(*) FROM score_gradient) <> 112
   THEN error('combined score-gradient output is incomplete') END;
 SELECT CASE WHEN (SELECT count(*)
-                  FROM gene_relation_stratified_intensity_effect) <> 64
+                  FROM gene_relation_stratified_intensity_effect) <> 448
   THEN error('combined four-way gene-relation output is incomplete') END;
 SELECT CASE WHEN (SELECT count(*)
-                  FROM gene_relation_stratified_tp73_occupancy) <> 16
+                  FROM gene_relation_stratified_tp73_occupancy) <> 112
   THEN error('combined relation-specific TP73 occupancy is incomplete') END;
 SELECT CASE WHEN EXISTS (
   SELECT 1 FROM intensity_effect
@@ -320,11 +335,31 @@ SELECT CASE WHEN NOT EXISTS (
   WHERE q_value_bh_task IS NOT NULL
 ) THEN error('task-local diagnostic q values were not retained') END;
 SELECT CASE WHEN EXISTS (
+  SELECT 1 FROM intensity_effect
+  WHERE positive_threshold <> 0
+     OR distance_band NOT IN (
+       'all_150', 'overlap', 'adjacent_0_5', 'gap_6_20', 'gap_21_50',
+       'gap_51_100', 'gap_101_150'
+     )
+) THEN error('fixed-zero threshold or distance bands were not retained') END;
+SELECT CASE WHEN NOT EXISTS (
+  SELECT 1 FROM intensity_effect
+  WHERE evaluation_status = 'ok'
+    AND adjusted_mean_change_positive IS NOT NULL
+    AND adjusted_mean_change_negative IS NOT NULL
+) THEN error('adjusted cofactor-class margins were not emitted') END;
+SELECT CASE WHEN NOT EXISTS (
+  SELECT 1 FROM isoform_contrast
+  WHERE evaluation_status = 'ok' AND contrast = 'TA_minus_DN'
+    AND q_value_bh_all_motifs IS NOT NULL
+) THEN error('paired TA-minus-DN inference was not emitted') END;
+SELECT CASE WHEN EXISTS (
   SELECT 1 FROM run_config
   WHERE input_reference_semantics <> 'package_provenance_selector'
      OR execution_inputs_staged_to_scratch <> true
      OR adjustment_variant <> 'gfp_baseline_adjusted_sensitivity'
      OR gfp_baseline_adjustment = 'none'
+     OR distance_bands <> 'all_150,overlap,adjacent_0_5,gap_6_20,gap_21_50,gap_51_100,gap_101_150'
      OR change NOT LIKE 'provenance/fixed_inputs.tsv#%'
      OR cofactor_maxima NOT LIKE 'provenance/cofactor_tasks.tsv#motif_id=%'
 ) THEN error('portable evaluator provenance was not retained') END;
@@ -333,5 +368,24 @@ SQL
 
 grep -Fq '"adjust_gfp_baseline": true' \
     "$final/provenance/run_config.json"
+
+cat > "$temporary/jaspar-metadata.tsv" <<'EOF'
+matrix_id	name	tax_group	tax_id	species
+M1	Synthetic TF 1	vertebrates	9606	Homo sapiens
+M2	Synthetic TF 2	vertebrates	9606	Homo sapiens
+EOF
+"$repository_root/scripts/summarize_h3k4me3_isoform_rankings.py" \
+    --analysis-database "$final/h3k4me3_cofactor_analysis.duckdb" \
+    --jaspar-metadata "$temporary/jaspar-metadata.tsv" \
+    --output-dir "$temporary/rankings" --duckdb "$duckdb" --top 25
+"$duckdb" -batch :memory: >/dev/null <<SQL
+CREATE VIEW ranking_matrix AS SELECT * FROM read_parquet(
+  '$temporary/rankings/human_score0_effect_matrix.parquet');
+SELECT CASE WHEN NOT EXISTS (
+  SELECT 1 FROM ranking_matrix
+  WHERE distance_band='all_150' AND positive_threshold=0
+    AND includes_homo_sapiens AND isoform_macro_effect IS NOT NULL
+) THEN error('human score-zero isoform ranking matrix is incomplete') END;
+SQL
 
 echo "H3K4me3 cofactor-analysis manager tests passed."

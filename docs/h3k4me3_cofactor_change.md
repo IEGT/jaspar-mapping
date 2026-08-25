@@ -37,6 +37,23 @@ static main contribution of the cofactor cancel from the condition difference.
 It is not a causal cofactor effect because sequence features can still be
 associated with differential chromatin responsiveness.
 
+For the common-score sensitivity analysis, every motif uses score `>= 0` as
+the positive class, score `< -1` or absence as the primary negative class, and
+excludes `[-1,0)` as intermediate. This keeps the biological comparison fixed
+across motifs while the calibrated-threshold analysis remains available as a
+separate operating-point result.
+
+The direct isoform estimand is fitted on the paired anchor-level outcome
+
+```text
+(delta_TA - delta_DN) = (TA - GFP) - (DN - GFP).
+```
+
+GFP therefore cancels before fitting. A positive cofactor coefficient means a
+more positive H3K4me3 response for TA relative to DN; a negative coefficient
+means the reverse. This paired fit, not subtraction of two independently
+reported coefficients, supplies the isoform-difference confidence interval.
+
 ## Included series
 
 The source-controlled manifest is
@@ -167,8 +184,12 @@ cells satisfy the declared minimum support.
   They remain in the secondary gained/lost occurrence summaries.
 - Linear-model uncertainty is clustered by 5 Mb genomic block.
 - Models are fit separately for each included series and for TA and DN.
+- The evaluator also emits standardized adjusted means for the negative and
+  positive cofactor classes, holding the eligible-anchor covariate distribution
+  fixed, plus the paired TA-minus-DN contrast.
 - Benjamini-Hochberg correction is applied separately by series, isoform, and
-  negative reference. TP73-interaction contrasts form separate families.
+  negative reference and exclusive distance band. TP73-interaction and direct
+  isoform contrasts form separate families.
 
 With schema-9 annotation, the primary adjustment includes a TP73-score spline,
 chromosome, compact genomic context, unsigned genomic distances to the nearest
@@ -192,10 +213,11 @@ it is not synonymous with CDS. Within that pooled stratum the model continues
 to adjust for the finer CDS/exonic/intronic context.
 
 Two relation-stratified outputs are emitted. The H3K4me3 table has 32 rows per
-motif: two negative references by two isoforms by two series by four relation
-classes. The matched TP73-occupancy table has eight rows per motif: two
-negative references by four relation classes. It refits the established
-discordant anti-TP73 versus matched-control logistic model inside each class,
+motif and distance band: two negative references by two isoforms by two series
+by four relation classes. The matched TP73-occupancy table has eight rows per
+motif and distance band: two negative references by four relation classes. It
+refits the established discordant anti-TP73 versus matched-control logistic
+model inside each class,
 with sample and chromosome fixed effects, a TP73-score spline, and 5 Mb
 block-clustered uncertainty. Consequently, each relation-specific figure uses
 the same anchor stratum on both axes. The occupancy fit retains anchors with
@@ -205,9 +227,19 @@ rows with a non-`ok` status rather than borrowing the genome-wide estimate.
 
 The evaluator writes intensity effects, TP73 interactions, binding-state
 summaries, occurrence summaries, cross-series directional summaries, and the
-complete run configuration. PATZ1, TFAP2C, E2F1, and SP1 are sentinel biological
-motifs, not null controls. Density-matched motif labels or block-preserving
+complete run configuration. Schema-3 maxima permit one invocation to emit the
+all-150 bp summary and six exclusive interval-distance analyses without
+re-reading the fixed H3K4me3 inputs. PATZ1, TFAP2C, E2F1, and SP1 are sentinel
+biological motifs, not null controls. Density-matched motif labels or block-preserving
 permutations are required for a null validation.
+
+`scripts/summarize_h3k4me3_isoform_rankings.py` joins the finalized result to
+the official JASPAR metadata, restricts the requested report to vertebrate
+matrices that include Homo sapiens among their source organisms, and writes
+the strongest positive, strongest negative, and largest paired isoform effects
+for every distance band. Ranking output is consolidated to one representative
+matrix per TF and criterion; the full motif-level effect matrix remains beside
+it so alternative JASPAR matrices are never discarded.
 
 ## Robustness gate before motif ranking
 

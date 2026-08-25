@@ -26,6 +26,9 @@ usage <- function(status = 0L) {
         "  --window NAME             Signal window (required with --signal)",
         "  --output-prefix PATH      Prefix for result TSV files",
         "  --series ID               Required series; repeat (default: all in signal)",
+        "  --distance-bands CSV      Cofactor distance bands (default: all_150)",
+        "                            Choices: all_150, overlap, adjacent_0_5,",
+        "                            gap_6_20, gap_21_50, gap_51_100, gap_101_150",
         "  --negative-references CSV Strict negative limits (default: -1,0)",
         "  --pseudocount VALUE       Integrated-signal pseudocount (default: 1)",
         "  --block-size BP           Genomic SE cluster width (default: 5000000)",
@@ -51,6 +54,7 @@ values <- list(
     cofactor_maxima = character(),
     annotation = character(),
     series = character(),
+    distance_bands = "all_150",
     negative_references = "-1,0",
     pseudocount = 1,
     block_size = 5000000,
@@ -66,6 +70,7 @@ value_options <- c(
     "--signal", "--change", "--tp73-evidence", "--cofactor-maxima", "--thresholds",
     "--annotation",
     "--window", "--output-prefix", "--series", "--negative-references",
+    "--distance-bands",
     "--pseudocount", "--block-size", "--spline-df",
     "--minimum-class-fraction", "--minimum-class-count",
     "--minimum-interaction-cell-count", "--duckdb", "--analysis-role"
@@ -162,6 +167,24 @@ if (length(negative_references) == 0L || any(!is.finite(negative_references))) {
 }
 if (any(!nzchar(values$series)) || anyDuplicated(values$series)) {
     stop("--series values must be unique and non-empty", call. = FALSE)
+}
+distance_band_columns <- c(
+    all_150 = "context_score",
+    overlap = "context_score_overlap",
+    adjacent_0_5 = "context_score_adjacent_0_5",
+    gap_6_20 = "context_score_gap_6_20",
+    gap_21_50 = "context_score_gap_21_50",
+    gap_51_100 = "context_score_gap_51_100",
+    gap_101_150 = "context_score_gap_101_150"
+)
+distance_bands <- trimws(strsplit(
+    values$distance_bands, ",", fixed = TRUE
+)[[1L]])
+if (length(distance_bands) == 0L || any(!nzchar(distance_bands)) ||
+    anyDuplicated(distance_bands) ||
+    length(setdiff(distance_bands, names(distance_band_columns))) > 0L) {
+    stop("--distance-bands contains an empty, duplicate, or unknown band",
+         call. = FALSE)
 }
 if (!nzchar(values$analysis_role) || grepl("[\r\n]", values$analysis_role)) {
     stop("--analysis-role must be non-empty and single-line", call. = FALSE)
@@ -569,9 +592,39 @@ if (annotation_available) {
 }
 
 motif_list <- paste(vapply(thresholds$motif_id, sql_string, character(1)), collapse = ",")
+maxima_description <- duckdb_fread(paste0(
+    "DESCRIBE SELECT * FROM read_parquet(",
+    sql_parquet_paths(values$cofactor_maxima), ");"
+))
+maxima_columns <- maxima_description$column_name
+requested_score_columns <- unique(unname(
+    distance_band_columns[distance_bands]
+))
+required_maxima_columns <- c(
+    "chrom", "anchor_start", "anchor_end", "motif_id",
+    requested_score_columns, "source_score_floor", "context_flank_bp",
+    "context_distance_metric"
+)
+if (length(setdiff(required_maxima_columns, maxima_columns)) > 0L) {
+    stop(
+        "cofactor maxima lack requested distance-band columns: ",
+        paste(setdiff(required_maxima_columns, maxima_columns), collapse = ", "),
+        call. = FALSE
+    )
+}
+band_schema_available <- "distance_band_schema_id" %in% maxima_columns
+if (any(distance_bands != "all_150") && !band_schema_available) {
+    stop("distance-stratified analysis requires schema-v3 cofactor maxima",
+         call. = FALSE)
+}
+score_select <- paste(vapply(
+    requested_score_columns, sql_identifier, character(1)
+), collapse = ", ")
 maxima <- duckdb_fread(paste0(
     "SELECT CAST(chrom AS VARCHAR) AS chrom, anchor_start, anchor_end, motif_id, ",
-    "context_score, source_score_floor, context_flank_bp, context_distance_metric ",
+    score_select, ", source_score_floor, context_flank_bp, ",
+    "context_distance_metric",
+    if (band_schema_available) ", distance_band_schema_id " else " ",
     "FROM read_parquet(", sql_parquet_paths(values$cofactor_maxima),
     ") WHERE motif_id IN (",
     motif_list, ") ORDER BY motif_id, chrom, anchor_start, anchor_end;"
@@ -586,6 +639,15 @@ if (nrow(maxima) != anchor_count * nrow(thresholds) ||
 }
 if (maxima[, any(context_distance_metric != "signed_interval_edge_distance")]) {
     stop("cofactor maxima do not use schema-v4 interval geometry", call. = FALSE)
+}
+if (any(distance_bands != "all_150") && maxima[, any(
+    is.na(distance_band_schema_id) |
+    distance_band_schema_id != paste0(
+        "exclusive_overlap_adjacent_0_5_gap_6_20_gap_21_50_",
+        "gap_51_100_gap_101_150_v1"
+    )
+)]) {
+    stop("cofactor maxima use an unsupported distance-band schema", call. = FALSE)
 }
 maxima_provenance <- maxima[, .(
     source_floor_values = uniqueN(source_score_floor),
@@ -612,8 +674,34 @@ if (threshold_provenance[, any(
 )]) {
     stop("a positive threshold is below its cofactor scan floor", call. = FALSE)
 }
+analysis_thresholds <- rbindlist(lapply(seq_along(distance_bands), function(index) {
+    distance_band <- distance_bands[[index]]
+    result <- copy(thresholds)
+    result[, `:=`(
+        distance_band = distance_band,
+        context_score_column = unname(distance_band_columns[[distance_band]]),
+        distance_band_order = index
+    )]
+    result
+}))
+setorder(analysis_thresholds, motif_id, distance_band_order)
+analysis_thresholds[, distance_band_order := NULL]
 
-clustered_lm <- function(data, formula, contrasts) {
+clustered_lm <- function(data, formula, contrasts, margin_exposure = NULL) {
+    add_empty_margins <- function(result) {
+        if (is.null(margin_exposure)) return(result)
+        result[, `:=`(
+            adjusted_mean_change_negative = NA_real_,
+            adjusted_mean_change_negative_standard_error = NA_real_,
+            adjusted_mean_change_negative_ci95_lower = NA_real_,
+            adjusted_mean_change_negative_ci95_upper = NA_real_,
+            adjusted_mean_change_positive = NA_real_,
+            adjusted_mean_change_positive_standard_error = NA_real_,
+            adjusted_mean_change_positive_ci95_lower = NA_real_,
+            adjusted_mean_change_positive_ci95_upper = NA_real_
+        )]
+        result
+    }
     fit <- tryCatch(lm(formula, data = data, x = TRUE, y = TRUE),
                     error = function(condition) NULL)
     empty <- function(status, note) data.table(
@@ -625,21 +713,25 @@ clustered_lm <- function(data, formula, contrasts) {
         evaluation_note = note
     )
     if (is.null(fit) || any(!is.finite(coef(fit)))) {
-        return(lapply(contrasts, function(x) empty("not_estimable", "linear model failed")))
+        return(lapply(contrasts, function(x) add_empty_margins(
+            empty("not_estimable", "linear model failed")
+        )))
     }
     x <- fit$x
     inverse <- tryCatch(solve(crossprod(x)), error = function(condition) NULL)
     if (is.null(inverse) || any(!is.finite(inverse))) {
-        return(lapply(contrasts, function(x) empty("not_estimable", "singular model matrix")))
+        return(lapply(contrasts, function(x) add_empty_margins(
+            empty("not_estimable", "singular model matrix")
+        )))
     }
     cluster_scores <- rowsum(x * residuals(fit), data$genomic_block, reorder = FALSE)
     clusters <- nrow(cluster_scores)
     observations <- nrow(x)
     parameters <- ncol(x)
     if (clusters < 2L || observations <= parameters) {
-        return(lapply(contrasts, function(x) empty(
+        return(lapply(contrasts, function(x) add_empty_margins(empty(
             "not_estimable", "too few genomic blocks for clustered uncertainty"
-        )))
+        ))))
     }
     correction <- (clusters / (clusters - 1)) *
         ((observations - 1) / (observations - parameters))
@@ -647,16 +739,20 @@ clustered_lm <- function(data, formula, contrasts) {
     lapply(contrasts, function(contrast) {
         vector <- setNames(rep(0, length(coef(fit))), names(coef(fit)))
         if (!all(names(contrast) %in% names(vector))) {
-            return(empty("not_estimable", "requested coefficient is absent"))
+            return(add_empty_margins(empty(
+                "not_estimable", "requested coefficient is absent"
+            )))
         }
         vector[names(contrast)] <- contrast
         estimate <- sum(vector * coef(fit))
         standard_error <- sqrt(drop(t(vector) %*% covariance %*% vector))
         if (!is.finite(standard_error) || standard_error <= 0) {
-            return(empty("not_estimable", "clustered standard error is invalid"))
+            return(add_empty_margins(empty(
+                "not_estimable", "clustered standard error is invalid"
+            )))
         }
         z <- estimate / standard_error
-        data.table(
+        result <- data.table(
             estimate = estimate, standard_error = standard_error,
             confidence_interval_95_lower = estimate - 1.96 * standard_error,
             confidence_interval_95_upper = estimate + 1.96 * standard_error,
@@ -665,7 +761,57 @@ clustered_lm <- function(data, formula, contrasts) {
             evaluation_status = "ok",
             evaluation_note = paste("SE clusters", values$block_size, "bp genomic blocks")
         )
+        if (is.null(margin_exposure)) return(result)
+        if (!margin_exposure %in% colnames(x)) {
+            return(add_empty_margins(result))
+        }
+        negative_vector <- colMeans(x)
+        negative_vector[[margin_exposure]] <- 0
+        positive_vector <- negative_vector
+        positive_vector[[margin_exposure]] <- 1
+        summarize_margin <- function(vector) {
+            margin_estimate <- sum(vector * coef(fit))
+            margin_standard_error <- sqrt(drop(
+                t(vector) %*% covariance %*% vector
+            ))
+            if (!is.finite(margin_standard_error) || margin_standard_error < 0) {
+                return(c(NA_real_, NA_real_, NA_real_, NA_real_))
+            }
+            c(
+                margin_estimate, margin_standard_error,
+                margin_estimate - 1.96 * margin_standard_error,
+                margin_estimate + 1.96 * margin_standard_error
+            )
+        }
+        negative_margin <- summarize_margin(negative_vector)
+        positive_margin <- summarize_margin(positive_vector)
+        result[, `:=`(
+            adjusted_mean_change_negative = negative_margin[[1L]],
+            adjusted_mean_change_negative_standard_error = negative_margin[[2L]],
+            adjusted_mean_change_negative_ci95_lower = negative_margin[[3L]],
+            adjusted_mean_change_negative_ci95_upper = negative_margin[[4L]],
+            adjusted_mean_change_positive = positive_margin[[1L]],
+            adjusted_mean_change_positive_standard_error = positive_margin[[2L]],
+            adjusted_mean_change_positive_ci95_lower = positive_margin[[3L]],
+            adjusted_mean_change_positive_ci95_upper = positive_margin[[4L]]
+        )]
+        result
     })
+}
+
+add_empty_adjusted_margins <- function(result) {
+    missing <- setdiff(c(
+        "adjusted_mean_change_negative",
+        "adjusted_mean_change_negative_standard_error",
+        "adjusted_mean_change_negative_ci95_lower",
+        "adjusted_mean_change_negative_ci95_upper",
+        "adjusted_mean_change_positive",
+        "adjusted_mean_change_positive_standard_error",
+        "adjusted_mean_change_positive_ci95_lower",
+        "adjusted_mean_change_positive_ci95_upper"
+    ), names(result))
+    for (column in missing) result[, (column) := NA_real_]
+    result
 }
 
 status_result <- function(status, note, observations = 0L, blocks = 0L) data.table(
@@ -908,6 +1054,7 @@ model_formula <- function(data, interaction = FALSE,
 }
 
 intensity_rows <- list()
+isoform_contrast_rows <- list()
 interaction_rows <- list()
 state_rows <- list()
 occurrence_rows <- list()
@@ -915,13 +1062,19 @@ context_intensity_rows <- list()
 gene_relation_intensity_rows <- list()
 gene_relation_occupancy_rows <- list()
 score_effect_rows <- list()
-intensity_index <- interaction_index <- state_index <- occurrence_index <- 1L
+intensity_index <- isoform_contrast_index <- interaction_index <- 1L
+state_index <- occurrence_index <- 1L
 context_intensity_index <- gene_relation_intensity_index <- 1L
 gene_relation_occupancy_index <- score_effect_index <- 1L
 
-for (motif_index in seq_len(nrow(thresholds))) {
-    threshold <- thresholds[motif_index]
-    motif <- maxima[motif_id == threshold$motif_id]
+for (motif_index in seq_len(nrow(analysis_thresholds))) {
+    threshold <- analysis_thresholds[motif_index]
+    score_column <- threshold$context_score_column
+    motif <- maxima[motif_id == threshold$motif_id, .(
+        chrom, anchor_start, anchor_end, motif_id,
+        context_score = get(score_column), source_score_floor,
+        context_flank_bp, context_distance_metric
+    )]
     setkey(motif, chrom, anchor_start, anchor_end)
     joined <- motif[wide]
     if (nrow(joined) != nrow(wide)) {
@@ -952,6 +1105,7 @@ for (motif_index in seq_len(nrow(thresholds))) {
                 occupancy[, `:=`(
                     motif_id = threshold$motif_id,
                     factor_name = threshold$factor_name,
+                    distance_band = threshold$distance_band,
                     positive_threshold = threshold$positive_threshold,
                     positive_threshold_source =
                         threshold$positive_threshold_source,
@@ -983,6 +1137,84 @@ for (motif_index in seq_len(nrow(thresholds))) {
                 gene_relation_occupancy_index <-
                     gene_relation_occupancy_index + 1L
             }
+        }
+        for (series_id in analysis_series) {
+            current_series <- series_id
+            all_current <- joined[series_id == current_series]
+            current <- all_current[h3k4me3_informative == TRUE]
+            eligible <- current$cofactor_positive | current$cofactor_negative
+            positive_count <- sum(current$cofactor_positive)
+            negative_count <- sum(current$cofactor_negative)
+            eligible_count <- sum(eligible)
+            class_supported <- negative_reference_observable &&
+                !overlap_invalid && eligible_count > 0L &&
+                positive_count >= values$minimum_class_count &&
+                negative_count >= values$minimum_class_count &&
+                positive_count / eligible_count >= values$minimum_class_fraction &&
+                negative_count / eligible_count >= values$minimum_class_fraction
+            contrast_data <- current[eligible, .(
+                chrom, anchor_start, anchor_score,
+                outcome = delta_TA - delta_DN,
+                normalized_mark_GFP,
+                cofactor_present = as.integer(cofactor_positive),
+                analysis_context_class,
+                log_nearest_tss_genomic_distance,
+                log_nearest_cds_genomic_distance,
+                nearest_tss_direction_class,
+                nearest_cds_direction_class
+            )]
+            contrast_data[, genomic_block := paste(
+                chrom, floor(anchor_start / values$block_size), sep = ":"
+            )]
+            isoform_effect <- if (!negative_reference_observable) {
+                status_result(
+                    "negative_reference_below_source_floor",
+                    paste("cofactor source floor", motif_source_floor,
+                          "is above the requested negative reference")
+                )
+            } else if (overlap_invalid) {
+                status_result(
+                    "overlapping_score_classes",
+                    "positive threshold is below the negative reference"
+                )
+            } else if (!class_supported) {
+                status_result(
+                    "underpowered_anchor_class",
+                    "positive/negative cofactor class is below the declared support"
+                )
+            } else {
+                clustered_lm(
+                    contrast_data,
+                    model_formula(contrast_data),
+                    list(c(cofactor_present = 1)),
+                    margin_exposure = "cofactor_present"
+                )[[1L]]
+            }
+            isoform_effect <- add_empty_adjusted_margins(isoform_effect)
+            isoform_contrast_rows[[isoform_contrast_index]] <- cbind(data.table(
+                motif_id = threshold$motif_id,
+                factor_name = threshold$factor_name,
+                distance_band = threshold$distance_band,
+                positive_threshold = threshold$positive_threshold,
+                source_score_floor = motif_source_floor,
+                negative_reference_threshold = negative_reference,
+                negative_reference_observable = negative_reference_observable,
+                series_id = series_id,
+                contrast = "TA_minus_DN",
+                outcome = "delta_TA_vs_GFP_minus_delta_DN_vs_GFP",
+                anchors_positive = positive_count,
+                anchors_negative = negative_count,
+                anchors_intermediate = sum(current$cofactor_intermediate),
+                mean_contrast_positive = if (positive_count) {
+                    mean(current$delta_TA[current$cofactor_positive] -
+                         current$delta_DN[current$cofactor_positive])
+                } else NA_real_,
+                mean_contrast_negative = if (negative_count) {
+                    mean(current$delta_TA[current$cofactor_negative] -
+                         current$delta_DN[current$cofactor_negative])
+                } else NA_real_
+            ), isoform_effect)
+            isoform_contrast_index <- isoform_contrast_index + 1L
         }
         for (isoform in c("TA", "DN")) {
             outcome_column <- paste0("delta_", isoform)
@@ -1059,12 +1291,14 @@ for (motif_index in seq_len(nrow(thresholds))) {
                     total <- clustered_lm(
                         model_data,
                         model_formula(model_data),
-                        list(c(cofactor_present = 1))
+                        list(c(cofactor_present = 1)),
+                        margin_exposure = "cofactor_present"
                     )[[1L]]
                 }
                 intensity_rows[[intensity_index]] <- cbind(data.table(
                     motif_id = threshold$motif_id,
                     factor_name = threshold$factor_name,
+                    distance_band = threshold$distance_band,
                     positive_threshold = threshold$positive_threshold,
                     source_score_floor = motif_source_floor,
                     negative_reference_threshold = negative_reference,
@@ -1085,7 +1319,7 @@ for (motif_index in seq_len(nrow(thresholds))) {
                         mean(current[[outcome_column]][current$cofactor_positive]) -
                         mean(current[[outcome_column]][current$cofactor_negative])
                     } else NA_real_
-                ), total)
+                ), add_empty_adjusted_margins(total))
                 intensity_index <- intensity_index + 1L
 
                 if (annotation_available) {
@@ -1145,13 +1379,15 @@ for (motif_index in seq_len(nrow(thresholds))) {
                                 model_formula(
                                     context_data, adjust_context_class = FALSE
                                 ),
-                                list(c(cofactor_present = 1))
+                                list(c(cofactor_present = 1)),
+                                margin_exposure = "cofactor_present"
                             )[[1L]]
                         }
                         context_intensity_rows[[context_intensity_index]] <- cbind(
                             data.table(
                                 motif_id = threshold$motif_id,
                                 factor_name = threshold$factor_name,
+                                distance_band = threshold$distance_band,
                                 positive_threshold = threshold$positive_threshold,
                                 source_score_floor = motif_source_floor,
                                 negative_reference_threshold = negative_reference,
@@ -1175,7 +1411,7 @@ for (motif_index in seq_len(nrow(thresholds))) {
                                     ])
                                 } else NA_real_
                             ),
-                            context_effect
+                            add_empty_adjusted_margins(context_effect)
                         )
                         context_intensity_index <- context_intensity_index + 1L
                     }
@@ -1239,7 +1475,8 @@ for (motif_index in seq_len(nrow(thresholds))) {
                             clustered_lm(
                                 relation_data,
                                 model_formula(relation_data),
-                                list(c(cofactor_present = 1))
+                                list(c(cofactor_present = 1)),
+                                margin_exposure = "cofactor_present"
                             )[[1L]]
                         }
                         gene_relation_intensity_rows[[
@@ -1248,6 +1485,7 @@ for (motif_index in seq_len(nrow(thresholds))) {
                             data.table(
                                 motif_id = threshold$motif_id,
                                 factor_name = threshold$factor_name,
+                                distance_band = threshold$distance_band,
                                 positive_threshold = threshold$positive_threshold,
                                 source_score_floor = motif_source_floor,
                                 negative_reference_threshold = negative_reference,
@@ -1271,7 +1509,7 @@ for (motif_index in seq_len(nrow(thresholds))) {
                                     ])
                                 } else NA_real_
                             ),
-                            relation_effect
+                            add_empty_adjusted_margins(relation_effect)
                         )
                         gene_relation_intensity_index <-
                             gene_relation_intensity_index + 1L
@@ -1327,6 +1565,7 @@ for (motif_index in seq_len(nrow(thresholds))) {
                 score_effect_rows[[score_effect_index]] <- cbind(data.table(
                     motif_id = threshold$motif_id,
                     factor_name = threshold$factor_name,
+                    distance_band = threshold$distance_band,
                     positive_threshold = threshold$positive_threshold,
                     source_score_floor = motif_source_floor,
                     score_clamp_reference = negative_reference,
@@ -1347,7 +1586,10 @@ for (motif_index in seq_len(nrow(thresholds))) {
                 four_cells <- nrow(cell_counts) == 4L &&
                     min(cell_counts$N) >= values$minimum_interaction_cell_count
                 if (!class_supported) {
-                    interaction <- replicate(3L, total, simplify = FALSE)
+                    interaction <- replicate(3L, status_result(
+                        comparison_status, comparison_note, nrow(model_data),
+                        uniqueN(model_data$genomic_block)
+                    ), simplify = FALSE)
                 } else if (!four_cells) {
                     interaction <- replicate(3L, status_result(
                         "underpowered_interaction",
@@ -1374,6 +1616,7 @@ for (motif_index in seq_len(nrow(thresholds))) {
                     interaction_rows[[interaction_index]] <- cbind(data.table(
                         motif_id = threshold$motif_id,
                         factor_name = threshold$factor_name,
+                        distance_band = threshold$distance_band,
                         positive_threshold = threshold$positive_threshold,
                         source_score_floor = motif_source_floor,
                         negative_reference_threshold = negative_reference,
@@ -1413,6 +1656,7 @@ for (motif_index in seq_len(nrow(thresholds))) {
                 state_summary[, `:=`(
                     motif_id = threshold$motif_id,
                     factor_name = threshold$factor_name,
+                    distance_band = threshold$distance_band,
                     positive_threshold = threshold$positive_threshold,
                     source_score_floor = motif_source_floor,
                     negative_reference_threshold = negative_reference,
@@ -1447,6 +1691,7 @@ for (motif_index in seq_len(nrow(thresholds))) {
                 occurrence_summary[, `:=`(
                     motif_id = threshold$motif_id,
                     factor_name = threshold$factor_name,
+                    distance_band = threshold$distance_band,
                     positive_threshold = threshold$positive_threshold,
                     source_score_floor = motif_source_floor,
                     negative_reference_threshold = negative_reference,
@@ -1460,11 +1705,13 @@ for (motif_index in seq_len(nrow(thresholds))) {
             }
         }
     }
-    message("I: analyzed motif ", threshold$motif_id, " (", motif_index, "/",
-            nrow(thresholds), ")")
+    message("I: analyzed motif ", threshold$motif_id, " band ",
+            threshold$distance_band, " (", motif_index, "/",
+            nrow(analysis_thresholds), ")")
 }
 
 intensity <- rbindlist(intensity_rows, fill = TRUE)
+isoform_contrast <- rbindlist(isoform_contrast_rows, fill = TRUE)
 interaction <- rbindlist(interaction_rows, fill = TRUE)
 binding_state <- rbindlist(state_rows, fill = TRUE)
 occurrence <- rbindlist(occurrence_rows, fill = TRUE)
@@ -1480,21 +1727,24 @@ gene_relation_occupancy <- if (annotation_available) {
 score_effect <- rbindlist(score_effect_rows, fill = TRUE)
 
 intensity[, q_value_bh := p.adjust(p_value, method = "BH"),
-          by = .(series_id, isoform, negative_reference_threshold)]
+          by = .(series_id, isoform, negative_reference_threshold, distance_band)]
+isoform_contrast[, q_value_bh := p.adjust(p_value, method = "BH"),
+                 by = .(series_id, negative_reference_threshold, distance_band)]
 interaction[, q_value_bh := p.adjust(p_value, method = "BH"),
-            by = .(series_id, isoform, negative_reference_threshold, contrast)]
+            by = .(series_id, isoform, negative_reference_threshold, contrast,
+                   distance_band)]
 if (annotation_available) {
     context_intensity[, q_value_bh := p.adjust(p_value, method = "BH"),
         by = .(series_id, isoform, negative_reference_threshold,
-               genomic_context_class)]
+               genomic_context_class, distance_band)]
     gene_relation_intensity[, q_value_bh := p.adjust(p_value, method = "BH"),
         by = .(series_id, isoform, negative_reference_threshold,
-               gene_relation_class)]
+               gene_relation_class, distance_band)]
     gene_relation_occupancy[, q_value_bh := p.adjust(p_value, method = "BH"),
-        by = .(negative_reference_threshold, gene_relation_class)]
+        by = .(negative_reference_threshold, gene_relation_class, distance_band)]
 }
 score_effect[, q_value_bh := p.adjust(p_value, method = "BH"),
-    by = .(series_id, isoform, score_clamp_reference)]
+    by = .(series_id, isoform, score_clamp_reference, distance_band)]
 series_summary <- intensity[, .(
     series_estimable = sum(evaluation_status == "ok"),
     series_total = .N,
@@ -1520,7 +1770,7 @@ series_summary <- intensity[, .(
         "not_all_series_estimable"
     }
 ), by = .(
-    motif_id, factor_name, positive_threshold, source_score_floor,
+    motif_id, factor_name, distance_band, positive_threshold, source_score_floor,
     negative_reference_threshold, negative_reference_observable, isoform
 )]
 for (column in c("mean_adjusted_change_difference", "minimum_adjusted_change_difference",
@@ -1528,25 +1778,35 @@ for (column in c("mean_adjusted_change_difference", "minimum_adjusted_change_dif
     set(series_summary, which(!is.finite(series_summary[[column]])), column, NA_real_)
 }
 
-setorder(intensity, motif_id, negative_reference_threshold, isoform, series_id)
-setorder(interaction, motif_id, negative_reference_threshold, isoform, series_id,
-         contrast)
-setorder(series_summary, motif_id, negative_reference_threshold, isoform)
-setorder(binding_state, motif_id, negative_reference_threshold, isoform, series_id,
-         cofactor_present, binding_state)
-setorder(occurrence, motif_id, negative_reference_threshold, isoform, series_id,
-         cofactor_present, tp73_confirmed, occurrence)
+setorder(intensity, motif_id, distance_band, negative_reference_threshold,
+         isoform, series_id)
+setorder(isoform_contrast, motif_id, negative_reference_threshold, series_id,
+         distance_band)
+setorder(interaction, motif_id, distance_band, negative_reference_threshold,
+         isoform, series_id, contrast)
+setorder(series_summary, motif_id, distance_band, negative_reference_threshold,
+         isoform)
+setorder(binding_state, motif_id, distance_band, negative_reference_threshold,
+         isoform, series_id, cofactor_present, binding_state)
+setorder(occurrence, motif_id, distance_band, negative_reference_threshold,
+         isoform, series_id, cofactor_present, tp73_confirmed, occurrence)
 if (annotation_available) {
-    setorder(context_intensity, motif_id, negative_reference_threshold, isoform,
-             series_id, genomic_context_class)
-    setorder(gene_relation_intensity, motif_id, negative_reference_threshold,
-             isoform, series_id, gene_relation_class)
-    setorder(gene_relation_occupancy, motif_id, negative_reference_threshold,
+    setorder(context_intensity, motif_id, distance_band,
+             negative_reference_threshold, isoform, series_id,
+             genomic_context_class)
+    setorder(gene_relation_intensity, motif_id, distance_band,
+             negative_reference_threshold, isoform, series_id,
              gene_relation_class)
+    setorder(gene_relation_occupancy, motif_id, distance_band,
+             negative_reference_threshold, gene_relation_class)
 }
-setorder(score_effect, motif_id, score_clamp_reference, isoform, series_id)
+setorder(score_effect, motif_id, distance_band, score_clamp_reference, isoform,
+         series_id)
 
 fwrite(intensity, paste0(values$output_prefix, "_intensity_effect.tsv"),
+       sep = "\t", na = "NA", quote = FALSE)
+fwrite(isoform_contrast,
+       paste0(values$output_prefix, "_isoform_contrast.tsv"),
        sep = "\t", na = "NA", quote = FALSE)
 fwrite(interaction, paste0(values$output_prefix, "_tp73_interaction.tsv"),
        sep = "\t", na = "NA", quote = FALSE)
@@ -1583,7 +1843,7 @@ fwrite(score_effect, paste0(values$output_prefix, "_score_gradient.tsv"),
        sep = "\t", na = "NA", quote = FALSE)
 
 run_config <- data.table(
-    schema_version = 5L,
+    schema_version = 6L,
     analysis = "gfp_referenced_h3k4me3_cofactor_change",
     analysis_role = values$analysis_role,
     chromosomes = paste(sort(unique(wide$chrom)), collapse = ","),
@@ -1604,6 +1864,23 @@ run_config <- data.table(
     signal_formula = "log2((h3k4me3_area + alpha)/(input_area + alpha))",
     primary_outcome = "condition_minus_GFP_normalized_H3K4me3",
     primary_estimand = "cofactor_positive_minus_negative_difference_in_change",
+    direct_isoform_estimand = paste(
+        "cofactor_positive_minus_negative_difference_in",
+        "(TA_minus_GFP)_minus_(DN_minus_GFP) at the same anchor"
+    ),
+    direct_isoform_shared_reference =
+        "GFP cancels algebraically within each anchor before fitting",
+    adjusted_margin_semantics = paste(
+        "standardized model predictions with the cofactor class set to",
+        "negative or positive for every eligible anchor"
+    ),
+    distance_bands = paste(distance_bands, collapse = ","),
+    distance_band_schema = if (any(distance_bands != "all_150")) {
+        paste0(
+            "exclusive_overlap_adjacent_0_5_gap_6_20_gap_21_50_",
+            "gap_51_100_gap_101_150_v1"
+        )
+    } else "all_150_legacy_summary",
     adjustment_variant = if (values$adjust_gfp_baseline) {
         "gfp_baseline_adjusted_sensitivity"
     } else "prespecified_primary_without_gfp_baseline",
@@ -1666,7 +1943,10 @@ run_config <- data.table(
     minimum_interaction_cell_count = values$minimum_interaction_cell_count,
     motifs_in_threshold_input = nrow(thresholds),
     multiple_testing_scope =
-        "motifs_in_threshold_input_within_declared_series_isoform_reference_family"
+        paste(
+            "motifs_in_threshold_input_within_declared_series_isoform_reference",
+            "and_distance_band_family"
+        )
 )
 fwrite(run_config, paste0(values$output_prefix, "_run_config.tsv"),
        sep = "\t", na = "NA", quote = FALSE)

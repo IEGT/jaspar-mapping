@@ -263,6 +263,11 @@ def validate_task_marker(directory: Path, row: dict[str, str],
     if (marker.get("schema_version") != 1
             or marker.get("task_index") != int(row["task_index"])
             or marker.get("motif_id") != row["motif_id"]
+            or marker.get("feature_schema_version") != 3
+            or marker.get("distance_band_schema_id") != (
+                "exclusive_overlap_adjacent_0_5_gap_6_20_gap_21_50_"
+                "gap_51_100_gap_101_150_v1"
+            )
             or marker.get("analysis_partition") != "autosome"):
         raise GenomeContextError(f"task marker identity differs: {marker_path}")
     record = marker.get("files", {}).get("cofactor_maxima.parquet")
@@ -279,7 +284,10 @@ def validate_task_marker(directory: Path, row: dict[str, str],
     validation = marker.get("validation")
     if (not isinstance(validation, dict)
             or int(validation.get("chromosomes", -1)) != 22
-            or int(validation.get("duplicate_keys", -1)) != 0):
+            or int(validation.get("duplicate_keys", -1)) != 0
+            or int(validation.get("feature_schema_version", -1)) != 3
+            or int(validation.get("distance_band_schema_values", -1)) != 1
+            or int(validation.get("wrong_distance_band_schema_rows", -1)) != 0):
         raise GenomeContextError(f"task validation is incomplete: {marker_path}")
     return marker
 
@@ -722,6 +730,10 @@ def finalize(arguments: argparse.Namespace) -> None:
             "analysis_partition": "autosome",
             "chromosome_count": int(marker["validation"]["chromosomes"]),
             "anchor_count": int(marker["validation"]["anchors"]),
+            "feature_schema_version": int(
+                marker["validation"]["feature_schema_version"]
+            ),
+            "distance_band_schema_id": marker["distance_band_schema_id"],
             "scan_minimum_score": float(row["scan_minimum_score"]),
             "applied_context_threshold": float(row["applied_context_threshold"]),
             "relative_path": str(
@@ -802,6 +814,11 @@ SELECT * FROM read_parquet(file_paths, hive_partitioning=false);
             "chromosomes": config["chromosomes"],
             "threshold_set_id": config["threshold_set_id"],
             "threshold_application_rule": config["threshold_application_rule"],
+            "feature_schema_version": 3,
+            "distance_band_schema_id": (
+                "exclusive_overlap_adjacent_0_5_gap_6_20_gap_21_50_"
+                "gap_51_100_gap_101_150_v1"
+            ),
             "payload_files_copied": False,
             "payload_checksum_verification_at_finalization":
                 arguments.verify_checksums,

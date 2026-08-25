@@ -179,6 +179,7 @@ def validate_existing(directory: Path, row: dict[str, str],
             or marker.get("motif_id") != row["motif_id"]
             or marker.get("threshold_registry_sha256")
                != config["threshold_registry_sha256"]
+            or marker.get("feature_schema_version") != 3
             or not isinstance(record, dict)
             or not maxima.is_file()
             or maxima.stat().st_size != int(record.get("bytes", -1))):
@@ -255,7 +256,15 @@ SELECT count(*)::BIGINT AS rows,
                          {sql_string(threshold_set_id)})::BIGINT
            AS wrong_threshold_rows,
        count(DISTINCT source_score_floor)::BIGINT AS source_floors,
-       count(DISTINCT recommended_threshold)::BIGINT AS applied_thresholds
+       count(DISTINCT recommended_threshold)::BIGINT AS applied_thresholds,
+       min(schema_version)::INTEGER AS feature_schema_version,
+       count(DISTINCT schema_version)::BIGINT AS feature_schema_versions,
+       count(DISTINCT distance_band_schema_id)::BIGINT
+           AS distance_band_schema_values,
+       count(*) FILTER (
+         WHERE distance_band_schema_id <>
+           'exclusive_overlap_adjacent_0_5_gap_6_20_gap_21_50_gap_51_100_gap_101_150_v1'
+       )::BIGINT AS wrong_distance_band_schema_rows
 FROM read_parquet({sql_string(output)}, hive_partitioning=false);
 """)
     if len(values) != 1:
@@ -269,7 +278,11 @@ FROM read_parquet({sql_string(output)}, hive_partitioning=false);
             or result["missing_count_rows"] != 0
             or result["wrong_threshold_rows"] != 0
             or result["source_floors"] != 1
-            or result["applied_thresholds"] != 1):
+            or result["applied_thresholds"] != 1
+            or result["feature_schema_version"] != 3
+            or result["feature_schema_versions"] != 1
+            or result["distance_band_schema_values"] != 1
+            or result["wrong_distance_band_schema_rows"] != 0):
         raise ContextBatchError(f"context output validation failed: {result}")
     return result
 
@@ -313,6 +326,11 @@ def publish_task(
         "threshold_registry_sha256": config["threshold_registry_sha256"],
         "context_flank_bp": config["context_flank_bp"],
         "context_distance_metric": config["context_distance_metric"],
+        "feature_schema_version": validation["feature_schema_version"],
+        "distance_band_schema_id": (
+            "exclusive_overlap_adjacent_0_5_gap_6_20_gap_21_50_"
+            "gap_51_100_gap_101_150_v1"
+        ),
         "chromosomes": config["chromosomes"],
         "source_commit": config["source_commit"],
         "scan_manifest_sha256": config["scan_manifest_sha256"],

@@ -251,14 +251,14 @@ SELECT CASE WHEN (SELECT count(*) FROM read_parquet('$m1')) <> 22
     THEN error('M1 autosomal context is incomplete') END;
 SELECT CASE WHEN EXISTS (
     SELECT 1 FROM read_parquet('$m1')
-    WHERE schema_version <> 2 OR context_score <> 2
+    WHERE schema_version <> 3 OR context_score <> 2
        OR n_neighbor_loci_at_source_floor <> 1
        OR n_neighbor_loci_at_or_above_zero <> 1
        OR n_neighbor_loci_above_threshold <> 1
 ) THEN error('M1 nearby hit was not retained and counted') END;
 SELECT CASE WHEN EXISTS (
     SELECT 1 FROM read_parquet('$m2')
-    WHERE schema_version <> 2 OR context_score IS NOT NULL
+    WHERE schema_version <> 3 OR context_score IS NOT NULL
        OR n_neighbor_loci_at_source_floor <> 0
        OR n_neighbor_loci_at_or_above_zero <> 0
        OR n_neighbor_loci_above_threshold <> 0

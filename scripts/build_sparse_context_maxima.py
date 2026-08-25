@@ -19,6 +19,16 @@ class ContextMaximaError(RuntimeError):
     pass
 
 
+DISTANCE_BANDS = (
+    ("overlap", "l.interval_distance_bp < 0"),
+    ("adjacent_0_5", "l.interval_distance_bp BETWEEN 0 AND 5"),
+    ("gap_6_20", "l.interval_distance_bp BETWEEN 6 AND 20"),
+    ("gap_21_50", "l.interval_distance_bp BETWEEN 21 AND 50"),
+    ("gap_51_100", "l.interval_distance_bp BETWEEN 51 AND 100"),
+    ("gap_101_150", "l.interval_distance_bp BETWEEN 101 AND 150"),
+)
+
+
 def sql_string(value: str | Path) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
@@ -100,6 +110,34 @@ def declared_span_sql(spans: dict[str, int]) -> str:
         for motif_id, span in sorted(spans.items())
     )
     return f"SELECT * FROM (VALUES {values}) AS declared(motif_id, span_bp)"
+
+
+def distance_band_feature_sql() -> str:
+    expressions: list[str] = []
+    for name, predicate in DISTANCE_BANDS:
+        expressions.extend((
+            f"MAX(l.locus_score) FILTER (WHERE {predicate})::FLOAT "
+            f"AS context_score_{name}",
+            "COUNT(*) FILTER (WHERE l.hit_start IS NOT NULL AND "
+            f"{predicate})::BIGINT AS source_floor_locus_count_{name}",
+            "COUNT(*) FILTER (WHERE l.hit_start IS NOT NULL AND "
+            f"l.locus_score >= 0 AND {predicate})::BIGINT "
+            f"AS zero_score_locus_count_{name}",
+        ))
+    return ",\n        ".join(expressions)
+
+
+def distance_band_output_sql() -> str:
+    expressions: list[str] = []
+    for name, _ in DISTANCE_BANDS:
+        expressions.extend((
+            f"f.context_score_{name}",
+            f"f.source_floor_locus_count_{name} "
+            f"AS n_neighbor_loci_at_source_floor_{name}",
+            f"f.zero_score_locus_count_{name} "
+            f"AS n_neighbor_loci_at_or_above_zero_{name}",
+        ))
+    return ",\n    ".join(expressions)
 
 
 def threshold_source_sql(
@@ -292,6 +330,7 @@ features AS (
         a.anchor_end,
         t.*,
         MAX(l.locus_score)::FLOAT AS context_score,
+        {distance_band_feature_sql()},
         COUNT(*) FILTER (
             WHERE l.hit_start IS NOT NULL
         )::BIGINT AS source_floor_locus_count,
@@ -320,7 +359,7 @@ features AS (
     GROUP BY ALL
 )
 SELECT
-    2::INTEGER AS schema_version,
+    3::INTEGER AS schema_version,
     f.chrom,
     CASE WHEN f.target_motif_id IS NULL THEN NULL
          ELSE md5(concat_ws('|', f.genome_id, f.motif_set_id, f.chrom,
@@ -333,6 +372,7 @@ SELECT
     f.motif_id,
     f.motif_name,
     f.context_score,
+    {distance_band_output_sql()},
     f.source_floor_locus_count AS n_neighbor_loci_at_source_floor,
     f.zero_score_locus_count AS n_neighbor_loci_at_or_above_zero,
     f.source_floor_locus_count > 0 AS has_neighbor_locus_at_source_floor,
@@ -365,7 +405,9 @@ SELECT
     p.observed_max_context_span_bp,
     p.declared_max_context_span_bp,
     p.effective_max_context_span_bp,
-    'signed_interval_edge_distance'::VARCHAR AS context_distance_metric
+    'signed_interval_edge_distance'::VARCHAR AS context_distance_metric,
+    'exclusive_overlap_adjacent_0_5_gap_6_20_gap_21_50_gap_51_100_gap_101_150_v1'
+      ::VARCHAR AS distance_band_schema_id
 FROM features f
 CROSS JOIN parameter p
 ) TO {sql_string(staging_output)}
@@ -502,6 +544,23 @@ def validate_output(
     expected_motifs: int,
     threshold_configured: bool,
 ) -> dict[str, int]:
+    band_names = [name for name, _ in DISTANCE_BANDS]
+    band_source_sum = " + ".join(
+        f"n_neighbor_loci_at_source_floor_{name}" for name in band_names
+    )
+    band_zero_sum = " + ".join(
+        f"n_neighbor_loci_at_or_above_zero_{name}" for name in band_names
+    )
+    band_scores = ", ".join(f"context_score_{name}" for name in band_names)
+    band_row_checks = " OR ".join(
+        "("
+        f"(context_score_{name} IS NULL) <> "
+        f"(n_neighbor_loci_at_source_floor_{name} = 0) OR "
+        f"n_neighbor_loci_at_or_above_zero_{name} > "
+        f"n_neighbor_loci_at_source_floor_{name}"
+        ")"
+        for name in band_names
+    )
     query = f"""
 WITH output AS (SELECT * FROM read_parquet({sql_string(output)}))
 SELECT
@@ -530,6 +589,12 @@ SELECT
                (n_neighbor_loci_at_or_above_zero > 0))
            OR (context_score IS NULL) <> (n_neighbor_loci_at_source_floor = 0)
     )::BIGINT AS invalid_source_counts,
+    COUNT(*) FILTER (
+        WHERE ({band_row_checks})
+           OR n_neighbor_loci_at_source_floor <> ({band_source_sum})
+           OR n_neighbor_loci_at_or_above_zero <> ({band_zero_sum})
+           OR context_score IS DISTINCT FROM list_max([{band_scores}])
+    )::BIGINT AS invalid_distance_band_rows,
     COUNT(*) FILTER (WHERE n_neighbor_loci_above_threshold IS NOT NULL)::BIGINT
         AS populated_count_rows,
     COUNT(*) FILTER (
@@ -553,7 +618,9 @@ SELECT
     COUNT(DISTINCT declared_max_context_span_bp)::BIGINT
         AS declared_context_span_values,
     COUNT(DISTINCT effective_max_context_span_bp)::BIGINT
-        AS effective_context_span_values
+        AS effective_context_span_values,
+    COUNT(DISTINCT distance_band_schema_id)::BIGINT AS distance_band_schema_values,
+    MIN(distance_band_schema_id)::VARCHAR AS distance_band_schema_id
 FROM output;
 """
     process = subprocess.run(
@@ -580,7 +647,12 @@ FROM output;
         "effective_max_context_span_bp",
     )):
         raise ContextMaximaError("anchor or motif-hit inputs lack interval spans")
-    result = {key: int(value) for key, value in rows[0].items()}
+    distance_band_schema_id = str(rows[0]["distance_band_schema_id"])
+    result = {
+        key: int(value)
+        for key, value in rows[0].items()
+        if key != "distance_band_schema_id"
+    }
     if (result["observed_max_anchor_span_bp"] <= 0
             or result["effective_max_context_span_bp"] <= 0):
         raise ContextMaximaError(
@@ -593,20 +665,26 @@ FROM output;
         )
     if result["motifs"] != expected_motifs:
         raise ContextMaximaError("output does not contain every requested motif")
-    if result["schema_versions"] != 1 or result["schema_version"] != 2:
+    if result["schema_versions"] != 1 or result["schema_version"] != 3:
         raise ContextMaximaError("output has an unsupported feature schema version")
     if result["rows"] != result["anchors"] * expected_motifs:
         raise ContextMaximaError("output is not rectangular by anchor and motif")
     if (result["duplicate_keys"] != 0
             or result["scores_below_source_floor"] != 0
-            or result["invalid_source_counts"] != 0):
+            or result["invalid_source_counts"] != 0
+            or result["invalid_distance_band_rows"] != 0):
         raise ContextMaximaError("output failed key or source-score-floor validation")
     if any(result[key] != 1 for key in (
         "prefilter_values", "anchor_span_values",
         "observed_context_span_values", "declared_context_span_values",
-        "effective_context_span_values",
+        "effective_context_span_values", "distance_band_schema_values",
     )):
         raise ContextMaximaError("output contains inconsistent geometry provenance")
+    if distance_band_schema_id != (
+        "exclusive_overlap_adjacent_0_5_gap_6_20_gap_21_50_gap_51_100_"
+        "gap_101_150_v1"
+    ):
+        raise ContextMaximaError("output has an unsupported distance-band schema")
     if threshold_configured:
         if (result["populated_count_rows"] != result["rows"]
                 or result["invalid_positive_counts"] != 0

@@ -106,15 +106,17 @@ physical keys before any model starts.
 ```sh
 H3_PACKAGE=$H3_RUN/final/genome_h3k4me3_signal
 ANNOTATION=$ANNOTATION_RUN/final
-CONTEXT=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_tp73_context_maxima_autosomes_v1/final/context_maxima
-ANALYSIS_RUN=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_h3k4me3_cofactor_analysis_v4_schema9_gene_relation
+CONTEXT=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_tp73_context_maxima_score0_bands_v1/final/context_maxima
+ANALYSIS_RUN=/data/sm718/jaspar_mapping_runs/jaspar2026_grch38_h3k4me3_cofactor_score0_bands_v1
 
 "$SOURCE/scripts/submit_h3k4me3_cofactor_analysis_slurm.sh" \
   --run-root "$ANALYSIS_RUN" --h3-package "$H3_PACKAGE" \
   --evidence-package "$EVIDENCE" --context-maxima-package "$CONTEXT" \
   --annotation-catalog "$ANNOTATION" --runtime-prefix "$RUNTIME" \
-  --run-id jaspar2026_grch38_h3k4me3_cofactor_analysis_v4_schema9_gene_relation \
+  --run-id jaspar2026_grch38_h3k4me3_cofactor_score0_bands_v1 \
   --source "$SOURCE" --rscript "$RUNTIME/r/bin/Rscript" \
+  --fixed-positive-threshold 0 \
+  --distance-bands all_150,overlap,adjacent_0_5,gap_6_20,gap_21_50,gap_51_100,gap_101_150 \
   --partition requeue --max-concurrent 20 \
   --motifs-per-batch 8 --cpus 4 --memory 32G --time 04:00:00 \
   --dry-run
@@ -130,10 +132,23 @@ The primary model is fit separately for SaOS-2 and SK-Mel-29 series 2 and for
 TA-GFP and DN-GFP. It adjusts for TP73 motif score, chromosome, compact genomic
 context, unsigned genomic distances to the nearest TSS and CDS, and explicit
 upstream/downstream/overlap/mixed-strand direction classes. The
-positive cofactor class uses the applied convenient threshold; strict `< -1`
-and `< 0` references remain separate and are marked censored when the source
-scan floor makes them unobservable. All-H3-zero anchors are omitted from
-intensity fits but retained in occurrence summaries.
+production command above fixes the positive cofactor class at score `>= 0`;
+the prior applied-convenient-threshold run remains a separate historical
+analysis. Strict `< -1` and `< 0` references remain separate and are marked
+censored when the source scan floor makes them unobservable. All-H3-zero
+anchors are omitted from intensity fits but retained in occurrence summaries.
+
+The result includes standardized adjusted class means and a direct paired
+TA-minus-DN contrast for every cofactor and distance band. Generate the human
+top-25 tables after finalization with:
+
+```sh
+python3 "$SOURCE/scripts/summarize_h3k4me3_isoform_rankings.py" \
+  --analysis-database "$ANALYSIS_RUN/final/h3k4me3_cofactor_analysis/h3k4me3_cofactor_analysis.duckdb" \
+  --jaspar-metadata "$SOURCE/resources/jaspar/JASPAR2026_CORE_metadata.tsv" \
+  --output-dir "$ANALYSIS_RUN/final/human_score0_isoform_rankings" \
+  --duckdb "$RUNTIME/duckdb/bin/duckdb" --top 25
+```
 
 `cofactor_present x confirmed_TP73` is a secondary descriptive interaction:
 TP73 confirmation is post-treatment and is deliberately omitted from the
@@ -144,8 +159,9 @@ the binary contrast.
 The schema-9 evaluator also emits
 `gene_relation_stratified_intensity_effect`: exactly 32 rows per motif (two
 negative references by two isoforms by two series by four relation classes).
-Its classes are promoter, downstream, gene body outside the two higher-
-precedence regions, and intergenic. Underpowered classes remain explicit rows
+With multiple requested distance bands, that contract applies independently
+to each band. Its classes are promoter, downstream, gene body outside the two
+higher-precedence regions, and intergenic. Underpowered classes remain explicit rows
 with a non-`ok` status.
 
 It also emits `gene_relation_stratified_tp73_occupancy`: exactly eight rows per

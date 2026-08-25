@@ -348,6 +348,8 @@ CREATE VIEW intensity AS SELECT * FROM read_csv_auto(
     '$temporary/result_intensity_effect.tsv', delim='\t', header=true, nullstr='NA');
 CREATE VIEW interaction AS SELECT * FROM read_csv_auto(
     '$temporary/result_tp73_interaction.tsv', delim='\t', header=true, nullstr='NA');
+CREATE VIEW isoform_contrast AS SELECT * FROM read_csv_auto(
+    '$temporary/result_isoform_contrast.tsv', delim='\t', header=true, nullstr='NA');
 CREATE VIEW summary AS SELECT * FROM read_csv_auto(
     '$temporary/result_series_summary.tsv', delim='\t', header=true, nullstr='NA');
 CREATE VIEW state_summary AS SELECT * FROM read_csv_auto(
@@ -362,6 +364,18 @@ SELECT CASE WHEN NOT EXISTS (
       AND negative_reference_threshold = -1 AND evaluation_status = 'ok'
       AND try_cast(estimate AS DOUBLE) > 0
 ) THEN error('known positive TA-minus-GFP cofactor effect was not recovered') END;
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM intensity
+    WHERE motif_id = 'M_EFFECT' AND isoform = 'TA'
+      AND negative_reference_threshold = -1 AND evaluation_status = 'ok'
+      AND adjusted_mean_change_positive IS NOT NULL
+      AND adjusted_mean_change_negative IS NOT NULL
+) THEN error('adjusted positive/negative margins were not recovered') END;
+SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM isoform_contrast
+    WHERE motif_id = 'M_EFFECT' AND contrast = 'TA_minus_DN'
+      AND negative_reference_threshold = -1 AND evaluation_status = 'ok'
+) THEN error('paired anchor-level TA-minus-DN contrast was not recovered') END;
 SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM summary
     WHERE motif_id = 'M_EFFECT' AND isoform = 'TA'
@@ -593,7 +607,7 @@ SELECT CASE WHEN NOT EXISTS (
 SELECT CASE WHEN NOT EXISTS (
   SELECT 1 FROM context_config
   WHERE input_mode = 'precomputed_change'
-    AND schema_version = 5
+    AND schema_version = 6
     AND annotation_schema =
       'schema9_tp73_context_anchor_collapsed_to_physical_span'
     AND gene_relation_precedence =
