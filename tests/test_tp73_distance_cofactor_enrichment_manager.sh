@@ -269,6 +269,24 @@ database="$run_root/final/distance_enrichment/tp73_distance_cofactor_enrichment.
 duckdb -light-mode -batch "$database" >/dev/null <<SQL
 SELECT CASE WHEN (SELECT count(*) FROM cofactor_distance_enrichment) <> 24
   THEN error('result cardinality is wrong') END;
+SELECT CASE WHEN (SELECT count(*)
+                  FROM cofactor_distance_frequency_enrichment) <> 24
+  THEN error('frequency-result cardinality is wrong') END;
+SELECT CASE WHEN NOT EXISTS (
+  SELECT 1 FROM cofactor_distance_frequency_enrichment
+  WHERE motif_id='MA0001.1' AND isoform='TA'
+    AND distance_band='adjacent_0_5'
+    AND abs(all_tp73_anchor_vicinity_frequency - 0.5) < 1e-12
+    AND abs(anti_supported_positive_anchor_fraction_discordant
+            - positive_anti_discordant / total_anti_discordant::DOUBLE) < 1e-12
+    AND abs(control_supported_positive_anchor_fraction_discordant
+            - positive_control_discordant / total_control_discordant::DOUBLE)
+            < 1e-12
+    AND abs(anti_to_control_positive_anchor_log2_ratio_discordant
+            - log2(anti_to_control_positive_anchor_frequency_ratio_discordant))
+            < 1e-12
+    AND abs(adjusted_log2_odds - log2(adjusted_odds_ratio)) < 1e-12
+) THEN error('frequency/enrichment calculations are wrong') END;
 SELECT CASE WHEN (SELECT count(*) FROM cofactor_distance_isoform_contrast) <> 12
   THEN error('isoform-contrast cardinality is wrong') END;
 SELECT CASE WHEN (
@@ -358,7 +376,11 @@ assert config["source_species_unspecified_task_count"] == 0
 assert "not a binding-species restriction" in config["source_species_semantics"]
 assert manifest["chromosomes"] == ["1"]
 assert manifest["tax_group"] == "vertebrates"
-assert manifest["schema_version"] == 4
+assert manifest["schema_version"] == 5
+assert manifest["frequency_result_rows"] == 24
+assert "matched-discordant" in manifest["frequency_semantics"][
+    "anti_supported_positive_anchor_fraction_discordant"
+]
 assert manifest["isoform_contrast_rows"] == 12
 assert manifest["prespecified_panel_rows"] == 6
 assert manifest["prespecified_cofactor_names"] == [
@@ -370,5 +392,22 @@ assert manifest["pou_named_motif_rule"] == (
     "case-insensitive JASPAR motif_name prefix POU"
 )
 PY
+
+if command -v Rscript >/dev/null 2>&1 &&
+    Rscript -e 'suppressPackageStartupMessages({library(data.table); library(ggplot2)})' \
+        >/dev/null 2>&1; then
+    frequency_input="$run_root/final/distance_enrichment/cofactor_distance_frequency_enrichment.tsv"
+    "$repository_root/scripts/plot_tp73_distance_frequency_enrichment.R" \
+        --input "$frequency_input" \
+        --output-adjusted "$temporary/frequency-adjusted.png" \
+        --output-frequency-ratio "$temporary/frequency-ratio.png" \
+        --output-table "$temporary/frequency-plot.tsv"
+    [[ -s $temporary/frequency-adjusted.png ]]
+    [[ -s $temporary/frequency-ratio.png ]]
+    grep -q $'anti_supported_frequency_percent\t' \
+        "$temporary/frequency-plot.tsv"
+else
+    echo "I: R plotting dependencies unavailable; plot execution skipped." >&2
+fi
 
 echo "TP73 distance cofactor enrichment manager tests passed."

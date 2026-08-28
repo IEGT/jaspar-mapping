@@ -91,6 +91,50 @@ taxonomic family as the family size.
 These are motif-context associations, not yet unique TF identities. Similar
 matrices and TF-family redundancy require a later consolidation analysis.
 
+## Motif frequency and historical compatibility
+
+Schema 5 reports motif frequency beside every enrichment/depletion estimate.
+Repeated motif loci within one TP73 anchor and exclusive distance band count as
+one presence, matching the binary context interpretation used by the earlier
+JASPAR-2022 analysis. The following quantities remain distinct:
+
+- `all_tp73_anchor_vicinity_frequency` is the fraction of all TP73 anchors
+  with a motif score at or above the declared positive threshold in the band;
+- `anti_supported_positive_anchor_fraction_discordant` is the corresponding
+  fraction on the anti-p73-supported side of the matched-discordant CUT&RUN
+  comparison;
+- `control_supported_positive_anchor_fraction_discordant` is the matched
+  control-side fraction; and
+- `anti_to_control_positive_anchor_log2_ratio_discordant` is their descriptive
+  log2 ratio.
+
+The historical scatter plot used all CUT&RUN-supported anchors. The modern
+supported frequencies are intentionally restricted to anchors discordant
+between anti-p73 and matched control, because that is the population entering
+the primary matched analysis. Their frequency denominator includes positive,
+intermediate, and strict-negative contexts, with intermediate contexts counted
+as not positive. The primary odds ratio instead compares positive with strict
+negative and excludes intermediate contexts. The historical-style log2
+frequency ratio is therefore a compatibility view, not a replacement for the
+stratified adjusted odds ratio or its block-jackknife uncertainty.
+
+The finalizer-only schema extension reuses existing task sufficient statistics;
+it does not rescan motifs or recompute chromosome-level geometry. Generate both
+frequency plots from the finalized TSV with:
+
+```bash
+scripts/plot_tp73_distance_frequency_enrichment.R \
+  --input FINAL/cofactor_distance_frequency_enrichment.tsv \
+  --output-adjusted frequency_vs_adjusted_log2_odds.png \
+  --output-frequency-ratio frequency_vs_descriptive_log2_ratio.png \
+  --output-table frequency_plot_data.tsv
+```
+
+The first figure is primary: adjusted log2 odds on the x axis and
+anti-p73-supported motif frequency on the y axis. The second reproduces the
+older frequency-versus-log-ratio presentation as closely as the matched design
+allows, with its descriptive scope stated in the subtitle.
+
 ## Restart-safe production
 
 The kernel is
@@ -174,6 +218,10 @@ The final DuckDB database contains:
 - `cofactor_distance_enrichment`: one row per motif, isoform, and distance
   band, including class support, series-specific odds ratios, block-jackknife
   uncertainty, taxonomic group, and flattened source-species label;
+- `cofactor_distance_frequency_enrichment`: the compact plotting/query surface
+  with all-anchor, anti-p73-supported, and control-supported motif frequencies,
+  the descriptive anti/control log2 frequency ratio, and the primary adjusted
+  log2 odds ratio;
 - `cofactor_distance_isoform_contrast`: one row per motif and distance band,
   with the TA and DN estimates side by side, their odds-ratio ratio, a paired
   block-jackknife confidence interval, and BH-adjusted direct isoform test;

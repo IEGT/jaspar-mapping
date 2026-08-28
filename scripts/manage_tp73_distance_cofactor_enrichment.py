@@ -30,7 +30,7 @@ DISTANCE_BANDS = (
     "gap_51_100",
     "gap_101_150",
 )
-FINAL_SCHEMA_VERSION = 4
+FINAL_SCHEMA_VERSION = 5
 PRESPECIFIED_COFACTOR_NAMES = (
     "POU2F2",
     "SP1",
@@ -1042,6 +1042,10 @@ WITH total AS (
          sum(positive_control_discordant)::BIGINT AS positive_control_discordant,
          sum(negative_anti_discordant)::BIGINT AS negative_anti_discordant,
          sum(negative_control_discordant)::BIGINT AS negative_control_discordant,
+         sum(source_anti_discordant)::BIGINT AS source_anti_discordant,
+         sum(source_control_discordant)::BIGINT AS source_control_discordant,
+         sum(total_anti_discordant)::BIGINT AS total_anti_discordant,
+         sum(total_control_discordant)::BIGINT AS total_control_discordant,
          count(DISTINCT (chrom, block_index))::BIGINT AS genomic_blocks
   FROM cofactor_distance_block_component
   GROUP BY motif_id, isoform, distance_band
@@ -1086,8 +1090,38 @@ WITH total AS (
 )
 SELECT t.*, c.anchors_total, c.anchors_source_present, c.anchors_positive,
        c.anchors_intermediate, c.anchors_negative,
+       c.anchors_source_present / c.anchors_total::DOUBLE
+         AS source_present_anchor_fraction,
        c.anchors_positive / c.anchors_total::DOUBLE AS positive_anchor_fraction,
+       c.anchors_intermediate / c.anchors_total::DOUBLE
+         AS intermediate_anchor_fraction,
        c.anchors_negative / c.anchors_total::DOUBLE AS negative_anchor_fraction,
+       t.positive_anti_discordant
+         / nullif(t.total_anti_discordant, 0)::DOUBLE
+         AS anti_supported_positive_anchor_fraction_discordant,
+       t.positive_control_discordant
+         / nullif(t.total_control_discordant, 0)::DOUBLE
+         AS control_supported_positive_anchor_fraction_discordant,
+       CASE WHEN t.positive_anti_discordant > 0
+                   AND t.positive_control_discordant > 0
+                   AND t.total_anti_discordant > 0
+                   AND t.total_control_discordant > 0
+            THEN (t.positive_anti_discordant
+                    / t.total_anti_discordant::DOUBLE)
+                 / (t.positive_control_discordant
+                    / t.total_control_discordant::DOUBLE)
+            ELSE NULL END
+         AS anti_to_control_positive_anchor_frequency_ratio_discordant,
+       CASE WHEN t.positive_anti_discordant > 0
+                   AND t.positive_control_discordant > 0
+                   AND t.total_anti_discordant > 0
+                   AND t.total_control_discordant > 0
+            THEN ln((t.positive_anti_discordant
+                     / t.total_anti_discordant::DOUBLE)
+                    / (t.positive_control_discordant
+                     / t.total_control_discordant::DOUBLE)) / ln(2.0)
+            ELSE NULL END
+         AS anti_to_control_positive_anchor_log2_ratio_discordant,
        CASE WHEN t.numerator > 0 AND t.denominator > 0
             THEN t.numerator / t.denominator ELSE NULL END AS adjusted_odds_ratio,
        j.jackknife_blocks, j.jackknife_se,
@@ -1210,7 +1244,12 @@ ORDER BY t.distance_band_order, t.motif_id
         result_rows: list[dict[str, Any]] = []
         numeric_float = {
             "source_score_floor", "positive_threshold", "numerator", "denominator",
-            "positive_anchor_fraction", "negative_anchor_fraction",
+            "source_present_anchor_fraction", "positive_anchor_fraction",
+            "intermediate_anchor_fraction", "negative_anchor_fraction",
+            "anti_supported_positive_anchor_fraction_discordant",
+            "control_supported_positive_anchor_fraction_discordant",
+            "anti_to_control_positive_anchor_frequency_ratio_discordant",
+            "anti_to_control_positive_anchor_log2_ratio_discordant",
             "adjusted_odds_ratio", "jackknife_se", "saos2_or", "skmel29_2_or",
         }
         numeric_int = {
@@ -1218,7 +1257,9 @@ ORDER BY t.distance_band_order, t.motif_id
             "positive_control_discordant", "negative_anti_discordant",
             "negative_control_discordant", "genomic_blocks", "anchors_total",
             "anchors_source_present", "anchors_positive", "anchors_intermediate",
-            "anchors_negative", "jackknife_blocks", "source_species_count",
+            "anchors_negative", "source_anti_discordant",
+            "source_control_discordant", "total_anti_discordant",
+            "total_control_discordant", "jackknife_blocks", "source_species_count",
         }
         for raw in raw_rows:
             row: dict[str, Any] = dict(raw)
@@ -1312,7 +1353,11 @@ ORDER BY t.distance_band_order, t.motif_id
                 "anchors_positive": ta["anchors_positive"],
                 "anchors_intermediate": ta["anchors_intermediate"],
                 "anchors_negative": ta["anchors_negative"],
+                "source_present_anchor_fraction":
+                    ta["source_present_anchor_fraction"],
                 "positive_anchor_fraction": ta["positive_anchor_fraction"],
+                "intermediate_anchor_fraction":
+                    ta["intermediate_anchor_fraction"],
                 "negative_anchor_fraction": ta["negative_anchor_fraction"],
                 "class_support_flag": ta["class_support_flag"],
                 "collection": ta["collection"],
@@ -1338,6 +1383,14 @@ ORDER BY t.distance_band_order, t.motif_id
                     "saos2_or",
                     "skmel29_2_or",
                     "series_direction_consistent",
+                    "positive_anti_discordant",
+                    "positive_control_discordant",
+                    "total_anti_discordant",
+                    "total_control_discordant",
+                    "anti_supported_positive_anchor_fraction_discordant",
+                    "control_supported_positive_anchor_fraction_discordant",
+                    "anti_to_control_positive_anchor_frequency_ratio_discordant",
+                    "anti_to_control_positive_anchor_log2_ratio_discordant",
                 ):
                     row[f"{isoform_name}_{name}"] = source[name]
             log_difference = row["ta_vs_dn_log_odds_difference"]
@@ -1429,6 +1482,9 @@ ORDER BY t.distance_band_order, t.motif_id
                 table_root / "cofactor_distance_class_count" / "part-000000.parquet",
             "cofactor_distance_enrichment":
                 table_root / "cofactor_distance_enrichment" / "part-000000.parquet",
+            "cofactor_distance_frequency_enrichment":
+                table_root / "cofactor_distance_frequency_enrichment" /
+                "part-000000.parquet",
             "cofactor_distance_isoform_contrast":
                 table_root / "cofactor_distance_isoform_contrast" /
                 "part-000000.parquet",
@@ -1460,6 +1516,29 @@ ORDER BY t.distance_band_order, t.motif_id
         run_duckdb(arguments.duckdb, database, f"""
 CREATE TABLE cofactor_distance_enrichment AS
 SELECT * FROM read_json_auto({sql_string(result_json)}, format='newline_delimited');
+CREATE TABLE cofactor_distance_frequency_enrichment AS
+SELECT motif_id, motif_name, isoform, distance_band, distance_band_order,
+       source_score_floor, positive_threshold,
+       anchors_total, anchors_source_present, anchors_positive,
+       anchors_intermediate, anchors_negative,
+       source_present_anchor_fraction,
+       positive_anchor_fraction AS all_tp73_anchor_vicinity_frequency,
+       intermediate_anchor_fraction, negative_anchor_fraction,
+       positive_anti_discordant, total_anti_discordant,
+       anti_supported_positive_anchor_fraction_discordant,
+       positive_control_discordant, total_control_discordant,
+       control_supported_positive_anchor_fraction_discordant,
+       anti_to_control_positive_anchor_frequency_ratio_discordant,
+       anti_to_control_positive_anchor_log2_ratio_discordant,
+       adjusted_odds_ratio,
+       CASE WHEN adjusted_odds_ratio > 0
+            THEN ln(adjusted_odds_ratio) / ln(2.0) ELSE NULL END
+         AS adjusted_log2_odds,
+       confidence_interval_95_lower, confidence_interval_95_upper,
+       p_value, q_value_bh_tax_group, evaluation_status,
+       saos2_or, skmel29_2_or, series_direction_consistent,
+       collection, tax_group, includes_homo_sapiens, source_species
+FROM cofactor_distance_enrichment;
 CREATE TABLE cofactor_distance_isoform_contrast AS
 SELECT * FROM read_json_auto(
   {sql_string(contrast_json)}, format='newline_delimited'
@@ -1631,6 +1710,8 @@ ORDER BY s.isoform, s.distance_band_order,
          CASE s.direction WHEN 'enriched' THEN 1 ELSE 2 END, s.rank;
 CREATE UNIQUE INDEX distance_result_idx
   ON cofactor_distance_enrichment(motif_id, isoform, distance_band);
+CREATE UNIQUE INDEX distance_frequency_result_idx
+  ON cofactor_distance_frequency_enrichment(motif_id, isoform, distance_band);
 CREATE UNIQUE INDEX distance_isoform_contrast_idx
   ON cofactor_distance_isoform_contrast(motif_id, distance_band);
 CREATE UNIQUE INDEX distance_isoform_comparison_idx
@@ -1645,6 +1726,9 @@ COPY cofactor_distance_class_count
   (FORMAT PARQUET, COMPRESSION ZSTD);
 COPY cofactor_distance_enrichment
   TO {sql_string(paths['cofactor_distance_enrichment'])}
+  (FORMAT PARQUET, COMPRESSION ZSTD);
+COPY cofactor_distance_frequency_enrichment
+  TO {sql_string(paths['cofactor_distance_frequency_enrichment'])}
   (FORMAT PARQUET, COMPRESSION ZSTD);
 COPY cofactor_distance_isoform_contrast
   TO {sql_string(paths['cofactor_distance_isoform_contrast'])}
@@ -1676,6 +1760,9 @@ COPY jaspar_motif_set_matrix TO {sql_string(paths['jaspar_motif_set_matrix'])}
 COPY cofactor_distance_enrichment
   TO {sql_string(staging / 'cofactor_distance_enrichment.tsv')}
   (FORMAT CSV, DELIMITER '\t', HEADER, NULL 'NA');
+COPY cofactor_distance_frequency_enrichment
+  TO {sql_string(staging / 'cofactor_distance_frequency_enrichment.tsv')}
+  (FORMAT CSV, DELIMITER '\t', HEADER, NULL 'NA');
 COPY cofactor_distance_isoform_contrast
   TO {sql_string(staging / 'cofactor_distance_isoform_contrast.tsv')}
   (FORMAT CSV, DELIMITER '\t', HEADER, NULL 'NA');
@@ -1705,6 +1792,8 @@ CHECKPOINT;
         raw_contrast_tsv.unlink()
         counts = run_json(arguments.duckdb, database, """
 SELECT (SELECT count(*) FROM cofactor_distance_enrichment)::BIGINT AS results,
+       (SELECT count(*) FROM cofactor_distance_frequency_enrichment)::BIGINT
+         AS frequency_results,
        (SELECT count(*) FROM cofactor_distance_top_bottom_20)::BIGINT AS rankings,
        (SELECT count(*) FROM cofactor_distance_enrichment
         WHERE evaluation_status='ok')::BIGINT AS estimable,
@@ -1733,6 +1822,8 @@ SELECT (SELECT count(*) FROM cofactor_distance_enrichment)::BIGINT AS results,
         expected_results = len(tasks) * len(DISTANCE_BANDS) * 2
         if int(counts["results"]) != expected_results:
             raise DistanceEnrichmentError("final result cardinality differs")
+        if int(counts["frequency_results"]) != expected_results:
+            raise DistanceEnrichmentError("frequency result cardinality differs")
         expected_contrasts = len(tasks) * len(DISTANCE_BANDS)
         if int(counts["isoform_contrasts"]) != expected_contrasts:
             raise DistanceEnrichmentError("isoform-contrast cardinality differs")
@@ -1766,6 +1857,7 @@ SELECT (SELECT count(*) FROM cofactor_distance_enrichment)::BIGINT AS results,
             "source_species_unspecified_task_count":
                 config["source_species_unspecified_task_count"],
             "result_rows": int(counts["results"]),
+            "frequency_result_rows": int(counts["frequency_results"]),
             "estimable_rows": int(counts["estimable"]),
             "ranking_rows": int(counts["rankings"]),
             "isoform_contrast_rows": int(counts["isoform_contrasts"]),
@@ -1789,6 +1881,19 @@ SELECT (SELECT count(*) FROM cofactor_distance_enrichment)::BIGINT AS results,
             "isoform_contrast_uncertainty":
                 "paired 5Mb genomic-block delete-one-cluster jackknife",
             "common_effect": "Mantel-Haenszel across TP73 score strata and series",
+            "frequency_semantics": {
+                "all_tp73_anchor_vicinity_frequency":
+                    "fraction of all TP73 anchors positive for the motif in the band",
+                "anti_supported_positive_anchor_fraction_discordant":
+                    "motif-positive fraction on the anti-p73-supported side of "
+                    "matched-discordant anchors",
+                "control_supported_positive_anchor_fraction_discordant":
+                    "motif-positive fraction on the matched-control-supported side "
+                    "of matched-discordant anchors",
+                "historical_compatibility_limit":
+                    "the historical plot used all supported anchors; the modern "
+                    "supported frequencies are restricted to matched-discordant anchors",
+            },
             "distance_bands": list(DISTANCE_BANDS),
             "excluded_series": config["excluded_series"],
             "jaspar_catalog_manifest_sha256":

@@ -55,6 +55,7 @@ scripts/manage_tp73_genome_evidence.py
 scripts/plot_h3k4me3_genome_cofactor_summary.R
 scripts/plot_h3k4me3_metaprofile.R
 scripts/plot_informative_threshold_distribution.py
+scripts/plot_tp73_distance_frequency_enrichment.R
 scripts/plot_tp73_score_distributions.R
 scripts/query_genome_scan.py
 scripts/run_chr1_2026_motif_panel.sh
