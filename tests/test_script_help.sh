@@ -24,6 +24,7 @@ scripts/build_h3k4me3_anchor_signal.py
 scripts/build_jaspar_metadata_catalog.py
 scripts/build_motif_context.py
 scripts/build_motif_score_thresholds.py
+scripts/build_regulatory_annotation.py
 scripts/build_sparse_context_maxima.py
 scripts/build_tp73_anchor_evidence.py
 scripts/build_tp73_cutandrun_calibration_duckdb.sh

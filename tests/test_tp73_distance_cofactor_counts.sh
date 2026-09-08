@@ -93,4 +93,37 @@ SELECT CASE WHEN (SELECT count(DISTINCT series_id)
 THEN error('the two valid cell-line series were not retained') END;
 SQL
 
+# Regulatory membership selects anchors, not their neighbouring cofactor loci.
+# The first promoter ends at anchor end 116; its cofactor [116,125) is outside
+# that promoter but remains a positive adjacent hit in the unchanged context.
+printf '1\tEnsembl\tpromoter\t101\t116\t.\t.\t.\tID=P1;extended_start=101;extended_end=116\n1\tEnsembl\tpromoter\t301\t1316\t.\t.\t.\tID=P2;extended_start=301;extended_end=1316\n' \
+    > "$temporary/regulatory.gff"
+python3 "$repository_root/scripts/build_regulatory_annotation.py" import \
+    --gff "$temporary/regulatory.gff" --assembly GRCh38 \
+    --requested-release test --resolved-release test --source-uri synthetic \
+    --coordinate-audit-note 'known synthetic bounds' --output "$temporary/features"
+python3 "$repository_root/scripts/build_regulatory_annotation.py" annotate \
+    --features "$temporary/features" --anchors "$temporary/anchors.parquet" \
+    --chrom 1 --assembly GRCh38 --output "$temporary/membership"
+python3 "$repository_root/scripts/build_regulatory_annotation.py" select \
+    --anchors "$temporary/anchors.parquet" --membership "$temporary/membership" \
+    --subset promoter_extended --output "$temporary/selected"
+"$repository_root/scripts/build_tp73_distance_cofactor_counts.py" \
+    --anchors "$temporary/selected/selected_anchors.parquet" \
+    --plus-hits "$temporary/plus.parquet" --minus-hits "$temporary/minus.parquet" \
+    --motif-id MA9999.1 --motif-name SYNTHETIC --chrom 1 --positive-threshold 2 \
+    --block-output "$temporary/selected-block.parquet" \
+    --class-output "$temporary/selected-class.parquet" \
+    --block-size 10000 --memory-limit 1GB --max-temp-size 1GB \
+    --temp-directory "$temporary/spill"
+duckdb -batch -bail :memory: >/dev/null <<SQL
+SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM '$temporary/selected-class.parquet'
+  WHERE distance_band='adjacent_0_5' AND anchors_total=7 AND anchors_positive=4
+    AND anchors_intermediate=1 AND anchors_negative=2)
+  THEN error('regulatory subset changed cofactor geometry or did not recount anchors') END;
+SELECT CASE WHEN ABS((SELECT SUM(mh_numerator)/SUM(mh_denominator)
+  FROM '$temporary/selected-block.parquet' WHERE isoform='TA')-3.0)>1e-9
+  THEN error('regulatory subset did not recompute the TP73 association') END;
+SQL
+
 echo "TP73 distance cofactor count tests passed."

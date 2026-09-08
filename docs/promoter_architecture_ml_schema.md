@@ -86,6 +86,12 @@ identity moved into partition paths.
 
 ## Layers and keys
 
+Ensembl regulatory annotations use a separate physical feature dimension and
+anchor/TSS/gene bridges, not the per-TSS `promoter` key. See
+[ensembl_regulatory_annotation.md](ensembl_regulatory_annotation.md) for the
+package contract, independent membership axes, current coordinate-validation
+gate and subset-refitting interface. Existing Q20--Q24 semantics are unchanged.
+
 Full column lists live in `sql/schema.sql`; the essentials:
 
 The executable whole-genome batching, validation, inventory, and cross-species

@@ -1,0 +1,253 @@
+# Ensembl regulatory context at TP73 anchors
+
+Status, 2026-09-08: importer, anchor membership, TP73 evidence selection and
+H3K4me3 subset refitting implemented and tested locally. A real chromosome-1
+annotation pilot is complete. **No genome-wide regulatory-subset analysis has
+been submitted.** The GFF/BigBed coordinate disagreement below is an explicit
+source-validation gate before production.
+
+## Scientific contract
+
+The whole-genome anchor cohort remains the scientific primary. Ensembl
+regulatory annotations are additional, independently selectable contexts,
+not replacements for the existing gene-relation annotation:
+
+- Extended Ensembl promoters are primary **among promoter-focused screens**.
+- Core-only promoters are a nested sensitivity; the existing strand-aware
+  TSS upstream-2000/downstream-500 definition is a parallel comparator, not
+  an intersection with Ensembl.
+- Enhancers, open chromatin, other feature types and unannotated anchors
+  remain available. No regulatory overlap is not synonymous with intergenic.
+- Ensembl reference-tissue annotation is not demonstrated activity in SaOS-2
+  or SK-Mel-29. Restriction changes the estimand; GFP-baseline dependence,
+  GC/CpG, mappability and accessibility remain sensitivity questions. A
+  GFP-referenced change does not make this selection automatically harmless.
+
+Select anchors by positive half-open interval overlap, excluding abutment.
+Leave their cofactor neighbourhoods and existing score thresholds unchanged.
+A cofactor may lie outside the promoter containing its TP73 anchor. The
+"both motifs in the same promoter" sensitivity is deliberately **not**
+implemented here: the production maxima do not retain neighbour coordinates.
+That sensitivity must revisit the retained low-floor positions, not infer
+membership from the maximum score alone. Neither path needs a new DNA scan.
+
+Regulatory memberships are overlapping Boolean properties, not an exclusive
+classification. Core membership implies extended membership; enhancer and
+promoter membership may coexist. Frequency is the number of unique positive
+anchors divided by unique eligible anchors in the chosen subset, including
+intermediate cofactor scores in the denominator. Frequencies from exclusive
+distance bands must **not** be summed: their positive-anchor sets can overlap.
+Per-anchor locus counts can be summed across bands; the all-150 maximum is
+the maximum of band maxima.
+
+## Verified Ensembl source
+
+The [2025-12 track hub](https://regulation.ensembl.org/2025-12/trackhub/hub.txt)
+lists the human GRCh38 assembly. Its
+[track documentation](https://regulation.ensembl.org/2025-12/trackhub/docs/trackhub.html)
+links both BigBed and GFF. The documentation distinguishes the TSS
+identification window (90 upstream/10 downstream) from promoter-core
+construction (490 upstream/10 downstream), and describes merging overlapping
+cores and extending promoters using open-chromatin evidence. Do not
+reconstruct these features from our own TSS windows.
+
+The public GFF URL requested on 2026-09-08 was:
+
+```
+https://regulation.ensembl.org/api/annotation/v0.15/files/download/2025-12/homo_sapiens/GRCh38/Homo_sapiens.GRCh38.regulatory_features.gff.gz
+```
+
+The redirect headers explicitly resolve that request to **2025-05**, not
+2025-12. Both dates are recorded: `requested_regulatory_release=2025-12`,
+`regulatory_release=2025-05`. The durable public URL and actual compressed-file
+SHA-256 identify the source; short-lived signed redirect URLs are not stored
+as stable provenance. For future downloads, inspect the resolution headers
+again, rather than assuming this alias continues to resolve identically.
+
+| Export | SHA-256 |
+|---|---|
+| GFF.gz | `a5f5ef58ee7b3dfbc3667692d3cc6515c66789ad2de2c3a15784c5436367bb32` |
+| BigBed | `0bc0285ef0c2d5f0e2ca5f398bf8015a20747c9e54e80a97f6a168ef6f13f389` |
+
+The GFF contains 643,528 features: 35,983 promoters, 246,403 enhancers,
+7,541 open-chromatin regions, 90,891 CTCF binding sites and 262,710 EMARs.
+All promoters have `extended_start` and `extended_end`; the GFF interval
+itself is the core. Gene IDs can be comma-separated. Every feature type and
+the raw attributes are preserved, including records with no gene link.
+
+### Coordinate discrepancy
+
+For the same native promoter ID, `ENSR1_958`, the exports disagree:
+
+| Interpretation, BED half-open | Core | Extended |
+|---|---|---|
+| GFF, standard `start - 1`, unchanged end | `[10935,11436)` | `[9952,11436)` |
+| BigBed read by rtracklayer, GRanges start converted back to BED | `[10934,11436)` | `[9951,11436)` |
+
+The GFF raw row is `10936..11436`, with `extended_start=9953` and
+`extended_end=11436`. Both source starts, not the ends, differ by one base.
+The importer follows the declared GFF convention and does **not** silently
+shift it to match BigBed. The local pilot is therefore provisional. Resolve
+which source representation Ensembl intends before production, then pin that
+decision and payload. Do not reinterpret existing packages in place.
+
+An independent BigBed check, where Bioconductor rtracklayer is available:
+
+```r
+library(rtracklayer)
+g <- import(BigBedFile("Homo_sapiens.GRCh38.regulatory_features.bb"),
+            which=GRanges("1", IRanges(1,12000)),
+            colnames=c("name", "thick", "featureType"))
+d <- as.data.frame(g)
+d <- d[d$name == "ENSR1_958", ]
+data.frame(core_start=d$thick.start-1, core_end=d$thick.end,
+           extended_start=d$start-1, extended_end=d$end)
+```
+
+Selecting columns avoids the export's unrelated AutoSQL `itemRgb` issue:
+it declares a number while carrying comma-separated RGB values.
+
+## Separate packages and keys
+
+`scripts/build_regulatory_annotation.py` needs only Python's standard library
+and the DuckDB CLI. Use its `import`, `annotate` and `select` subcommand help
+for all options. Outputs are immutable directories: existing destinations are
+refused, intermediates stay private, and only completed packages are promoted.
+Source data are never removed. DuckDB defaults to two threads and a 1 GB
+memory limit. Large generated packages remain outside Git.
+
+The imported dimension is shared across chromosome membership packages,
+rather than copied for every cofactor. It is sorted by chromosome and start
+in ZSTD Parquet; annotation output is one package per chromosome. Every
+package contains a file-size/SHA-256 inventory, builder hash and `schema.sql`.
+Open DuckDB **from that package directory** and read `schema.sql` to create
+the corresponding views. Views use exact file paths, not globbed input sets.
+
+| Table | Grain and meaning |
+|---|---|
+| `regulatory_feature` | One physical Ensembl feature. ID hashes provider, assembly, resolved release, payload SHA-256 and native ID. Stores original interval, nullable core/extended bounds, strand, type and original attributes. |
+| `regulatory_feature_gene` | Native gene ownership or a separately labelled TSS-overlap-derived link. `link_source` distinguishes native, core, extended and feature-extent links; annotation releases remain separate. |
+| `regulatory_feature_tss` | Physical feature + selected bound definition + pinned physical TSS. Several genes and opposite-strand TSSs can share a feature. An enhancer overlapping a TSS is not thereby a proven target-gene link. |
+| `tp73_anchor_regulatory_feature` | Physical anchor + feature + bound definition; positive overlap bases and a full-containment flag. Does not multiply the analysis cohort by genes. |
+| `tp73_anchor_regulatory_membership` | Exactly one row per input physical anchor, including anchors with no feature. Boolean subset flags; unavailable legacy TSS-promoter annotation is NULL, not false. |
+
+Missing extended bounds remain NULL in the dimension. Annotation refuses to
+declare extended-promoter absence when promoter extension coordinates are
+missing. An absent chromosome (including a `chr1`/`1` mismatch) is an error,
+not an all-negative annotation. When supplied, TSS/ownership/promoter files
+must match the explicitly pinned genome and GTF annotation release.
+
+The existing `promoter`, `promoter_gene`, Q20--Q24 and gene-relation
+precedence are unchanged. Regulatory feature IDs have no single owning TSS.
+
+## Local commands
+
+Download the pinned GFF into a dedicated source directory, retaining the
+redirect headers. Import using its verified digest:
+
+```bash
+python3 scripts/build_regulatory_annotation.py import \
+  --gff SOURCE/Homo_sapiens.GRCh38.regulatory_features.gff.gz \
+  --assembly GRCh38 --requested-release 2025-12 --resolved-release 2025-05 \
+  --source-uri https://regulation.ensembl.org/api/annotation/v0.15/files/download/2025-12/homo_sapiens/GRCh38/Homo_sapiens.GRCh38.regulatory_features.gff.gz \
+  --expected-sha256 a5f5ef58ee7b3dfbc3667692d3cc6515c66789ad2de2c3a15784c5436367bb32 \
+  --coordinate-audit-note 'Provisional: GFF/BigBed start disagreement unresolved' \
+  --output RUN/regulatory_features
+
+python3 scripts/build_regulatory_annotation.py annotate \
+  --features RUN/regulatory_features --anchors TP73_EVIDENCE.parquet \
+  --assembly GRCh38 --chrom 1 --output RUN/chrom-1
+```
+
+For gene links and the legacy-promoter comparator also supply `--tss`,
+`--transcript-tss`, `--genome-id`, `--annotation-release`, `--promoters` and
+`--promoter-definition-id`. These take the existing context-package tables,
+not a newly inferred gene annotation.
+
+The `select` command exports evidence rows, preserving their other columns:
+
+```bash
+python3 scripts/build_regulatory_annotation.py select \
+  --anchors TP73_EVIDENCE.parquet --membership RUN/chrom-1 \
+  --subset promoter_extended --output RUN/chrom-1-extended-evidence
+```
+
+Pass its `selected_anchors.parquet` to the existing TP73 distance-count
+kernel, alongside the **unchanged** cofactor-position files. It recomputes
+class frequencies and per-series/isoform block components on that cohort.
+The annotation's n:m bridges are never directly joined into the model rows.
+
+For H3K4me3, keep the original evidence, change and zero-complete maxima
+inputs and add these options to the existing evaluator invocation:
+
+```bash
+--regulatory-membership RUN/chrom-1/tp73_anchor_regulatory_membership.parquet \
+--regulatory-subset promoter_extended
+```
+
+Membership input is repeatable for multiple chromosomes and must cover the
+exact physical-anchor universe of the signal input. Duplicate/missing/extra
+keys, NULL flags and an empty selected subset fail before fitting. Each
+result table carries `regulatory_subset`; run-config schema 7 records input
+and selected anchor counts, exact sidecar paths and MD5 file identities.
+The membership package additionally supplies SHA-256 provenance. Default
+unfiltered runs retain schema 6 and their original statistical behaviour.
+
+Every selected cohort is refitted, preserving TP73-score adjustment,
+series-specific TA/DN contrasts, block-clustered uncertainty and per-family
+BH adjustment. The existing all-zero H3K4me3 exclusion remains specific to
+the intensity model; it is not an occupancy-selection rule. Intermediate
+cofactor scores remain in frequency denominators. An entirely empty subset
+fails explicitly; nonempty but underpowered contrasts keep existing
+not-estimable statuses rather than being reported as no effect.
+
+## Validation and pilot
+
+```bash
+python3 tests/test_regulatory_annotation.py
+bash tests/test_tp73_distance_cofactor_counts.sh
+bash tests/test_h3k4me3_cofactor_change.sh
+bash tests/test_script_help.sh
+```
+
+Tests cover coordinates, nested bounds, native versus derived gene ownership,
+bidirectional/shared promoters, unlinked enhancers, abutment, chromosome
+mismatch, corrupted packages, immutable output and unique-anchor denominators.
+The TP73 fixture retains an adjacent cofactor **outside** the selected promoter
+and recomputes the subset TA odds ratio (3 instead of the original 6).
+The H3K4me3 sidecar refit exactly matches independently filtered input data,
+including effect, isoform-contrast and frequency-summary tables.
+
+The real local pilot used the older
+`dry_runs/h3k4me3_cofactor_change_chr1_20260809/tp73_anchor_evidence.parquet`,
+which contains **310,782 chr1 anchors with score >= 0**. It is not the current
+genome-wide, low-floor local-peak production cohort. The provisional annotation
+found 2,415 core-promoter anchors, 3,559 extended-promoter anchors, 20,068
+enhancer anchors, 263 open-chromatin anchors and 282,712 anchors with no
+regulatory overlap. These overlapping categories must not be added together.
+
+Both inputs are restricted to the same explicit chromosome before range
+joins, allowing DuckDB's inequality join rather than a chromosome hash bucket.
+The optimized pilot took about 1.1 seconds; its full membership bridge was
+identical to the slower equality-plus-range join. Pilot packages are in
+`dry_runs/ensembl_regulation_20260908/`; they are validation artifacts, not new
+enrichment or H3K4me3 results.
+
+## Production still to do
+
+1. Resolve the source coordinate discrepancy and pin the decision. Import the
+   same checksummed payload on Haumea through the documented public source.
+2. Produce versioned chromosome membership packages for the **current**
+   autosomal production anchor cohort, with its pinned GTF/TSS/promoter inputs.
+3. Add sidecar hashes/subset identity to the Slurm managers' fixed-input
+   inventories and restart validation. Do not pass schema-7 subset results
+   through the unchanged schema-6 H3 finalizer. Use one immutable run per
+   predeclared subset; do not silently reuse whole-genome checkpoints.
+4. Recompute TP73 block components and H3K4me3 fits, then finalize within-subset
+   testing families. Report TA and DN beside one another, with frequency,
+   support, uncertainty and matched negative-reference definitions. Differences
+   between subset estimates require a separate interaction test, not comparing
+   significance labels. Keep whole-genome results alongside the restricted
+   screens and retain the GFP-baseline-adjusted sensitivity.
+
+No new cluster jobs or source synchronization are implied by the local pilot.

@@ -22,6 +22,11 @@ usage <- function(status = 0L) {
         "  --tp73-evidence FILE      Strict TP73/negative-control evidence Parquet",
         "  --cofactor-maxima FILE    Schema-v4 cofactor maxima; repeatable",
         "  --annotation FILE         Schema-9 tp73_context_anchor; repeatable",
+        "  --regulatory-membership FILE  Zero-complete physical-anchor sidecar; repeatable",
+        "  --regulatory-subset NAME   all (default), promoter_core, promoter_extended,",
+        "                            outside_promoter_extended, enhancer, open_chromatin,",
+        "                            no_regulatory_overlap, tss_window_promoter",
+        "                            Filters anchors only; cofactor neighborhoods unchanged",
         "  --thresholds FILE         motif_id and positive/recommended threshold TSV",
         "  --window NAME             Signal window (required with --signal)",
         "  --output-prefix PATH      Prefix for result TSV files",
@@ -53,6 +58,8 @@ values <- list(
     change = character(),
     cofactor_maxima = character(),
     annotation = character(),
+    regulatory_membership = character(),
+    regulatory_subset = "all",
     series = character(),
     distance_bands = "all_150",
     negative_references = "-1,0",
@@ -69,6 +76,7 @@ values <- list(
 value_options <- c(
     "--signal", "--change", "--tp73-evidence", "--cofactor-maxima", "--thresholds",
     "--annotation",
+    "--regulatory-membership", "--regulatory-subset",
     "--window", "--output-prefix", "--series", "--negative-references",
     "--distance-bands",
     "--pseudocount", "--block-size", "--spline-df",
@@ -94,7 +102,8 @@ while (index <= length(arguments)) {
     }
     key <- gsub("-", "_", substring(option, 3L), fixed = TRUE)
     if (option %in% c(
-        "--signal", "--change", "--cofactor-maxima", "--annotation", "--series"
+        "--signal", "--change", "--cofactor-maxima", "--annotation", "--series",
+        "--regulatory-membership"
     )) {
         values[[key]] <- c(values[[key]], arguments[[index]])
     } else {
@@ -126,8 +135,17 @@ if (has_signal && (is.null(values$window) || !nzchar(values$window))) {
 
 suppressPackageStartupMessages(library(data.table))
 
+regulatory_subsets <- c(
+    "all", "promoter_core", "promoter_extended", "outside_promoter_extended",
+    "enhancer", "open_chromatin", "no_regulatory_overlap", "tss_window_promoter"
+)
+if (!values$regulatory_subset %in% regulatory_subsets ||
+    (values$regulatory_subset != "all" && length(values$regulatory_membership) == 0L)) {
+    stop("a named regulatory subset requires --regulatory-membership", call. = FALSE)
+}
 vector_input_paths <- c(
     if (has_signal) "signal" else "change", "cofactor_maxima",
+    if (length(values$regulatory_membership) > 0L) "regulatory_membership",
     if (length(values$annotation) > 0L) "annotation"
 )
 for (name in vector_input_paths) {
@@ -636,6 +654,38 @@ anchor_count <- uniqueN(wide, by = c("chrom", "anchor_start", "anchor_end"))
 if (nrow(maxima) != anchor_count * nrow(thresholds) ||
     maxima[, anyDuplicated(paste(motif_id, chrom, anchor_start, anchor_end))] != 0L) {
     stop("cofactor maxima are not rectangular over the signal anchors", call. = FALSE)
+}
+
+# Validate the full input universe before applying a subset. A semi-join at
+# physical-span grain cannot multiply anchors with multiple promoters/genes.
+input_anchor_count <- anchor_count
+if (length(values$regulatory_membership) > 0L) {
+    membership <- duckdb_fread(paste0(
+        "SELECT CAST(chrom AS VARCHAR) AS chrom, anchor_start, anchor_end, ",
+        sql_identifier(values$regulatory_subset), " AS selected FROM read_parquet(",
+        sql_parquet_paths(values$regulatory_membership), ", hive_partitioning=false);"
+    ))
+    anchor_keys <- c("chrom", "anchor_start", "anchor_end")
+    full_keys <- unique(wide[, ..anchor_keys])
+    if (membership[, anyNA(.SD)] || !is.logical(membership$selected) ||
+        uniqueN(membership, by = anchor_keys) != nrow(membership) ||
+        nrow(membership) != nrow(full_keys) ||
+        nrow(fsetdiff(membership[, ..anchor_keys], full_keys)) != 0L) {
+        stop("regulatory membership must cover the exact anchors with unique keys and Boolean flags",
+             call. = FALSE)
+    }
+    selected_keys <- membership[selected == TRUE, ..anchor_keys]
+    if (nrow(selected_keys) == 0L) {
+        stop("regulatory subset is empty; no estimable analysis", call. = FALSE)
+    }
+    wide <- wide[selected_keys, on = anchor_keys, nomatch = 0L]
+    maxima <- maxima[selected_keys, on = anchor_keys, nomatch = 0L]
+    anchor_count <- nrow(selected_keys)
+    if (nrow(maxima) != anchor_count * nrow(thresholds)) {
+        stop("cofactor maxima keys differ from the selected signal anchors", call. = FALSE)
+    }
+    message("I: Regulatory subset ", values$regulatory_subset, ": ", anchor_count,
+            " of ", input_anchor_count, " physical anchors")
 }
 if (maxima[, any(context_distance_metric != "signed_interval_edge_distance")]) {
     stop("cofactor maxima do not use schema-v4 interval geometry", call. = FALSE)
@@ -1803,6 +1853,16 @@ if (annotation_available) {
 setorder(score_effect, motif_id, distance_band, score_clamp_reference, isoform,
          series_id)
 
+# Keep subset labels on each derived table, not just in a detached run config.
+if (length(values$regulatory_membership) > 0L) {
+    for (table in list(intensity, isoform_contrast, interaction, series_summary,
+                       binding_state, occurrence, context_intensity,
+                       gene_relation_intensity, gene_relation_occupancy, score_effect)) {
+        if (is.data.table(table) && nrow(table) > 0L) {
+            set(table, j = "regulatory_subset", value = values$regulatory_subset)
+        }
+    }
+}
 fwrite(intensity, paste0(values$output_prefix, "_intensity_effect.tsv"),
        sep = "\t", na = "NA", quote = FALSE)
 fwrite(isoform_contrast,
@@ -1843,9 +1903,17 @@ fwrite(score_effect, paste0(values$output_prefix, "_score_gradient.tsv"),
        sep = "\t", na = "NA", quote = FALSE)
 
 run_config <- data.table(
-    schema_version = 6L,
+    schema_version = if (length(values$regulatory_membership) > 0L) 7L else 6L,
     analysis = "gfp_referenced_h3k4me3_cofactor_change",
     analysis_role = values$analysis_role,
+    regulatory_subset = values$regulatory_subset,
+    regulatory_membership = paste(values$regulatory_membership, collapse = ";"),
+    regulatory_membership_md5 = paste(
+        unname(tools::md5sum(values$regulatory_membership)), collapse = ";"
+    ),
+    regulatory_selection = "anchor_only_cofactor_neighborhood_unchanged",
+    input_physical_anchors = input_anchor_count,
+    selected_physical_anchors = anchor_count,
     chromosomes = paste(sort(unique(wide$chrom)), collapse = ","),
     input_mode = input_mode,
     signal = if (has_signal) paste(values$signal, collapse = ";") else NA_character_,

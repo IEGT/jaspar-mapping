@@ -700,4 +700,75 @@ SELECT CASE WHEN NOT EXISTS (
 ) THEN error('observable threshold was lost beside a censored threshold') END;
 SQL
 
+# Regulatory filtering must refit on a zero-complete physical-anchor subset.
+# Compare the sidecar path with independently filtered raw inputs, including
+# every series and every cofactor, rather than filtering an output table.
+"$duckdb" -batch -bail :memory: >/dev/null <<SQL
+COPY (SELECT chrom,anchor_start,anchor_end,anchor_start < 4100 AS promoter_extended
+      FROM read_parquet('$temporary/tp73.parquet'))
+TO '$temporary/membership.parquet' (FORMAT PARQUET);
+COPY (SELECT * FROM read_parquet('$temporary/signal.parquet') WHERE anchor_start < 4100)
+TO '$temporary/subset-signal.parquet' (FORMAT PARQUET);
+COPY (SELECT * FROM read_parquet('$temporary/tp73.parquet') WHERE anchor_start < 4100)
+TO '$temporary/subset-evidence.parquet' (FORMAT PARQUET);
+COPY (SELECT * FROM read_parquet('$temporary/maxima.parquet') WHERE anchor_start < 4100)
+TO '$temporary/subset-maxima.parquet' (FORMAT PARQUET);
+COPY (SELECT * FROM read_parquet('$temporary/membership.parquet') UNION ALL
+      SELECT * FROM read_parquet('$temporary/membership.parquet') LIMIT 17)
+TO '$temporary/duplicate-membership.parquet' (FORMAT PARQUET);
+COPY (SELECT * FROM read_parquet('$temporary/membership.parquet') WHERE anchor_start <> 100)
+TO '$temporary/missing-membership.parquet' (FORMAT PARQUET);
+SQL
+
+run_regulatory_subset() {
+    local name=$1
+    shift
+    Rscript "$repository_root/scripts/analyze_h3k4me3_cofactor_change.R" \
+        --thresholds "$temporary/thresholds.tsv" \
+        --window central_20 --output-prefix "$temporary/$name" \
+        --series series_a --series series_b --negative-references "-1,0" \
+        --block-size 500 --spline-df 1 --minimum-class-fraction 0.01 \
+        --minimum-class-count 2 --minimum-interaction-cell-count 2 \
+        --duckdb "$duckdb" "$@"
+}
+run_regulatory_subset sidecar-result \
+    --signal "$temporary/signal.parquet" --tp73-evidence "$temporary/tp73.parquet" \
+    --cofactor-maxima "$temporary/maxima.parquet" \
+    --regulatory-membership "$temporary/membership.parquet" --regulatory-subset promoter_extended
+run_regulatory_subset independent-result \
+    --signal "$temporary/subset-signal.parquet" --tp73-evidence "$temporary/subset-evidence.parquet" \
+    --cofactor-maxima "$temporary/subset-maxima.parquet"
+
+"$duckdb" -batch -bail :memory: >/dev/null <<SQL
+CREATE VIEW selected_config AS SELECT * FROM read_csv_auto(
+  '$temporary/sidecar-result_run_config.tsv',delim='\t',header=true,nullstr='NA');
+SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM selected_config
+  WHERE schema_version=7 AND input_physical_anchors=16 AND selected_physical_anchors=8
+    AND regulatory_subset='promoter_extended' AND length(regulatory_membership_md5)=32)
+  THEN error('subset provenance or denominator is wrong') END;
+SQL
+for dataset in intensity_effect isoform_contrast series_summary; do
+    "$duckdb" -batch -bail :memory: >/dev/null <<SQL
+CREATE VIEW a AS SELECT * EXCLUDE(regulatory_subset) FROM read_csv_auto(
+  '$temporary/sidecar-result_${dataset}.tsv',delim='\t',header=true,nullstr='NA');
+CREATE VIEW b AS SELECT * FROM read_csv_auto(
+  '$temporary/independent-result_${dataset}.tsv',delim='\t',header=true,nullstr='NA');
+SELECT CASE WHEN EXISTS (SELECT * FROM a EXCEPT SELECT * FROM b)
+  OR EXISTS (SELECT * FROM b EXCEPT SELECT * FROM a)
+  THEN error('sidecar refit differs from independently subsetted inputs') END;
+SQL
+done
+for invalid in duplicate missing; do
+    if run_regulatory_subset "$invalid-result" \
+        --signal "$temporary/signal.parquet" --tp73-evidence "$temporary/tp73.parquet" \
+        --cofactor-maxima "$temporary/maxima.parquet" \
+        --regulatory-membership "$temporary/$invalid-membership.parquet" \
+        --regulatory-subset promoter_extended \
+        >"$temporary/$invalid.stdout" 2>"$temporary/$invalid.stderr"; then
+        echo "E: invalid regulatory membership was accepted: $invalid" >&2
+        exit 1
+    fi
+    grep -q 'regulatory membership must cover the exact anchors' "$temporary/$invalid.stderr"
+done
+
 echo "I: H3K4me3 cofactor-change synthetic test passed."
