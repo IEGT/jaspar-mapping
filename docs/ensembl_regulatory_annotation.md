@@ -368,7 +368,9 @@ whole-cohort results cannot be reused as subset checkpoints.
 
 Initial scheduling uses the `requeue` partition, chromosome-local scratch for
 TP73 and batch-local scratch for H3K4me3. Start the extended-promoter runs at
-modest concurrency, inspect a completed motif and memory use, then submit the
+modest concurrency; R temporary files and default DuckDB spill also stay in
+that scratch directory, with numerical-library thread counts bounded. Inspect
+a completed motif and memory use, then submit the
 two comparators. With eight TP73 tasks and six H3K4me3 batches per adjustment
 variant for each of three subsets, the combined concurrency ceiling is 60.
 Use four sequential H3K4me3 motif checkpoints per batch, 64 GB per H3K4me3 job,

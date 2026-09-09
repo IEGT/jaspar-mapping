@@ -236,9 +236,10 @@ def set_phase(value: str) -> None:
     CURRENT_PHASE = value
 
 
-def run_process(command: list[str], cwd: Path | None = None) -> None:
+def run_process(command: list[str], cwd: Path | None = None,
+                env: dict[str, str] | None = None) -> None:
     global CURRENT_CHILD
-    process = subprocess.Popen(command, cwd=cwd)
+    process = subprocess.Popen(command, cwd=cwd, env=env)
     CURRENT_CHILD = str(process.pid)
     try:
         while True:
@@ -1059,7 +1060,13 @@ def run_batch(arguments: argparse.Namespace) -> None:
                     "--regulatory-subset", config["regulatory_selection"]["subset"],
                 ])
             set_phase("evaluating_motif")
-            run_process(command, cwd=Path(config["source"]))
+            # R tempfiles and DuckDB's default spill directory belong to this
+            # attempt's node-local scratch, never the immutable source checkout.
+            child_env = dict(os.environ, TMPDIR=str(scratch), TMP=str(scratch),
+                             TEMP=str(scratch), OPENBLAS_NUM_THREADS="1",
+                             MKL_NUM_THREADS="1",
+                             OMP_NUM_THREADS=os.environ.get("SLURM_CPUS_PER_TASK", "2"))
+            run_process(command, cwd=scratch, env=child_env)
             canonicalize_run_config(prefix, row)
             set_phase("validating_motif")
             validate_result(
