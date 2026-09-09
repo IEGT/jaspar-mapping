@@ -2,8 +2,8 @@
 
 Status, 2026-09-09: importer, anchor membership, TP73 evidence selection and
 H3K4me3 subset refitting implemented and tested locally. The full independent
-coordinate audit passes. Restart-safe chromosome annotation is prepared for
-Slurm; genome-wide subset cofactor fits still need manager integration.
+coordinate audit passes. Restart-safe annotation has completed on Haumea for
+all 22 autosomes; genome-wide subset cofactor fits still need manager integration.
 
 ## Scientific contract
 
@@ -289,15 +289,52 @@ creates a pinned plan and prints commands only; use another new run directory
 for a subsequent fresh submission. Submitted IDs are recorded immediately in
 `submissions.tsv` so a partial scheduler submission is diagnosable.
 
+### Completed Haumea annotation, 2026-09-09
+
+The production run used immutable source commit `940e54d`, fetched from the
+public repository, and the audited GFF downloaded directly on Haumea:
+
+```
+/data/sm718/jaspar_mapping_runs/ensembl_grch38_tp73_regulatory_20260909_v1
+```
+
+Setup `5782607`, chromosome array `5782608` (22 tasks), and finalizer
+`5782609` all completed with exit code `0:0`. Slurm recorded setup at
+08:37:29 and finalization at 08:38:59 (cluster time), including dependency
+and scheduling waits. Setup took 16 seconds; each chromosome task and the
+finalizer took about one second. Maximum recorded job RSS was 1,191,336 KiB,
+below the 8 GB allocation. Scratch staging was confirmed in the task log.
+
+The combined `final/tp73_anchor_regulatory_membership.parquet` contains
+**3,596,429 unique physical anchors across chromosomes 1-22**, occupying
+15,481,758 bytes. Its SHA-256 is
+`e8a8db032478a1af0a47348893bcbbae14d33657a7dd7c670485a54b8c43521c`.
+The finalizer validated the chromosome packages, unique anchor keys and
+core-to-extended nesting before publication. A bounded aggregate query on
+the final Parquet produced:
+
+| Anchor membership | Anchors |
+|---|---:|
+| Ensembl promoter core | 23,698 |
+| Ensembl extended promoter | 34,035 |
+| Ensembl enhancer | 190,540 |
+| Ensembl open chromatin | 2,651 |
+| No overlap with any imported regulatory feature | 3,333,743 |
+| Legacy TSS upstream-2000/downstream-500 promoter | 436,537 |
+
+These are overlapping memberships, not additive classes or enrichment
+estimates. The no-overlap flag also considers CTCF sites and EMARs, whose
+individual counts are not displayed above. This production cohort differs
+from the older local pilot. Sex chromosomes and mitochondria were not part
+of this autosomal run. No new motif scan or cofactor model fit was performed.
+
 ## Cofactor refits still to do
 
-1. Produce versioned chromosome membership packages for the **current**
-   autosomal production anchor cohort, with its pinned GTF/TSS/promoter inputs.
-2. Add sidecar hashes/subset identity to the cofactor Slurm managers' fixed-input
+1. Add sidecar hashes/subset identity to the cofactor Slurm managers' fixed-input
    inventories and restart validation. Do not pass schema-7 subset results
    through the unchanged schema-6 H3 finalizer. Use one immutable run per
    predeclared subset; do not silently reuse whole-genome checkpoints.
-3. Recompute TP73 block components and H3K4me3 fits, then finalize within-subset
+2. Recompute TP73 block components and H3K4me3 fits, then finalize within-subset
    testing families. Report TA and DN beside one another, with frequency,
    support, uncertainty and matched negative-reference definitions. Differences
    between subset estimates require a separate interaction test, not comparing
