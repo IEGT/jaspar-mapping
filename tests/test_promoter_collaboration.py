@@ -233,7 +233,9 @@ SELECT 'p'||'{chrom}'||k::VARCHAR AS regulatory_feature_id,'gene'||k AS gene_id,
             path = commands / name
             path.write_text(content)
             path.chmod(0o755)
-        result = subprocess.run(["bash",str(ROOT / "scripts/submit_promoter_collaboration_slurm.sh"),
+        spooled = self.root / "slurm_script"
+        shutil.copyfile(ROOT / "scripts/submit_promoter_collaboration_slurm.sh", spooled)
+        result = subprocess.run(["bash",str(spooled),"--source",str(ROOT),
                                  "--run-root","/data/sm718/promoter_collaboration_test_not_created",
                                  "--analysis-run",str(self.root),"--regulatory-features",str(self.root),
                                  "--duckdb",shutil.which("duckdb"),"--afterok","12345","--dry-run"],
@@ -244,6 +246,7 @@ SELECT 'p'||'{chrom}'||k::VARCHAR AS regulatory_feature_id,'gene'||k AS gene_id,
         self.assertIn("--array=0-99%4",result.stdout)
         self.assertEqual(result.stdout.count("--partition=requeue"),3)
         self.assertIn("--mem=32G",result.stdout)
+        self.assertEqual(result.stdout.count("--source " + str(ROOT)),3)
 
 
 if __name__ == "__main__":

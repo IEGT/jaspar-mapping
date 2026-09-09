@@ -22,6 +22,7 @@ Options:
   --max-bytes N            Complete package ceiling (default 2000000000)
   --max-concurrent N       Concurrent motif tasks (default 4)
   --scratch-root DIR       Local scratch parent (default /scratch/sm718)
+  --source DIR             Pinned source checkout (default script's repository)
   --dry-run                Print submission commands without submitting
   -h, --help               Show this help
 
@@ -33,7 +34,7 @@ the same arguments; workers reuse only checksum-validated checkpoints.
 EOF
 }
 
-run_root= analysis_run= regulatory_features= duckdb= dependency= worker=
+run_root= analysis_run= regulatory_features= duckdb= dependency= worker= source=
 panel_size=100 max_bytes=2000000000 max_concurrent=4 scratch_root=/scratch/sm718 dry_run=0
 while (($#)); do
     case "$1" in
@@ -46,6 +47,7 @@ while (($#)); do
         --max-bytes) max_bytes=${2:?}; shift 2;;
         --max-concurrent) max_concurrent=${2:?}; shift 2;;
         --scratch-root) scratch_root=${2:?}; shift 2;;
+        --source) source=${2:?}; shift 2;;
         --worker) worker=${2:?}; shift 2;;
         --dry-run) dry_run=1; shift;;
         -h|--help) usage; exit 0;;
@@ -61,7 +63,14 @@ done
 run_root=$(realpath -m "$run_root")
 case "$run_root" in /data/sm718/*) ;; *) echo 'E: Durable export must be below /data/sm718.' >&2; exit 2;; esac
 case "$scratch_root" in /scratch/*) ;; *) echo 'E: Scratch must be node-local /scratch.' >&2; exit 2;; esac
-source=$(cd "$(dirname "$0")/.." && pwd -P)
+if [[ -n $source ]]; then
+    source=$(cd "$source" && pwd -P)
+elif [[ -n $worker ]]; then
+    echo 'E: Slurm workers require the explicit --source checkout, not the spooled script directory.' >&2
+    exit 2
+else
+    source=$(cd "$(dirname "$0")/.." && pwd -P)
+fi
 script="$source/scripts/export_promoter_collaboration.py"
 self="$source/scripts/submit_promoter_collaboration_slurm.sh"
 
@@ -95,7 +104,7 @@ if [[ -e $run_root/submissions.tsv ]]; then
 fi
 base=(sbatch --parsable --account=cluster --partition=requeue --requeue --cpus-per-task=2
       --output="$run_root/logs/%x-%A_%a.out" --error="$run_root/logs/%x-%A_%a.err")
-worker_options=(--run-root "$run_root" --analysis-run "$analysis_run" --regulatory-features "$regulatory_features"
+worker_options=(--source "$source" --run-root "$run_root" --analysis-run "$analysis_run" --regulatory-features "$regulatory_features"
                 --duckdb "$duckdb" --panel-size "$panel_size" --max-bytes "$max_bytes" --scratch-root "$scratch_root")
 if (( ! dry_run )); then
     mkdir -p "$run_root/logs"
