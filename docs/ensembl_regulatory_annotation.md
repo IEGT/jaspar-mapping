@@ -384,6 +384,26 @@ changes from 4/8 to 3/7 after anchor selection; nearby cofactor positions remain
 unchanged. The H3K4me3 fixture refits 198 of the original 264 anchors and checks
 that the finalized tables and portable provenance retain that selection.
 
+### Matched-occupancy validation correction (2026-09-09)
+
+The extended-promoter H3K4me3 pilot exposed a vector-alignment bug in the
+companion gene-relation-specific TP73 occupancy fit: anchor rows were filtered
+to eligible discordant anti-TP73/control pairs, but the external antibody
+outcome vector was not filtered with them. R could recycle the shorter columns,
+including silently when their lengths divided evenly. The corrected evaluator
+subsets outcomes with the same selection and checks the observation count.
+The regression test checks exact anchor/outcome identity for nondivisible and
+divisible selections, plus an entirely concordant sample.
+
+The two initial extended-promoter H3K4me3 runs (`*_primary_v1` and
+`*_gfp_adjusted_v1`) were stopped, with outputs preserved and excluded from
+interpretation. Replacements must use new run roots and the corrected source.
+This bug affects the companion gene-relation occupancy estimates, including
+older runs made with the same function; their use as plot axes needs correction
+before further interpretation. It does not lie on the primary H3K4me3 change
+model path or in the separate TP73 distance-enrichment manager. Passing output
+shape/status checks alone did not detect this alignment error.
+
 After completion, report TA and DN beside one another with frequency, support,
 uncertainty and matched reference definitions. Differences between subset
 estimates require a separate interaction test, not a comparison of significance

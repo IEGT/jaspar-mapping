@@ -944,12 +944,18 @@ clustered_relation_occupancy <- function(
         anti <- input[[paste0("tp73_support_", condition)]]
         control <- input[[paste0("negative_control_support_", condition)]]
         selected <- eligible & anti != control
-        input[selected, .(
+        evidence <- input[selected, .(
             chrom, anchor_start, anchor_score,
             sample_id = paste(series_id, condition, sep = ":"),
             retained = as.integer(cofactor_positive),
-            outcome = as.integer(anti)
+            # anti is an external vector, not a column subset by data.table i.
+            outcome = as.integer(anti[selected])
         )]
+        if (nrow(evidence) != sum(selected)) {
+            stop("matched occupancy selection changed observation count",
+                 call. = FALSE)
+        }
+        evidence
     })
     evidence <- rbindlist(evidence_rows, use.names = TRUE)
     if (nrow(evidence) == 0L || evidence[, uniqueN(outcome)] != 2L ||

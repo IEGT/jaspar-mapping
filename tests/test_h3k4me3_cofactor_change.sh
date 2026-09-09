@@ -20,6 +20,65 @@ Rscript -e 'library(data.table)' >/dev/null 2>&1 || {
     exit 0
 }
 
+# Exercise the production function without loading genome inputs. Intercept
+# its GLM input so both row identity and outcomes are checked before fitting;
+# divisibly sized selections can otherwise be recycled without any warning.
+Rscript - "$repository_root/scripts/analyze_h3k4me3_cofactor_change.R" <<'RSCRIPT'
+library(data.table)
+options(warn = 2)
+expressions <- parse(commandArgs(trailingOnly = TRUE)[[1L]])
+definition <- Filter(function(expr) {
+    is.call(expr) && identical(expr[[1L]], as.name("<-")) &&
+        identical(expr[[2L]], as.name("clustered_relation_occupancy"))
+}, expressions)
+stopifnot(length(definition) == 1L)
+eval(definition[[1L]])
+values <- list(minimum_class_count = 1L, minimum_class_fraction = 0,
+               block_size = 100, spline_df = 1)
+input <- data.table(
+    chrom = "1", anchor_start = seq(0, 700, 100),
+    anchor_end = seq(10, 710, 100), anchor_score = seq_len(8),
+    series_id = rep(c("a", "b"), each = 4),
+    cofactor_positive = rep(c(TRUE, FALSE), 4),
+    cofactor_negative = rep(c(FALSE, TRUE), 4),
+    cofactor_intermediate = FALSE
+)
+anti <- c(FALSE, TRUE, TRUE, FALSE, TRUE, FALSE, FALSE, TRUE)
+for (condition in c("GFP", "TA", "DN")) {
+    input[, (paste0("tp73_support_", condition)) := anti]
+    input[, (paste0("negative_control_support_", condition)) := anti]
+}
+# GFP has no discordant pairs; TA selects 3/8 and DN selects 4/8 rows.
+selected_rows <- list(TA = c(2L, 4L, 5L), DN = c(1L, 3L, 6L, 8L))
+for (condition in names(selected_rows)) {
+    rows <- selected_rows[[condition]]
+    set(input, rows, paste0("negative_control_support_", condition), !anti[rows])
+}
+captured <- NULL
+glm <- function(formula, data, ...) {
+    captured <<- copy(data)
+    stop("test intercept before fitting")
+}
+result <- clustered_relation_occupancy(input, TRUE, FALSE, -2, -1)
+expected_rows <- unlist(selected_rows, use.names = FALSE)
+stopifnot(result$evaluation_status == "not_estimable",
+          result$discordant_observations == 7L,
+          identical(captured$anchor_start, input$anchor_start[expected_rows]),
+          identical(captured$outcome, as.integer(anti[expected_rows])),
+          identical(captured$retained,
+                    as.integer(input$cofactor_positive[expected_rows])),
+          identical(as.character(captured$sample_id),
+                    paste(input$series_id[expected_rows],
+                          rep(c("TA", "DN"), c(3, 4)), sep = ":")))
+# All-concordant input must remain empty, rather than inventing observations.
+for (condition in names(selected_rows)) {
+    input[, (paste0("negative_control_support_", condition)) := anti]
+}
+captured <- NULL
+result <- clustered_relation_occupancy(input, TRUE, FALSE, -2, -1)
+stopifnot(result$discordant_observations == 0L, is.null(captured))
+RSCRIPT
+
 python3 - "$repository_root" "$temporary" <<'PY'
 import errno
 import importlib.util
