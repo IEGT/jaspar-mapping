@@ -3,7 +3,8 @@
 Status, 2026-09-09: importer, anchor membership, TP73 evidence selection and
 H3K4me3 subset refitting implemented and tested locally. The full independent
 coordinate audit passes. Restart-safe annotation has completed on Haumea for
-all 22 autosomes; genome-wide subset cofactor fits still need manager integration.
+all 22 autosomes. Both statistical Slurm managers now pin and validate the
+regulatory cohort, including subset-aware checkpoints and finalization.
 
 ## Scientific contract
 
@@ -328,17 +329,63 @@ individual counts are not displayed above. This production cohort differs
 from the older local pilot. Sex chromosomes and mitochondria were not part
 of this autosomal run. No new motif scan or cofactor model fit was performed.
 
-## Cofactor refits still to do
+## Promoter-subset cofactor refits
 
-1. Add sidecar hashes/subset identity to the cofactor Slurm managers' fixed-input
-   inventories and restart validation. Do not pass schema-7 subset results
-   through the unchanged schema-6 H3 finalizer. Use one immutable run per
-   predeclared subset; do not silently reuse whole-genome checkpoints.
-2. Recompute TP73 block components and H3K4me3 fits, then finalize within-subset
-   testing families. Report TA and DN beside one another, with frequency,
-   support, uncertainty and matched negative-reference definitions. Differences
-   between subset estimates require a separate interaction test, not comparing
-   significance labels. Keep whole-genome results alongside the restricted
-   screens and retain the GFP-baseline-adjusted sensitivity.
+Both statistical submission helpers accept:
+
+```bash
+--regulatory-package /data/sm718/jaspar_mapping_runs/ensembl_grch38_tp73_regulatory_20260909_v1/final \
+--regulatory-subset promoter_extended
+```
+
+Use a **new immutable run directory for each subset and adjustment variant**.
+The predeclared comparison is Ensembl `promoter_extended` (primary among
+promoter-focused analyses), nested `promoter_core`, and parallel
+`tss_window_promoter`. The existing unrestricted runs remain the whole-genome
+comparators. Keep the positive cofactor score at 0 for compatibility with the
+completed score-zero analyses; do not retune it within each promoter subset.
+TP73 distance inference retains its existing strict `< -1` negative reference
+and six exclusive bands. H3K4me3 retains both `< -1` and `< 0` references,
+the six bands plus `all_150`, and the fixed `flank_150_1000` signal window.
+Run H3K4me3 both with and without `--adjust-gfp-baseline` as separate packages.
+
+The managers pin the regulatory manifest and payload SHA-256, audit, subset,
+GTF release and legacy promoter definition. Preflight verifies exact physical
+anchor coverage, Boolean flags, promoter-core nesting and a nonempty cohort.
+TP73 workers consume newly selected chromosome evidence but the unchanged
+low-floor cofactor positions. H3K4me3 workers stage the membership file with
+the other fixed inputs; its evaluator validates the full cohort before
+selecting anchors and refitting. No precomputed whole-genome odds ratio or
+H3K4me3 coefficient is filtered after fitting.
+
+Subset identity is checked on anchor splits, chromosome/motif checkpoints and
+final packages. H3K4me3 validates evaluator schema 7 for subset results and
+schema 6 for unrestricted results, including the selected/input anchor counts
+from preflight. Its finalizer retains subset labels and recomputes all-motif BH
+families within each immutable run. TP73 final schema 6 adds `regulatory_subset`
+to result/frequency/contrast tables without changing the estimator. Completed
+whole-cohort results cannot be reused as subset checkpoints.
+
+Initial scheduling uses the `requeue` partition, chromosome-local scratch for
+TP73 and batch-local scratch for H3K4me3. Start the extended-promoter runs at
+modest concurrency, inspect a completed motif and memory use, then submit the
+two comparators. With eight TP73 tasks and six H3K4me3 batches per adjustment
+variant for each of three subsets, the combined concurrency ceiling is 60.
+Use four sequential H3K4me3 motif checkpoints per batch, 64 GB per H3K4me3 job,
+32 GB per TP73 job, and two-hour task limits initially. These are scheduling
+choices, not part of the scientific cohort definition.
+
+The manager tests exercise full prepare/preflight/run/reuse/finalize cycles,
+reject a whole-cohort checkpoint presented as a promoter-subset result, and
+reject changed membership bytes. In the TP73 fixture the positive frequency
+changes from 4/8 to 3/7 after anchor selection; nearby cofactor positions remain
+unchanged. The H3K4me3 fixture refits 198 of the original 264 anchors and checks
+that the finalized tables and portable provenance retain that selection.
+
+After completion, report TA and DN beside one another with frequency, support,
+uncertainty and matched reference definitions. Differences between subset
+estimates require a separate interaction test, not a comparison of significance
+labels. Reference-tissue promoter membership does not demonstrate activity in
+the experimental cell lines, and neither change model establishes causality.
 
 No new cluster jobs or source synchronization are implied by the local pilot.

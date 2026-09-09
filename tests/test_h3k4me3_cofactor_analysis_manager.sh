@@ -388,4 +388,90 @@ SELECT CASE WHEN NOT EXISTS (
 ) THEN error('human score-zero isoform ranking matrix is incomplete') END;
 SQL
 
+regulatory="$temporary/regulatory"
+mkdir -p "$regulatory"
+"$duckdb" -batch :memory: >/dev/null <<SQL
+COPY (SELECT chrom, anchor_start, anchor_end,
+             (anchor_start // 1000000) % 4 = 0 AS promoter_core,
+             (anchor_start // 1000000) % 4 <> 3 AS promoter_extended
+      FROM read_parquet('$evidence/tables/tp73_anchor_evidence_autosome.parquet'))
+TO '$regulatory/tp73_anchor_regulatory_membership.parquet' (FORMAT PARQUET);
+SQL
+python3 - "$regulatory" <<'PY'
+import hashlib, json, sys
+from pathlib import Path
+p = Path(sys.argv[1])
+f = p / 'tp73_anchor_regulatory_membership.parquet'
+(p / 'manifest.json').write_text(json.dumps({
+    'kind': 'genome_regulatory_membership', 'state': 'complete', 'assembly': 'GRCh38',
+    'chromosomes': [str(c) for c in range(1,23)],
+    'coordinate_audit': {'kind': 'regulatory_coordinate_audit', 'status': 'passed',
+                         'assembly': 'GRCh38', 'fixture': True},
+    'files': [{'path': f.name, 'bytes': f.stat().st_size,
+               'sha256': hashlib.sha256(f.read_bytes()).hexdigest()}],
+}))
+PY
+subset_run="$temporary/subset-run"
+"$repository_root/scripts/manage_h3k4me3_cofactor_analysis.py" prepare \
+    --run-root "$subset_run" --h3-package "$h3" --evidence-package "$evidence" \
+    --context-maxima-package "$context" --annotation-catalog "$annotation" \
+    --runtime-prefix "$runtime" --source "$repository_root" --scratch-root "$scratch" \
+    --run-id synthetic_h3_subset --motifs-per-batch 2 --fixed-positive-threshold 0 \
+    --distance-bands all_150,overlap --block-size 1000 --spline-df 1 \
+    --minimum-class-count 2 --minimum-interaction-cell-count 2 \
+    --minimum-free-run-gb 0 --minimum-free-scratch-gb 0 \
+    --regulatory-package "$regulatory" --regulatory-subset promoter_extended >/dev/null
+"$repository_root/scripts/manage_h3k4me3_cofactor_analysis.py" preflight \
+    --run-root "$subset_run" >/dev/null
+for attempt in 1 2; do
+    "$repository_root/scripts/manage_h3k4me3_cofactor_analysis.py" run-batch \
+        --run-root "$subset_run" --batch-index 0 --rscript Rscript
+done
+"$repository_root/scripts/manage_h3k4me3_cofactor_analysis.py" finalize \
+    --run-root "$subset_run" --duckdb "$duckdb" --threads 1 \
+    --memory-limit 1GB --temp-directory "$temporary/finalizer-tmp"
+subset_final="$subset_run/final/h3k4me3_cofactor_analysis"
+"$duckdb" -batch :memory: >/dev/null <<SQL
+SELECT CASE WHEN EXISTS (
+  SELECT 1 FROM read_parquet('$subset_final/tables/run_config.parquet')
+  WHERE schema_version<>7 OR regulatory_subset<>'promoter_extended'
+     OR input_physical_anchors<>264 OR selected_physical_anchors<>198
+     OR regulatory_membership<>'provenance/fixed_inputs.tsv#kind=regulatory_membership'
+) THEN error('subset provenance/denominator incorrect') END;
+SELECT CASE WHEN EXISTS (
+  SELECT 1 FROM read_parquet('$subset_final/tables/intensity_effect.parquet')
+  WHERE regulatory_subset<>'promoter_extended'
+) THEN error('mixed regulatory subsets in final estimates') END;
+SQL
+python3 - "$repository_root" "$run_root" "$subset_run" "$regulatory" <<'PY'
+import json, runpy, sys
+from pathlib import Path
+root, full, subset, package = map(Path, sys.argv[1:])
+m = runpy.run_path(str(root / 'scripts/manage_h3k4me3_cofactor_analysis.py'))
+config = m['load_json'](subset / 'plan/run_config.json')
+task = m['planned_tasks'](subset)[0]
+try:
+    m['validate_task'](task, m['task_directory'](full, task), config=config)
+except m['AnalysisError']:
+    pass
+else:
+    raise AssertionError('whole-cohort checkpoint accepted as subset result')
+changed = dict(config, adjust_gfp_baseline=not config['adjust_gfp_baseline'])
+try:
+    m['validate_task'](task, m['task_directory'](subset, task), config=changed)
+except m['AnalysisError']:
+    pass
+else:
+    raise AssertionError('checkpoint accepted under a different adjustment model')
+payload = package / 'tp73_anchor_regulatory_membership.parquet'
+with payload.open('ab') as stream:
+    stream.write(b'corrupt-fixture')
+try:
+    m['verify_plan'](subset, config)
+except ValueError:
+    pass
+else:
+    raise AssertionError('changed membership accepted after prepare')
+PY
+
 echo "H3K4me3 cofactor-analysis manager tests passed."

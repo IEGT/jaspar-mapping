@@ -36,6 +36,8 @@ Options:
   --ranking-metadata FILE      JASPAR metadata for an afterok top-TF export
   --ranking-top N              TFs per criterion and band (default: 25)
   --adjust-gfp-baseline        Fit the GFP-baseline-adjusted sensitivity model
+  --regulatory-package DIR     Completed audited regulatory membership package
+  --regulatory-subset NAME      Anchor subset (default: all); neighbours unchanged
   --dry-run                    Prepare and print sbatch commands only
   -h, --help                   Show this help
 
@@ -71,6 +73,8 @@ fixed_positive_threshold=""
 ranking_metadata=""
 ranking_top=25
 adjust_gfp_baseline=0
+regulatory_package=""
+regulatory_subset=all
 dry_run=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -101,6 +105,8 @@ while [[ $# -gt 0 ]]; do
         --ranking-metadata) ranking_metadata=${2:?}; shift 2 ;;
         --ranking-top) ranking_top=${2:?}; shift 2 ;;
         --adjust-gfp-baseline) adjust_gfp_baseline=1; shift ;;
+        --regulatory-package) regulatory_package=${2:?}; shift 2 ;;
+        --regulatory-subset) regulatory_subset=${2:?}; shift 2 ;;
         --dry-run) dry_run=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "E: Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -174,6 +180,14 @@ prepare=(
 [[ -n $fixed_positive_threshold ]] &&
     prepare+=(--fixed-positive-threshold "$fixed_positive_threshold")
 (( adjust_gfp_baseline == 1 )) && prepare+=(--adjust-gfp-baseline)
+if [[ -n $regulatory_package ]]; then
+    case "$regulatory_package" in
+        /data/sm718/*) ;;
+        *) echo "E: Regulatory package must be below /data/sm718." >&2; exit 2 ;;
+    esac
+    prepare+=(--regulatory-package "$regulatory_package")
+fi
+prepare+=(--regulatory-subset "$regulatory_subset")
 batch_count=$("${prepare[@]}")
 [[ $batch_count =~ ^[1-9][0-9]*$ ]] || {
     echo "E: Invalid prepared batch count: $batch_count" >&2

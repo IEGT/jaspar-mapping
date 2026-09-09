@@ -12,6 +12,7 @@ import math
 import os
 from pathlib import Path
 import re
+import runpy
 import shutil
 import signal
 import subprocess
@@ -30,7 +31,7 @@ DISTANCE_BANDS = (
     "gap_51_100",
     "gap_101_150",
 )
-FINAL_SCHEMA_VERSION = 5
+FINAL_SCHEMA_VERSION = 6
 PRESPECIFIED_COFACTOR_NAMES = (
     "POU2F2",
     "SP1",
@@ -40,6 +41,7 @@ PRESPECIFIED_COFACTOR_NAMES = (
 )
 POU_NAMED_MOTIF_RULE = "case-insensitive JASPAR motif_name prefix POU"
 SCIENTIFIC_FILES = (
+    "scripts/build_regulatory_annotation.py",
     "scripts/build_tp73_distance_cofactor_counts.py",
     "scripts/manage_tp73_distance_cofactor_enrichment.py",
 )
@@ -219,6 +221,9 @@ def verify_plan(run_root: Path, config: dict[str, Any]) -> None:
         path = run_root / "plan" / name
         if not path.is_file() or sha256(path) != config[key]:
             raise DistanceEnrichmentError(f"immutable run plan changed: {path}")
+    if config.get("regulatory_selection"):
+        helpers = runpy.run_path(str(Path(config["source"]) / "scripts/build_regulatory_annotation.py"))
+        helpers["verify_production_selection"](config["regulatory_selection"])
 
 
 def config_path(run_root: Path) -> Path:
@@ -262,6 +267,10 @@ def prepare_plan(arguments: argparse.Namespace, run_root: Path) -> None:
     thresholds = arguments.thresholds.expanduser().resolve()
     catalog = arguments.jaspar_catalog.expanduser().resolve()
     chromosomes = parse_chromosomes(arguments.chromosomes)
+    helpers = runpy.run_path(str(source / "scripts/build_regulatory_annotation.py"))
+    regulatory = helpers["production_selection"](
+        arguments.regulatory_package, arguments.regulatory_subset, chromosomes
+    )
     for path in (anchors, thresholds, catalog / "manifest.json"):
         if not path.is_file():
             raise DistanceEnrichmentError(f"input is missing: {path}")
@@ -425,6 +434,7 @@ COPY (
         "scan_manifest_sha256": sha256(scan_manifest),
         "anchor_evidence": str(anchors),
         "anchor_evidence_sha256": sha256(anchors),
+        "regulatory_selection": regulatory,
         "thresholds": str(thresholds),
         "thresholds_sha256": sha256(thresholds),
         "threshold_set_id": arguments.threshold_set_id,
@@ -450,10 +460,19 @@ def prepare_anchors(arguments: argparse.Namespace) -> None:
     source = Path(config["anchor_evidence"])
     if sha256(source) != config["anchor_evidence_sha256"]:
         raise DistanceEnrichmentError("anchor evidence checksum changed")
+    regulatory = config.get("regulatory_selection")
+    predicate = "TRUE"
+    if regulatory:
+        helpers = runpy.run_path(str(Path(config["source"]) / "scripts/build_regulatory_annotation.py"))
+        run_duckdb(arguments.duckdb, ":memory:",
+                   f"SET memory_limit={sql_string(arguments.memory_limit)};" +
+                   helpers["cohort_validation_sql"](regulatory, source, chromosomes))
+        predicate = helpers["cohort_predicate"](regulatory)
     final = run_root / "input" / "anchors"
     if final.exists():
         marker = load_json(final / "complete.json")
-        if marker.get("source_sha256") != config["anchor_evidence_sha256"]:
+        if (marker.get("source_sha256") != config["anchor_evidence_sha256"]
+                or marker.get("regulatory_selection") != regulatory):
             raise DistanceEnrichmentError("existing anchor split has another source")
         inventory = final / "anchor_files.tsv"
         if (not inventory.is_file()
@@ -482,6 +501,7 @@ COPY (
          supported_negative_control_skmel29_2_DN
   FROM read_parquet({sql_string(source)})
   WHERE CAST(chrom AS VARCHAR) = {sql_string(chrom)}
+    AND {predicate}
   ORDER BY anchor_start, anchor_end
 ) TO {sql_string(output)}
   (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 131072);
@@ -511,6 +531,7 @@ COPY (
         write_json_new(staging / "complete.json", {
             "schema_version": 1,
             "source_sha256": config["anchor_evidence_sha256"],
+            "regulatory_selection": regulatory,
             "chromosomes": len(rows),
             "anchors": sum(row["rows"] for row in rows),
             "inventory_sha256": sha256(inventory),
@@ -562,6 +583,7 @@ def validate_existing_task(
     if config is not None and (
         marker.get("run_id") != config["run_id"]
         or marker.get("source_commit") != config["source_commit"]
+        or marker.get("regulatory_selection") != config.get("regulatory_selection")
     ):
         raise DistanceEnrichmentError(f"existing task run identity differs: {directory}")
     for name in ("block_components.parquet", "class_counts.parquet"):
@@ -585,6 +607,7 @@ def validate_existing_chromosome(
     marker = load_json(directory / "complete.json")
     if (marker.get("run_id") != config["run_id"]
             or marker.get("source_commit") != config["source_commit"]
+            or marker.get("regulatory_selection") != config.get("regulatory_selection")
             or marker.get("motif_id") != row["motif_id"]
             or marker.get("task_index") != int(row["task_index"])
             or marker.get("chrom") != chrom
@@ -626,7 +649,8 @@ def run_task(arguments: argparse.Namespace) -> None:
 
     anchor_root = run_root / "input" / "anchors"
     anchor_marker = load_json(anchor_root / "complete.json")
-    if anchor_marker.get("source_sha256") != config["anchor_evidence_sha256"]:
+    if (anchor_marker.get("source_sha256") != config["anchor_evidence_sha256"]
+            or anchor_marker.get("regulatory_selection") != config.get("regulatory_selection")):
         raise DistanceEnrichmentError("anchor split identity differs")
     anchor_inventory = anchor_root / "anchor_files.tsv"
     if sha256(anchor_inventory) != anchor_marker.get("inventory_sha256"):
@@ -743,6 +767,7 @@ def run_task(arguments: argparse.Namespace) -> None:
                     "schema_version": 1,
                     "run_id": config["run_id"],
                     "source_commit": config["source_commit"],
+                    "regulatory_selection": config.get("regulatory_selection"),
                     "task_index": int(row["task_index"]),
                     "motif_id": row["motif_id"],
                     "chrom": chrom,
@@ -819,6 +844,7 @@ SELECT
             "positive_threshold": float(row["positive_threshold"]),
             "run_id": config["run_id"],
             "source_commit": config["source_commit"],
+            "regulatory_selection": config.get("regulatory_selection"),
             "validation": expected,
             "files": files,
             "completed_at_utc": utc_now(),
@@ -977,7 +1003,8 @@ def finalize(arguments: argparse.Namespace) -> None:
     final = run_root / "final" / arguments.final_name
     if final.exists():
         manifest = load_json(final / "manifest.json")
-        if manifest.get("run_id") != config["run_id"]:
+        if (manifest.get("run_id") != config["run_id"]
+                or manifest.get("regulatory_selection") != config.get("regulatory_selection")):
             raise DistanceEnrichmentError("existing final output has another identity")
         if manifest.get("schema_version") != FINAL_SCHEMA_VERSION:
             raise DistanceEnrichmentError(
@@ -1010,15 +1037,18 @@ def finalize(arguments: argparse.Namespace) -> None:
 SET preserve_insertion_order=false;
 ATTACH {sql_string(catalog_db)} AS jaspar (READ_ONLY);
 CREATE TABLE cofactor_distance_block_component AS
-SELECT * FROM read_parquet({sql_path_list(block_files)});
+SELECT *, {sql_string((config.get('regulatory_selection') or {}).get('subset', 'all'))}
+  AS regulatory_subset FROM read_parquet({sql_path_list(block_files)});
 CREATE TABLE cofactor_distance_class_count_chrom AS
-SELECT * FROM read_parquet({sql_path_list(class_files)});
+SELECT *, {sql_string((config.get('regulatory_selection') or {}).get('subset', 'all'))}
+  AS regulatory_subset FROM read_parquet({sql_path_list(class_files)});
 CREATE TABLE jaspar_matrix AS SELECT * FROM jaspar.jaspar_matrix;
 CREATE TABLE jaspar_matrix_species AS SELECT * FROM jaspar.jaspar_matrix_species;
 CREATE TABLE jaspar_motif_set_matrix AS
 SELECT * FROM jaspar.jaspar_motif_set_matrix;
 CREATE TABLE cofactor_distance_class_count AS
 SELECT motif_id, max(motif_name) AS motif_name, distance_band,
+       max(regulatory_subset) AS regulatory_subset,
        max(distance_band_order) AS distance_band_order,
        max(source_score_floor) AS source_score_floor,
        max(positive_threshold) AS positive_threshold,
@@ -1515,9 +1545,10 @@ ORDER BY t.distance_band_order, t.motif_id
             path.parent.mkdir(parents=True, exist_ok=True)
         run_duckdb(arguments.duckdb, database, f"""
 CREATE TABLE cofactor_distance_enrichment AS
-SELECT * FROM read_json_auto({sql_string(result_json)}, format='newline_delimited');
+SELECT *, {sql_string((config.get('regulatory_selection') or {}).get('subset', 'all'))}
+  AS regulatory_subset FROM read_json_auto({sql_string(result_json)}, format='newline_delimited');
 CREATE TABLE cofactor_distance_frequency_enrichment AS
-SELECT motif_id, motif_name, isoform, distance_band, distance_band_order,
+SELECT motif_id, motif_name, isoform, distance_band, distance_band_order, regulatory_subset,
        source_score_floor, positive_threshold,
        anchors_total, anchors_source_present, anchors_positive,
        anchors_intermediate, anchors_negative,
@@ -1540,7 +1571,8 @@ SELECT motif_id, motif_name, isoform, distance_band, distance_band_order,
        collection, tax_group, includes_homo_sapiens, source_species
 FROM cofactor_distance_enrichment;
 CREATE TABLE cofactor_distance_isoform_contrast AS
-SELECT * FROM read_json_auto(
+SELECT *, {sql_string((config.get('regulatory_selection') or {}).get('subset', 'all'))}
+  AS regulatory_subset FROM read_json_auto(
   {sql_string(contrast_json)}, format='newline_delimited'
 );
 CREATE TABLE cofactor_distance_isoform_comparison AS
@@ -1841,6 +1873,7 @@ SELECT (SELECT count(*) FROM cofactor_distance_enrichment)::BIGINT AS results,
             "schema_version": FINAL_SCHEMA_VERSION,
             "run_id": config["run_id"],
             "analysis": config["analysis"],
+            "regulatory_selection": config.get("regulatory_selection"),
             "tax_group": config["tax_group"],
             "taxonomic_scope_rule": config["taxonomic_scope_rule"],
             "source_species_semantics": config["source_species_semantics"],
@@ -1926,6 +1959,10 @@ def parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--run-root", type=Path, required=True)
     prepare_parser.add_argument("--scan-package", type=Path, required=True)
     prepare_parser.add_argument("--anchor-evidence", type=Path, required=True)
+    prepare_parser.add_argument("--regulatory-package", type=Path,
+                                help="completed audited regulatory membership package")
+    prepare_parser.add_argument("--regulatory-subset", default="all",
+                                help="anchor subset, e.g. promoter_extended; neighbourhood unchanged")
     prepare_parser.add_argument("--thresholds", type=Path, required=True)
     prepare_parser.add_argument("--threshold-set-id", required=True)
     prepare_parser.add_argument("--jaspar-catalog", type=Path, required=True)

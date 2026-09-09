@@ -376,7 +376,7 @@ assert config["source_species_unspecified_task_count"] == 0
 assert "not a binding-species restriction" in config["source_species_semantics"]
 assert manifest["chromosomes"] == ["1"]
 assert manifest["tax_group"] == "vertebrates"
-assert manifest["schema_version"] == 5
+assert manifest["schema_version"] == 6
 assert manifest["frequency_result_rows"] == 24
 assert "matched-discordant" in manifest["frequency_semantics"][
     "anti_supported_positive_anchor_fraction_discordant"
@@ -410,4 +410,74 @@ else
     echo "I: R plotting dependencies unavailable; plot execution skipped." >&2
 fi
 
+regulatory="$temporary/regulatory"
+mkdir -p "$regulatory"
+duckdb -batch :memory: >/dev/null <<SQL
+COPY (SELECT chrom,anchor_start,anchor_end,
+             (anchor_start % 5000000) < 500 AS promoter_core,
+             (anchor_start % 5000000) <> 700 AS promoter_extended
+      FROM read_parquet('$temporary/anchors.parquet'))
+TO '$regulatory/tp73_anchor_regulatory_membership.parquet' (FORMAT PARQUET);
+SQL
+python3 - "$regulatory" <<'PY'
+import hashlib, json, sys
+from pathlib import Path
+p = Path(sys.argv[1])
+f = p / 'tp73_anchor_regulatory_membership.parquet'
+(p / 'manifest.json').write_text(json.dumps({
+    'kind':'genome_regulatory_membership','state':'complete','assembly':'GRCh38',
+    'chromosomes':['1'],
+    'coordinate_audit':{'kind':'regulatory_coordinate_audit','status':'passed',
+                        'assembly':'GRCh38','fixture':True},
+    'files':[{'path':f.name,'bytes':f.stat().st_size,
+              'sha256':hashlib.sha256(f.read_bytes()).hexdigest()}],
+}))
+PY
+subset_run="$temporary/subset-run"
+"$repository_root/scripts/manage_tp73_distance_cofactor_enrichment.py" prepare \
+    --run-root "$subset_run" --scan-package "$scan" \
+    --anchor-evidence "$temporary/anchors.parquet" --thresholds "$temporary/thresholds.parquet" \
+    --threshold-set-id synthetic_thresholds --jaspar-catalog "$catalog" \
+    --source "$repository_root" --source-commit "$source_commit" \
+    --run-id synthetic_promoter_subset --chromosomes 1 \
+    --regulatory-package "$regulatory" --regulatory-subset promoter_extended >/dev/null
+for attempt in 1 2; do
+    "$repository_root/scripts/manage_tp73_distance_cofactor_enrichment.py" prepare-anchors \
+        --run-root "$subset_run" --threads 1 --memory-limit 1GB
+done
+for task in 0 1; do
+    "$repository_root/scripts/manage_tp73_distance_cofactor_enrichment.py" run-task \
+        --run-root "$subset_run" --task-index "$task" --scratch "$scratch" \
+        --threads 1 --memory-limit 1GB --max-temp-size 1GB
+done
+"$repository_root/scripts/manage_tp73_distance_cofactor_enrichment.py" finalize \
+    --run-root "$subset_run"
+duckdb -batch "$subset_run/final/distance_enrichment/tp73_distance_cofactor_enrichment.duckdb" >/dev/null <<SQL
+SELECT CASE WHEN NOT EXISTS (
+  SELECT 1 FROM cofactor_distance_frequency_enrichment
+  WHERE motif_id='MA0001.1' AND isoform='TA' AND distance_band='adjacent_0_5'
+    AND regulatory_subset='promoter_extended' AND anchors_total=168
+    AND abs(all_tp73_anchor_vicinity_frequency-3.0/7.0)<1e-12
+) THEN error('subset frequency did not use selected anchors') END;
+SELECT CASE WHEN EXISTS (
+  SELECT 1 FROM cofactor_distance_isoform_contrast
+  WHERE regulatory_subset<>'promoter_extended'
+) THEN error('isoform contrast lost cohort identity') END;
+SQL
+python3 - "$repository_root" "$run_root" "$subset_run" <<'PY'
+import runpy, sys
+from pathlib import Path
+root, full, subset = map(Path, sys.argv[1:])
+m = runpy.run_path(str(root / 'scripts/manage_tp73_distance_cofactor_enrichment.py'))
+config = m['load_json'](subset / 'plan/run_config.json')
+task = m['read_tsv'](subset / 'plan/tasks.tsv')[0]
+config['run_id'] = 'synthetic_distance_species_v1'
+try:
+    m['validate_existing_chromosome'](m['chromosome_directory'](full, task, '1'),
+                                       task, '1', config)
+except m['DistanceEnrichmentError']:
+    pass
+else:
+    raise AssertionError('whole-cohort checkpoint accepted for subset')
+PY
 echo "TP73 distance cofactor enrichment manager tests passed."

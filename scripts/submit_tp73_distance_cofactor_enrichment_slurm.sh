@@ -19,6 +19,8 @@ Options:
   --run-root DIR          New durable run below /data/sm718
   --scan-package DIR      Finalized score-floor -1 whole-genome scan package
   --anchor-evidence FILE  Whole-genome TP73 CUT&RUN anchor-evidence Parquet
+  --regulatory-package DIR Completed audited regulatory membership package
+  --regulatory-subset NAME Anchor subset (default: all); neighbours unchanged
   --thresholds FILE       Motif operating-threshold registry Parquet
   --threshold-set-id ID   Registry threshold_set_id to apply
   --jaspar-catalog DIR    Official JASPAR metadata catalog directory
@@ -55,6 +57,8 @@ EOF
 run_root=""
 scan_package=""
 anchor_evidence=""
+regulatory_package=""
+regulatory_subset=all
 thresholds=""
 threshold_set_id=""
 jaspar_catalog=""
@@ -85,6 +89,8 @@ while [[ $# -gt 0 ]]; do
         --run-root) run_root=${2:?}; shift 2 ;;
         --scan-package) scan_package=${2:?}; shift 2 ;;
         --anchor-evidence) anchor_evidence=${2:?}; shift 2 ;;
+        --regulatory-package) regulatory_package=${2:?}; shift 2 ;;
+        --regulatory-subset) regulatory_subset=${2:?}; shift 2 ;;
         --thresholds) thresholds=${2:?}; shift 2 ;;
         --threshold-set-id) threshold_set_id=${2:?}; shift 2 ;;
         --jaspar-catalog) jaspar_catalog=${2:?}; shift 2 ;;
@@ -165,6 +171,15 @@ if ! git -C "$source" diff --quiet --ignore-submodules -- ||
     exit 1
 fi
 source_commit=$(git -C "$source" rev-parse HEAD)
+regulatory_options=(--regulatory-subset "$regulatory_subset")
+if [[ -n $regulatory_package ]]; then
+    case "$regulatory_package" in
+        /data/sm718/*) ;;
+        *) echo "E: Regulatory package must be below /data/sm718." >&2; exit 2 ;;
+    esac
+    regulatory_package=$(cd "$regulatory_package" && pwd -P)
+    regulatory_options+=(--regulatory-package "$regulatory_package")
+fi
 
 if [[ $reuse_plan -eq 1 ]]; then
     config="$run_root/plan/run_config.json"
@@ -176,7 +191,7 @@ if [[ $reuse_plan -eq 1 ]]; then
     task_count=$(python3 - "$config" "$tasks_file" "$run_root" \
         "$scan_package" "$anchor_evidence" "$thresholds" "$threshold_set_id" \
         "$jaspar_catalog" "$source" "$source_commit" "$run_id" "$tax_group" \
-        "$chromosomes" <<'PY'
+        "$chromosomes" "$regulatory_package" "$regulatory_subset" <<'PY'
 import csv
 import hashlib
 import json
@@ -185,7 +200,7 @@ import sys
 
 (config_path, task_path, run_root, scan_package, anchors, thresholds,
  threshold_set_id, catalog, source, source_commit, run_id, tax_group,
- chromosomes) = sys.argv[1:]
+ chromosomes, regulatory_package, regulatory_subset) = sys.argv[1:]
 config = json.loads(Path(config_path).read_text())
 expected = {
     "scan_package": str(Path(scan_package).resolve()),
@@ -202,6 +217,13 @@ expected = {
 for key, value in expected.items():
     if config.get(key) != value:
         raise SystemExit(f"prepared plan {key} differs")
+selection = config.get("regulatory_selection")
+if regulatory_package:
+    if (not selection or selection.get("subset") != regulatory_subset
+            or Path(selection["manifest"]).parent != Path(regulatory_package)):
+        raise SystemExit("prepared regulatory cohort differs")
+elif selection or regulatory_subset != "all":
+    raise SystemExit("prepared regulatory cohort differs")
 with Path(task_path).open(newline="") as handle:
     rows = list(csv.DictReader(handle, delimiter="\t"))
 if len(rows) != config.get("task_count"):
@@ -224,6 +246,7 @@ else
             --jaspar-catalog "$jaspar_catalog" --source "$source" \
             --source-commit "$source_commit" --run-id "$run_id" \
             --tax-group "$tax_group" --chromosomes "$chromosomes" \
+            "${regulatory_options[@]}" \
             --duckdb "$duckdb"
     )
 fi

@@ -43,6 +43,90 @@ def parquet(path: Path) -> str:
     return f"read_parquet({sql_string(path)}, hive_partitioning=false)"
 
 
+def production_selection(package: Path | None, subset: str, chromosomes) -> dict | None:
+    """Pin one audited cohort definition for both statistical Slurm runners."""
+    if package is None:
+        if subset != "all":
+            raise ValueError("a regulatory subset requires --regulatory-package")
+        return None
+    if subset not in SUBSETS:
+        raise ValueError("unknown regulatory subset")
+    package = package.resolve()
+    manifest = validated_package(package)
+    audit = manifest.get("coordinate_audit") or {}
+    if (manifest.get("kind") != "genome_regulatory_membership"
+            or manifest.get("state") != "complete"
+            or manifest.get("assembly") != "GRCh38"
+            or audit.get("kind") != "regulatory_coordinate_audit"
+            or audit.get("status") != "passed"
+            or audit.get("assembly") != "GRCh38"
+            or not set(chromosomes) <= set(manifest.get("chromosomes", []))):
+        raise ValueError("regulatory production requires a complete, audited GRCh38 package")
+    payload = package / "tp73_anchor_regulatory_membership.parquet"
+    if payload.name not in {row["path"] for row in manifest["files"]}:
+        raise ValueError("regulatory membership is not inventoried")
+    return {
+        "subset": subset, "path": str(payload), "bytes": payload.stat().st_size,
+        "sha256": sha256(payload), "manifest": str(package / "manifest.json"),
+        "manifest_sha256": sha256(package / "manifest.json"),
+        "coordinate_audit": audit,
+        "annotation_release": manifest.get("annotation_release"),
+        "promoter_definition_id": manifest.get("promoter_definition_id"),
+        "selection": "anchor_only_cofactor_neighborhood_unchanged",
+    }
+
+
+def verify_production_selection(selection: dict | None, checksum: bool = True) -> None:
+    if selection is None:
+        return
+    payload = Path(selection["path"])
+    manifest = Path(selection["manifest"])
+    if (not payload.is_file() or payload.stat().st_size != selection["bytes"]
+            or not manifest.is_file() or sha256(manifest) != selection["manifest_sha256"]
+            or (checksum and sha256(payload) != selection["sha256"])):
+        raise ValueError("regulatory membership changed after planning")
+
+
+def cohort_validation_sql(selection: dict, evidence: Path, chromosomes) -> str:
+    """Validate the full requested cohort before applying any subset filter."""
+    chroms = ",".join(sql_string(chrom) for chrom in chromosomes)
+    flag = selection["subset"]
+    if flag not in SUBSETS:
+        raise ValueError("unknown regulatory subset")
+    return f"""
+CREATE TEMP TABLE regulatory_evidence AS
+SELECT CAST(chrom AS VARCHAR) AS chrom, anchor_start, anchor_end
+FROM {parquet(evidence)} WHERE CAST(chrom AS VARCHAR) IN ({chroms});
+CREATE TEMP TABLE regulatory_membership AS
+SELECT * FROM {parquet(Path(selection['path']))}
+WHERE CAST(chrom AS VARCHAR) IN ({chroms});
+CREATE TEMP TABLE regulatory_guard AS SELECT CASE WHEN
+  (SELECT count(*)-count(DISTINCT (chrom,anchor_start,anchor_end)) FROM regulatory_evidence)<>0
+  OR (SELECT count(*)-count(DISTINCT (chrom,anchor_start,anchor_end)) FROM regulatory_membership)<>0
+  OR EXISTS (SELECT * FROM regulatory_evidence EXCEPT
+             SELECT CAST(chrom AS VARCHAR),anchor_start,anchor_end FROM regulatory_membership)
+  OR EXISTS (SELECT CAST(chrom AS VARCHAR),anchor_start,anchor_end FROM regulatory_membership EXCEPT
+             SELECT * FROM regulatory_evidence)
+  OR EXISTS (SELECT 1 FROM regulatory_membership WHERE chrom IS NULL
+      OR anchor_start IS NULL OR anchor_end IS NULL OR anchor_start<0 OR anchor_end<=anchor_start
+      OR typeof("{flag}")<>'BOOLEAN' OR "{flag}" IS NULL
+      OR promoter_core IS NULL OR promoter_extended IS NULL
+      OR (promoter_core AND NOT promoter_extended))
+  OR NOT EXISTS (SELECT 1 FROM regulatory_membership WHERE "{flag}")
+THEN error('regulatory membership must uniquely cover the cohort with Boolean flags and a nonempty subset') END;
+"""
+
+
+def cohort_predicate(selection: dict, alias: str = "") -> str:
+    flag = selection["subset"]
+    if flag not in SUBSETS:
+        raise ValueError("unknown regulatory subset")
+    prefix = alias + "." if alias else ""
+    return (f"(CAST({prefix}chrom AS VARCHAR),{prefix}anchor_start,{prefix}anchor_end) IN "
+            f"(SELECT CAST(chrom AS VARCHAR),anchor_start,anchor_end FROM "
+            f"{parquet(Path(selection['path']))} WHERE \"{flag}\")")
+
+
 def run_sql(args: argparse.Namespace, sql: str, temporary: Path) -> None:
     settings = (
         f"SET threads={args.threads}; SET memory_limit={sql_string(args.memory_limit)};"

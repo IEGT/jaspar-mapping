@@ -216,6 +216,41 @@ TO '{self.root}/promoters.parquet' (FORMAT PARQUET);
                            success=False)
         self.assertIn("coordinate/identity mismatch", result.stderr)
 
+    def test_production_cohort_validation(self):
+        package = self.root / "membership"
+        manifest_path = package / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest.update(kind="genome_regulatory_membership", state="complete", chromosomes=["1"])
+        manifest_path.write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(ValueError, "audited"):
+            module.production_selection(package, "promoter_extended", ["1"])
+        manifest["coordinate_audit"] = {
+            "kind": "regulatory_coordinate_audit", "status": "passed", "assembly": "GRCh38",
+        }
+        manifest_path.write_text(json.dumps(manifest))
+        selected = module.production_selection(package, "promoter_extended", ["1"])
+        module.verify_production_selection(selected)
+        sql = module.cohort_validation_sql(selected, self.root / "anchors.parquet", ["1"])
+        self.sql(sql + "SELECT count(*) n FROM regulatory_membership")
+        mutations = {
+            "wrong_keys": "SELECT * REPLACE (anchor_start+1 AS anchor_start) FROM m",
+            "duplicate": "SELECT * FROM m UNION ALL SELECT * FROM m LIMIT 12",
+            "null_flag": "SELECT * REPLACE (NULL::BOOLEAN AS promoter_extended) FROM m",
+            "empty": "SELECT * REPLACE (false AS promoter_core, false AS promoter_extended) FROM m",
+            "not_nested": "SELECT * REPLACE (true AS promoter_core, false AS promoter_extended) FROM m",
+        }
+        for name, query in mutations.items():
+            with self.subTest(name=name):
+                path = self.root / (name + ".parquet")
+                self.sql(f"CREATE TABLE m AS SELECT * FROM '{selected['path']}'; "
+                         f"COPY ({query}) TO '{path}' (FORMAT PARQUET)")
+                changed = dict(selected, path=str(path))
+                result = subprocess.run([DUCKDB, "-batch", "-bail", ":memory:"],
+                    input=module.cohort_validation_sql(changed, self.root / "anchors.parquet", ["1"]),
+                    text=True, capture_output=True)
+                self.assertNotEqual(result.returncode, 0, name)
+                self.assertIn("regulatory membership must uniquely cover", result.stderr)
+
     def test_production_restart_and_finalization(self):
         source = self.root / "repo"
         (source / "scripts").mkdir(parents=True)

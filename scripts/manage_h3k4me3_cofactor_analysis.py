@@ -12,6 +12,7 @@ import json
 import math
 import os
 import re
+import runpy
 import shutil
 import signal
 import subprocess
@@ -80,6 +81,7 @@ BH_PARTITIONS = {
     ),
 }
 SCIENTIFIC_SOURCE_FILES = (
+    "scripts/build_regulatory_annotation.py",
     "scripts/analyze_h3k4me3_cofactor_change.R",
     "scripts/manage_h3k4me3_cofactor_analysis.py",
     "scripts/run_h3k4me3_cofactor_analysis_finalize.sh",
@@ -216,6 +218,10 @@ def verify_scientific_hashes(config: dict[str, Any]) -> None:
             raise AnalysisError(f"scientific source changed: {path}")
 
 
+def run_contract_sha256(config: dict) -> str:
+    return hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
+
+
 def progress(_number: int | None = None, _frame: object | None = None) -> None:
     print(
         "I: progress signal=SIGUSR1 "
@@ -291,6 +297,10 @@ def prepare(arguments: argparse.Namespace) -> None:
     context_package = arguments.context_maxima_package.expanduser().resolve()
     annotation_catalog = arguments.annotation_catalog.expanduser().resolve()
     runtime = arguments.runtime_prefix.expanduser().resolve()
+    regulatory_helpers = runpy.run_path(str(source / "scripts/build_regulatory_annotation.py"))
+    regulatory = regulatory_helpers["production_selection"](
+        arguments.regulatory_package, arguments.regulatory_subset, AUTOSOMES
+    )
     distance_bands = tuple(
         item.strip() for item in arguments.distance_bands.split(",")
     )
@@ -386,6 +396,11 @@ ORDER BY try_cast(chrom AS INTEGER), chrom;
         "path": str(evidence.resolve()), "bytes": evidence.stat().st_size,
         "sha256": sha256(evidence),
     })
+    if regulatory:
+        fixed_rows.append({
+            "kind": "regulatory_membership", "chrom": "autosomes",
+            **{key: regulatory[key] for key in ("path", "bytes", "sha256")},
+        })
     fixed_path = run_root / "plan" / "fixed_inputs.tsv"
     write_rows(
         fixed_path, fixed_rows, ("kind", "chrom", "path", "bytes", "sha256")
@@ -509,6 +524,7 @@ ORDER BY i.task_index;
         "context_maxima_manifest_sha256": sha256(context_manifest_path),
         "annotation_catalog": str(annotation_catalog),
         "annotation_manifest_sha256": sha256(annotation_manifest_path),
+        "regulatory_selection": regulatory,
         "runtime_prefix": str(runtime),
         "scratch_root": str(arguments.scratch_root),
         "target_motif": arguments.target_motif,
@@ -580,6 +596,9 @@ def verify_plan(run_root: Path, config: dict[str, Any]) -> None:
     for path, digest, label in checks:
         if not path.is_file() or sha256(path) != digest:
             raise AnalysisError(f"{label} changed after planning: {path}")
+    if config.get("regulatory_selection"):
+        helpers = runpy.run_path(str(Path(config["source"]) / "scripts/build_regulatory_annotation.py"))
+        helpers["verify_production_selection"](config["regulatory_selection"])
 
 
 def verify_file_row(row: dict[str, str], checksum: bool = True) -> Path:
@@ -608,6 +627,21 @@ def preflight(arguments: argparse.Namespace) -> None:
         raise AnalysisError("fixed-input plan does not contain the nuclear contract")
     evidence = Path(evidence_rows[0]["path"])
     duckdb = Path(config["runtime_prefix"]) / "duckdb" / "bin" / "duckdb"
+    regulatory_validation = None
+    if config.get("regulatory_selection"):
+        helpers = runpy.run_path(str(Path(config["source"]) / "scripts/build_regulatory_annotation.py"))
+        cohort_sql = helpers["cohort_validation_sql"](
+            config["regulatory_selection"], evidence, AUTOSOMES
+        )
+        flag = config["regulatory_selection"]["subset"]
+        regulatory_validation = query_json(duckdb, ":memory:", cohort_sql + f"""
+SELECT count(*)::BIGINT AS input_anchors,
+       count(*) FILTER (WHERE "{flag}")::BIGINT AS selected_anchors,
+       string_agg(DISTINCT CAST(chrom AS VARCHAR), ',' ORDER BY CAST(chrom AS VARCHAR))
+         FILTER (WHERE "{flag}")
+         AS selected_chromosomes
+FROM regulatory_membership;
+""")[-1]
     values = query_json(duckdb, ":memory:", f"""
 WITH h AS (
   SELECT chrom, anchor_start, anchor_end, series_id
@@ -698,6 +732,9 @@ SELECT
         "fixed_input_plan_sha256": config["fixed_input_plan_sha256"],
         "task_plan_sha256": config["task_plan_sha256"],
         "validation": result,
+        "regulatory_selection": config.get("regulatory_selection"),
+        "regulatory_validation": regulatory_validation,
+        "run_contract_sha256": run_contract_sha256(config),
     }
     marker_path = run_root / "plan" / "preflight.json"
     if marker_path.exists():
@@ -705,6 +742,8 @@ SELECT
         for key in (
             "schema_version", "state", "run_id", "fixed_input_plan_sha256",
             "task_plan_sha256", "validation",
+            "regulatory_selection", "regulatory_validation",
+            "run_contract_sha256",
         ):
             if existing.get(key) != marker.get(key):
                 raise AnalysisError("existing preflight marker has another contract")
@@ -729,13 +768,19 @@ def output_inventory(root: Path) -> dict[str, dict[str, Any]]:
 
 
 def validate_task(row: dict[str, str], directory: Path,
-                  checksums: bool = False) -> dict[str, Any]:
+                  checksums: bool = False, config: dict | None = None) -> dict[str, Any]:
     marker = load_json(directory / "complete.json")
     if (marker.get("state") != "complete"
             or marker.get("task_index") != int(row["task_index"])
             or marker.get("motif_id") != row["motif_id"]
             or marker.get("source_maxima_sha256") != row["maxima_sha256"]):
         raise AnalysisError(f"task identity differs: {directory}")
+    if config is not None and marker.get("regulatory_selection") != config.get("regulatory_selection"):
+        raise AnalysisError(f"task regulatory cohort differs: {directory}")
+    if config is not None and config.get("regulatory_selection") and (
+        marker.get("run_contract_sha256") != run_contract_sha256(config)
+    ):
+        raise AnalysisError(f"task regulatory model contract differs: {directory}")
     records = marker.get("files")
     if not isinstance(records, dict) or set(records) != set(OUTPUTS.values()):
         raise AnalysisError(f"task output inventory differs: {directory}")
@@ -750,7 +795,8 @@ def validate_task(row: dict[str, str], directory: Path,
 
 
 def validate_result(
-    prefix: Path, motif_id: str, expected_distance_bands: tuple[str, ...]
+    prefix: Path, motif_id: str, expected_distance_bands: tuple[str, ...],
+    regulatory: dict | None = None, regulatory_validation: dict | None = None,
 ) -> None:
     band_count = len(expected_distance_bands)
     expected_counts = {
@@ -778,13 +824,25 @@ def validate_result(
             row["distance_band"] for row in rows
         } != set(expected_distance_bands):
             raise AnalysisError(f"{dataset} lacks a requested distance band")
+        if regulatory and dataset != "run_config" and any(
+            row.get("regulatory_subset") != regulatory["subset"] for row in rows
+        ):
+            raise AnalysisError(f"{dataset} contains another regulatory subset")
         if dataset == "run_config":
-            if (rows[0].get("schema_version") != "6"
+            expected_chroms = (set(regulatory_validation["selected_chromosomes"].split(","))
+                              if regulatory else set(AUTOSOMES))
+            if (rows[0].get("schema_version") != ("7" if regulatory else "6")
                     or set(rows[0].get("chromosomes", "").split(",")) !=
-                    set(AUTOSOMES)
+                    expected_chroms
                     or tuple(rows[0].get("distance_bands", "").split(",")) !=
                     expected_distance_bands):
                 raise AnalysisError("evaluator run configuration is incomplete")
+            if regulatory and (
+                rows[0].get("regulatory_subset") != regulatory["subset"]
+                or int(rows[0]["input_physical_anchors"]) != int(regulatory_validation["input_anchors"])
+                or int(rows[0]["selected_physical_anchors"]) != int(regulatory_validation["selected_anchors"])
+            ):
+                raise AnalysisError("evaluator regulatory cohort differs from preflight")
 
 
 def canonicalize_run_config(prefix: Path, row: dict[str, str]) -> None:
@@ -809,6 +867,8 @@ def canonicalize_run_config(prefix: Path, row: dict[str, str]) -> None:
         "input_reference_semantics": "package_provenance_selector",
         "execution_inputs_staged_to_scratch": "true",
     })
+    if record.get("regulatory_membership"):
+        record["regulatory_membership"] = "provenance/fixed_inputs.tsv#kind=regulatory_membership"
     for field in ("input_reference_semantics", "execution_inputs_staged_to_scratch"):
         if field not in fields:
             fields.append(field)
@@ -836,7 +896,11 @@ def run_batch(arguments: argparse.Namespace) -> None:
     if (preflight_marker.get("state") != "complete"
             or preflight_marker.get("run_id") != config["run_id"]
             or preflight_marker.get("task_plan_sha256") !=
-                config["task_plan_sha256"]):
+                config["task_plan_sha256"]
+            or preflight_marker.get("fixed_input_plan_sha256") != config["fixed_input_plan_sha256"]
+            or preflight_marker.get("regulatory_selection") != config.get("regulatory_selection")
+            or (config.get("regulatory_selection") and
+                preflight_marker.get("run_contract_sha256") != run_contract_sha256(config))):
         raise AnalysisError("whole-autosome preflight is absent or stale")
     tasks = planned_tasks(run_root)
     batch_index = arguments.batch_index
@@ -857,7 +921,7 @@ def run_batch(arguments: argparse.Namespace) -> None:
     for row in batch_tasks:
         final = task_directory(run_root, row)
         if final.exists():
-            validate_task(row, final)
+            validate_task(row, final, config=config)
             completed += 1
     if completed == len(batch_tasks):
         set_phase("complete_reused")
@@ -884,6 +948,7 @@ def run_batch(arguments: argparse.Namespace) -> None:
         staged_change: list[Path] = []
         staged_annotation: list[Path] = []
         staged_evidence: Path | None = None
+        staged_regulatory: Path | None = None
         set_phase("staging_fixed_inputs")
         for row in fixed:
             source = verify_file_row(row, checksum=False)
@@ -905,6 +970,8 @@ def run_batch(arguments: argparse.Namespace) -> None:
                 staged_annotation.append(target)
             elif row["kind"] == "tp73_evidence":
                 staged_evidence = target
+            elif row["kind"] == "regulatory_membership":
+                staged_regulatory = target
         if (len(staged_change) != 22 or len(staged_annotation) != 22
                 or staged_evidence is None):
             raise AnalysisError("staged fixed input set is incomplete")
@@ -918,7 +985,7 @@ def run_batch(arguments: argparse.Namespace) -> None:
             CURRENT_MOTIF = row["motif_id"]
             final = task_directory(run_root, row)
             if final.exists():
-                validate_task(row, final)
+                validate_task(row, final, config=config)
                 print(f"I: reusing completed H3K4me3 task {row['task_index']} "
                       f"({row['motif_id']})", file=sys.stderr)
                 continue
@@ -984,12 +1051,20 @@ def run_batch(arguments: argparse.Namespace) -> None:
             ])
             if config.get("adjust_gfp_baseline", False):
                 command.append("--adjust-gfp-baseline")
+            if config.get("regulatory_selection"):
+                if staged_regulatory is None:
+                    raise AnalysisError("regulatory membership was not staged")
+                command.extend([
+                    "--regulatory-membership", str(staged_regulatory),
+                    "--regulatory-subset", config["regulatory_selection"]["subset"],
+                ])
             set_phase("evaluating_motif")
             run_process(command, cwd=Path(config["source"]))
             canonicalize_run_config(prefix, row)
             set_phase("validating_motif")
             validate_result(
-                prefix, row["motif_id"], tuple(config["distance_bands"])
+                prefix, row["motif_id"], tuple(config["distance_bands"]),
+                config.get("regulatory_selection"), preflight_marker.get("regulatory_validation"),
             )
 
             attempt = run_root / "tasks" / (
@@ -1010,6 +1085,8 @@ def run_batch(arguments: argparse.Namespace) -> None:
                 "source_maxima_sha256": row["maxima_sha256"],
                 "positive_threshold": float(row["positive_threshold"]),
                 "source_commit": config["source_commit"],
+                "regulatory_selection": config.get("regulatory_selection"),
+                "run_contract_sha256": run_contract_sha256(config),
                 "completed_at_utc": datetime.now(timezone.utc).isoformat(),
                 "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
                 "slurm_restart_count":
@@ -1026,7 +1103,7 @@ def run_batch(arguments: argparse.Namespace) -> None:
             except OSError:
                 if not final.exists():
                     raise
-                validate_task(row, final)
+                validate_task(row, final, config=config)
                 shutil.rmtree(attempt)
         set_phase("complete")
         CURRENT_MOTIF = "none"
@@ -1036,6 +1113,7 @@ def run_batch(arguments: argparse.Namespace) -> None:
 
 def status(arguments: argparse.Namespace) -> None:
     run_root = arguments.run_root.expanduser().resolve()
+    config = load_json(run_root / "plan" / "run_config.json")
     rows = planned_tasks(run_root)
     complete = invalid = 0
     for row in rows:
@@ -1043,7 +1121,7 @@ def status(arguments: argparse.Namespace) -> None:
         if not (directory / "complete.json").is_file():
             continue
         try:
-            validate_task(row, directory)
+            validate_task(row, directory, config=config)
             complete += 1
         except (AnalysisError, OSError, ValueError, json.JSONDecodeError):
             invalid += 1
@@ -1096,14 +1174,17 @@ def finalize(arguments: argparse.Namespace) -> None:
     verify_scientific_hashes(config)
     rows = planned_tasks(run_root)
     manifests = [
-        validate_task(row, task_directory(run_root, row), checksums=True)
+        validate_task(row, task_directory(run_root, row), checksums=True, config=config)
         for row in rows
     ]
     final = run_root / "final" / "h3k4me3_cofactor_analysis"
     if final.exists():
         manifest = load_json(final / "manifest.json")
         if (manifest.get("state") == "complete"
-                and manifest.get("run_id") == config["run_id"]):
+                and manifest.get("run_id") == config["run_id"]
+                and manifest.get("regulatory_selection") == config.get("regulatory_selection")
+                and (not config.get("regulatory_selection") or
+                     manifest.get("run_contract_sha256") == run_contract_sha256(config))):
             print(f"I: reusing finalized H3K4me3 cofactor analysis: {final}",
                   file=sys.stderr)
             return
@@ -1237,6 +1318,8 @@ SELECT
             "primary_window": config["primary_window"],
             "distance_bands": config["distance_bands"],
             "positive_threshold_policy": config["positive_threshold_policy"],
+            "regulatory_selection": config.get("regulatory_selection"),
+            "run_contract_sha256": run_contract_sha256(config),
             "motifs": task_count,
             "multiple_testing_scope":
                 "all_planned_non_TP73_JASPAR_motifs_by_declared_result_family",
@@ -1274,6 +1357,10 @@ def parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--evidence-package", type=Path, required=True)
     prepare_parser.add_argument("--context-maxima-package", type=Path, required=True)
     prepare_parser.add_argument("--annotation-catalog", type=Path, required=True)
+    prepare_parser.add_argument("--regulatory-package", type=Path,
+                                help="completed audited regulatory membership package")
+    prepare_parser.add_argument("--regulatory-subset", default="all",
+                                help="anchor subset, e.g. promoter_extended; neighbourhood unchanged")
     prepare_parser.add_argument("--runtime-prefix", type=Path, required=True)
     prepare_parser.add_argument("--source", type=Path, required=True)
     prepare_parser.add_argument("--run-id", required=True)
