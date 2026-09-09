@@ -49,6 +49,7 @@ scripts/manage_h3k4me3_cofactor_analysis.py
 scripts/manage_h3k4me3_genome_signal.py
 scripts/manage_motif_density_calibration.py
 scripts/manage_motif_threshold_calibration.py
+scripts/manage_regulatory_annotation.py
 scripts/manage_tp73_cofactor_enrichment.py
 scripts/manage_tp73_distance_cofactor_enrichment.py
 scripts/manage_tp73_genome_context_maxima.py
@@ -96,6 +97,7 @@ scripts/submit_motif_context_slurm.sh
 scripts/submit_motif_density_calibration_slurm.sh
 scripts/submit_motif_threshold_calibration_slurm.sh
 scripts/submit_negative_threshold_sensitivity_slurm.sh
+scripts/submit_regulatory_annotation_slurm.sh
 scripts/submit_tp73_cofactor_enrichment_slurm.sh
 scripts/submit_tp73_distance_cofactor_enrichment_slurm.sh
 scripts/submit_tp73_genome_context_maxima_slurm.sh

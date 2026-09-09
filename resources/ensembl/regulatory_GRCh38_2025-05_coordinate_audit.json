@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "kind": "regulatory_coordinate_audit",
+  "status": "passed",
+  "assembly": "GRCh38",
+  "features_compared": 643528,
+  "gff_sha256": "a5f5ef58ee7b3dfbc3667692d3cc6515c66789ad2de2c3a15784c5436367bb32",
+  "bigbed_sha256": "0bc0285ef0c2d5f0e2ca5f398bf8015a20747c9e54e80a97f6a168ef6f13f389",
+  "bigbed_reader_sha256": "ab247cde15ec7b2bb83ff1232e950e60c5e2747d6aaf74f46e489cd360271e3f",
+  "bigbed_reader_uri": "https://hgdownload.soe.ucsc.edu/admin/exe/macOSX.arm64/bigBedToBed",
+  "requested_regulatory_release": "2025-12",
+  "regulatory_release": "2025-05",
+  "source_uri": "https://regulation.ensembl.org/api/annotation/v0.15/files/download/2025-12/homo_sapiens/GRCh38/Homo_sapiens.GRCh38.regulatory_features.gff.gz",
+  "comparison": "all_IDs_chrom_strand_type_core_and_extended_BED_bounds",
+  "gff_conversion": "start_minus_one_end_unchanged_including_extended_attributes",
+  "audited_at": "2026-09-08",
+  "audit_builder_sha256": "989febab7372318d6dda927e8505b2592c118db15f8302b716dc131e28f5b55c"
+}

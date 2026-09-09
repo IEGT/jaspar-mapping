@@ -138,6 +138,14 @@ def import_gff(args: argparse.Namespace, staging: Path) -> None:
     digest = sha256(args.gff)
     if args.expected_sha256 and digest != args.expected_sha256:
         raise ValueError("GFF checksum does not match --expected-sha256")
+    audit = None
+    if args.coordinate_audit:
+        audit = json.loads(args.coordinate_audit.read_text())
+        if (audit.get("kind") != "regulatory_coordinate_audit"
+                or audit.get("status") != "passed"
+                or audit.get("gff_sha256") != digest
+                or audit.get("assembly") != args.assembly):
+            raise ValueError("coordinate audit does not validate this assembly/GFF payload")
     # Bounded streaming adapter, not a retained BED/TSV motif-data layer.
     with tempfile.TemporaryDirectory(prefix="regulatory-import-", dir=staging.parent) as temp:
         temporary = Path(temp)
@@ -187,6 +195,7 @@ FROM imported;
         "coordinate_mode": "bed_0based_half_open", "feature_count": rows,
         "chromosomes": sorted(chromosomes),
         "coordinate_audit_note": args.coordinate_audit_note,
+        "coordinate_audit": audit,
         "activity_in_experimental_cells": "not_assessed",
     })
 
@@ -318,6 +327,7 @@ SELECT CASE WHEN EXISTS (SELECT 1 FROM feature
         "assembly": args.assembly, "regulatory_release": manifest["regulatory_release"],
         "regulatory_source_sha256": manifest["source_sha256"],
         "coordinate_audit_note": manifest["coordinate_audit_note"],
+        "coordinate_audit": manifest.get("coordinate_audit"),
         "annotation_release": args.annotation_release, "genome_id": args.genome_id,
         "promoter_definition_id": args.promoter_definition_id,
         "membership_rule": "positive_half_open_overlap_not_abutment",
@@ -364,6 +374,54 @@ SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM selected_anchors)
     })
 
 
+def audit_coordinates(args: argparse.Namespace, staging: Path) -> None:
+    """Compare every exported boundary with UCSC's independent BigBed reader."""
+    digest = sha256(args.gff)
+    expected = {}
+    for row in gff_rows(args.gff, args.assembly, "audit", digest):
+        identifier = row["source_feature_id"]
+        if identifier in expected:
+            raise ValueError(f"duplicate GFF ID: {identifier}")
+        expected[identifier] = (
+            row["chrom"], row["extended_start"] if row["extended_start"] is not None else row["start"],
+            row["extended_end"] if row["extended_end"] is not None else row["end"],
+            row["strand"], row["start"], row["end"], row["feature_type"],
+        )
+    if not expected:
+        raise ValueError("empty coordinate audit input")
+    count = len(expected)
+    checked = 0
+    # Stream the reader output; there is no intermediate genome-wide BED layer.
+    with tempfile.TemporaryFile(mode="w+") as errors:
+        with subprocess.Popen(
+            [str(args.bigbed_to_bed.resolve()), str(args.bigbed.resolve()), "stdout"],
+            stdout=subprocess.PIPE, stderr=errors, text=True,
+        ) as process:
+            for line in process.stdout:
+                fields = line.rstrip("\n").split("\t")
+                if len(fields) < 10:
+                    raise ValueError("BigBed export lacks BED9+ feature type")
+                observed = (fields[0], int(fields[1]), int(fields[2]), fields[5],
+                            int(fields[6]), int(fields[7]), fields[9].replace(" ", "_"))
+                wanted = expected.pop(fields[3], None)
+                if wanted != observed:
+                    raise ValueError(f"coordinate/identity mismatch {fields[3]}: {wanted} != {observed}")
+                checked += 1
+        if process.returncode:
+            errors.seek(0)
+            raise ValueError("BigBed reader failed: " + errors.read(4096))
+    if expected or checked != count:
+        raise ValueError("BigBed/GFF feature inventories differ")
+    publish(staging, args.output, {
+        "schema_version": 1, "kind": "regulatory_coordinate_audit", "status": "passed",
+        "assembly": args.assembly, "features_compared": count,
+        "gff_sha256": digest, "bigbed_sha256": sha256(args.bigbed),
+        "bigbed_reader_sha256": sha256(args.bigbed_to_bed),
+        "comparison": "all_IDs_chrom_strand_type_core_and_extended_BED_bounds",
+        "gff_conversion": "start_minus_one_end_unchanged_including_extended_attributes",
+    })
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     commands = result.add_subparsers(dest="command", required=True)
@@ -374,6 +432,8 @@ def parser() -> argparse.ArgumentParser:
                      help="actual payload release, not necessarily the requested URL release")
     imp.add_argument("--source-uri", required=True, help="durable public URL, not a signed redirect")
     imp.add_argument("--expected-sha256")
+    imp.add_argument("--coordinate-audit", type=Path,
+                     help="passed audit JSON for this exact GFF payload and assembly")
     imp.add_argument("--coordinate-audit-note", required=True,
                      help="record independent coordinate validation or unresolved discrepancies")
     imp.set_defaults(function=import_gff)
@@ -394,9 +454,14 @@ def parser() -> argparse.ArgumentParser:
     sel.add_argument("--membership", type=Path, required=True)
     sel.add_argument("--subset", choices=SUBSETS, required=True)
     sel.set_defaults(function=select_anchors)
-    for subparser in (imp, ann):
+    audit = commands.add_parser("audit", help="compare all GFF coordinates with UCSC BigBed output")
+    audit.add_argument("--gff", type=Path, required=True)
+    audit.add_argument("--bigbed", type=Path, required=True)
+    audit.add_argument("--bigbed-to-bed", type=Path, required=True)
+    audit.set_defaults(function=audit_coordinates)
+    for subparser in (imp, ann, audit):
         subparser.add_argument("--assembly", required=True)
-    for subparser in (imp, ann, sel):
+    for subparser in (imp, ann, sel, audit):
         subparser.add_argument("--output", type=Path, required=True,
                                help="new immutable package directory; never overwrites")
         subparser.add_argument("--duckdb", default="duckdb")

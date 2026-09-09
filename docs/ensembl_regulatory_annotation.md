@@ -1,10 +1,9 @@
 # Ensembl regulatory context at TP73 anchors
 
-Status, 2026-09-08: importer, anchor membership, TP73 evidence selection and
-H3K4me3 subset refitting implemented and tested locally. A real chromosome-1
-annotation pilot is complete. **No genome-wide regulatory-subset analysis has
-been submitted.** The GFF/BigBed coordinate disagreement below is an explicit
-source-validation gate before production.
+Status, 2026-09-09: importer, anchor membership, TP73 evidence selection and
+H3K4me3 subset refitting implemented and tested locally. The full independent
+coordinate audit passes. Restart-safe chromosome annotation is prepared for
+Slurm; genome-wide subset cofactor fits still need manager integration.
 
 ## Scientific contract
 
@@ -75,21 +74,41 @@ All promoters have `extended_start` and `extended_end`; the GFF interval
 itself is the core. Gene IDs can be comma-separated. Every feature type and
 the raw attributes are preserved, including records with no gene link.
 
-### Coordinate discrepancy
+### Coordinate audit: resolved
 
-For the same native promoter ID, `ENSR1_958`, the exports disagree:
+The initial rtracklayer check appeared to disagree for `ENSR1_958`:
 
 | Interpretation, BED half-open | Core | Extended |
 |---|---|---|
 | GFF, standard `start - 1`, unchanged end | `[10935,11436)` | `[9952,11436)` |
 | BigBed read by rtracklayer, GRanges start converted back to BED | `[10934,11436)` | `[9951,11436)` |
+| BigBed read independently with UCSC bigBedToBed | `[10935,11436)` | `[9952,11436)` |
 
 The GFF raw row is `10936..11436`, with `extended_start=9953` and
-`extended_end=11436`. Both source starts, not the ends, differ by one base.
-The importer follows the declared GFF convention and does **not** silently
-shift it to match BigBed. The local pilot is therefore provisional. Resolve
-which source representation Ensembl intends before production, then pin that
-decision and payload. Do not reinterpret existing packages in place.
+`extended_end=11436`. The independent reader establishes that the discrepancy
+was in the earlier R import/conversion path, **not between Ensembl's exports**.
+All 643,528 feature IDs, chromosomes, strands, types, core and extended bounds
+agree with the GFF conversion. No source intervals need to be shifted again.
+The exact payload/reader hashes and audit result are committed in
+[`regulatory_GRCh38_2025-05_coordinate_audit.json`](../resources/ensembl/regulatory_GRCh38_2025-05_coordinate_audit.json).
+
+Reproduce the whole-file streaming comparison using the official UCSC reader
+for the local platform, without writing an intermediate BED file:
+
+```bash
+python3 scripts/build_regulatory_annotation.py audit \
+  --gff SOURCE/Homo_sapiens.GRCh38.regulatory_features.gff.gz \
+  --bigbed SOURCE/Homo_sapiens.GRCh38.regulatory_features.bb \
+  --bigbed-to-bed TOOLS/bigBedToBed --assembly GRCh38 --output RUN/coordinate-audit
+```
+
+This is not a choice of regional coordinate conventions: Ensembl BED/BigBed
+already use zero-based, half-open intervals. GENtle's genomic-region records
+use `start_0based`, `end_0based_exclusive` and an explicit coordinate-convention
+tag. Its genome-track projection adds one to the BED start, not the end, when
+interfacing with a one-based genome anchor. Keep these boundaries explicit:
+BED `[9952,11436)` displays as inclusive `9953-11436`; a one-base interval
+`[100,101)` displays as `101-101`. No GENtle code changes were needed here.
 
 An independent BigBed check, where Bioconductor rtracklayer is available:
 
@@ -151,7 +170,8 @@ python3 scripts/build_regulatory_annotation.py import \
   --assembly GRCh38 --requested-release 2025-12 --resolved-release 2025-05 \
   --source-uri https://regulation.ensembl.org/api/annotation/v0.15/files/download/2025-12/homo_sapiens/GRCh38/Homo_sapiens.GRCh38.regulatory_features.gff.gz \
   --expected-sha256 a5f5ef58ee7b3dfbc3667692d3cc6515c66789ad2de2c3a15784c5436367bb32 \
-  --coordinate-audit-note 'Provisional: GFF/BigBed start disagreement unresolved' \
+  --coordinate-audit resources/ensembl/regulatory_GRCh38_2025-05_coordinate_audit.json \
+  --coordinate-audit-note 'All 643528 features agree with independently read BigBed' \
   --output RUN/regulatory_features
 
 python3 scripts/build_regulatory_annotation.py annotate \
@@ -221,7 +241,7 @@ including effect, isoform-contrast and frequency-summary tables.
 The real local pilot used the older
 `dry_runs/h3k4me3_cofactor_change_chr1_20260809/tp73_anchor_evidence.parquet`,
 which contains **310,782 chr1 anchors with score >= 0**. It is not the current
-genome-wide, low-floor local-peak production cohort. The provisional annotation
+genome-wide, low-floor local-peak production cohort. The annotation
 found 2,415 core-promoter anchors, 3,559 extended-promoter anchors, 20,068
 enhancer anchors, 263 open-chromatin anchors and 282,712 anchors with no
 regulatory overlap. These overlapping categories must not be added together.
@@ -233,17 +253,51 @@ identical to the slower equality-plus-range join. Pilot packages are in
 `dry_runs/ensembl_regulation_20260908/`; they are validation artifacts, not new
 enrichment or H3K4me3 results.
 
-## Production still to do
+## Restart-safe chromosome production
 
-1. Resolve the source coordinate discrepancy and pin the decision. Import the
-   same checksummed payload on Haumea through the documented public source.
-2. Produce versioned chromosome membership packages for the **current**
+`manage_regulatory_annotation.py prepare` pins exact chromosome evidence and
+TSS/ownership/promoter files from completed catalogs, the clean source commit,
+scientific source hashes and the passed coordinate audit. `setup` downloads
+the small public GFF on a compute node, checks its digest and builds the
+shared feature package once. No data are copied from the laptop to Haumea.
+
+Each `run-task` stages a single chromosome's inputs and the shared annotation
+on `/scratch`, verifies the staged bytes, annotates, then copies the small
+result to a unique durable attempt directory before atomic promotion. Requeue
+restages scratch and validates/reuses completed chromosomes; it never replaces
+them. Haumea owns scratch cleanup. `finalize` requires every planned chromosome
+and produces the combined, zero-complete membership Parquet and query schema.
+
+The submission helper uses `requeue`, 2 CPUs, 8 GB and a 20-minute limit per
+job, with 10 concurrent chromosome tasks. This is annotation, not a genome
+scan; it has no FASTA dependency. SIGUSR1 reports worker phase and elapsed time.
+
+```bash
+SOURCE=/data/sm718/GitHub/jaspar-mapping
+RUN=/data/sm718/jaspar_mapping_runs/ensembl_grch38_tp73_regulatory_20260909_v1
+RUNTIME=/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_context_thresholds_v1/runtime
+python3 "$SOURCE/scripts/manage_regulatory_annotation.py" --help
+bash "$SOURCE/scripts/submit_regulatory_annotation_slurm.sh" \
+  --source "$SOURCE" --run-root "$RUN" \
+  --evidence-package /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_tp73_cutandrun_evidence_v1/final/genome_evidence \
+  --annotation-catalog /data/sm718/jaspar_mapping_runs/jaspar2026_grch38_tp73_annotation_v4_schema9/final \
+  --duckdb "$RUNTIME/duckdb/bin/duckdb" --partition requeue --max-concurrent 10
+```
+
+Use an immutable source checkout for a submitted run. The optional `--dry-run`
+creates a pinned plan and prints commands only; use another new run directory
+for a subsequent fresh submission. Submitted IDs are recorded immediately in
+`submissions.tsv` so a partial scheduler submission is diagnosable.
+
+## Cofactor refits still to do
+
+1. Produce versioned chromosome membership packages for the **current**
    autosomal production anchor cohort, with its pinned GTF/TSS/promoter inputs.
-3. Add sidecar hashes/subset identity to the Slurm managers' fixed-input
+2. Add sidecar hashes/subset identity to the cofactor Slurm managers' fixed-input
    inventories and restart validation. Do not pass schema-7 subset results
    through the unchanged schema-6 H3 finalizer. Use one immutable run per
    predeclared subset; do not silently reuse whole-genome checkpoints.
-4. Recompute TP73 block components and H3K4me3 fits, then finalize within-subset
+3. Recompute TP73 block components and H3K4me3 fits, then finalize within-subset
    testing families. Report TA and DN beside one another, with frequency,
    support, uncertainty and matched negative-reference definitions. Differences
    between subset estimates require a separate interaction test, not comparing

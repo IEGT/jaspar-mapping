@@ -46,7 +46,8 @@ For GFP-referenced H3K4me3 change at TP73 anchors, read
 [`docs/ensembl_regulatory_annotation.md`](docs/ensembl_regulatory_annotation.md)
 when adding Ensembl regulatory subsets. These are independent anchor-level
 memberships, not replacements for the per-TSS promoter dimension or cohort.
-The GFF/BigBed coordinate discrepancy is not yet cleared for production.
+The full GFF/BigBed coordinate audit passed for all 643,528 features. Require
+the pinned audit JSON for regulatory production; preserve BED half-open bounds.
 For the H3K4me3 statistical design, read
 [`docs/h3k4me3_cofactor_change.md`](docs/h3k4me3_cofactor_change.md). The
 completed chromosome-1 result is reported in

@@ -2,6 +2,7 @@
 """Small, inspectable regulatory geometry and evidence-subset contracts."""
 
 import gzip
+import csv
 import importlib.util
 import json
 import os
@@ -186,6 +187,93 @@ TO '{self.root}/promoters.parquet' (FORMAT PARQUET);
                            "--output", self.root / "invalid", success=False)
         self.assertIn("exact physical anchor input", result.stderr)
         self.assertFalse((self.root / "invalid").exists())
+
+    def test_coordinate_audit_checks_all_features(self):
+        reader = self.root / "bigBedToBed"
+        rows = list(module.gff_rows(self.gff, "GRCh38", "r", "hash"))
+        bed = ""
+        for r in rows:
+            start = r["extended_start"] if r["extended_start"] is not None else r["start"]
+            end = r["extended_end"] if r["extended_end"] is not None else r["end"]
+            bed += "\t".join(map(str, (r["chrom"], start, end, r["source_feature_id"], 0,
+                                          r["strand"], r["start"], r["end"], 0,
+                                          r["feature_type"].replace("_", " ")))) + "\n"
+        reader.write_text("#!/usr/bin/env python3\nimport sys\nsys.stdout.write(" + repr(bed) + ")\n")
+        reader.chmod(0o755)
+        self.call("audit", "--gff", self.gff, "--bigbed", self.gff,
+                  "--bigbed-to-bed", reader, "--assembly", "GRCh38", "--output", self.root / "audit")
+        audit = json.loads((self.root / "audit/manifest.json").read_text())
+        self.assertEqual(audit["features_compared"], len(rows))
+        self.assertEqual(audit["status"], "passed")
+        self.call("import", "--gff", self.gff, "--assembly", "GRCh38",
+                  "--requested-release", "r", "--resolved-release", "r", "--source-uri", "synthetic",
+                  "--coordinate-audit-note", "fixture", "--coordinate-audit", self.root / "audit/manifest.json",
+                  "--output", self.root / "audited-features")
+        self.assertEqual(json.loads((self.root / "audited-features/manifest.json").read_text())["coordinate_audit"], audit)
+        reader.write_text(reader.read_text().replace("\\t90\\t150", "\\t89\\t150", 1))
+        result = self.call("audit", "--gff", self.gff, "--bigbed", self.gff,
+                           "--bigbed-to-bed", reader, "--assembly", "GRCh38", "--output", self.root / "bad-audit",
+                           success=False)
+        self.assertIn("coordinate/identity mismatch", result.stderr)
+
+    def test_production_restart_and_finalization(self):
+        source = self.root / "repo"
+        (source / "scripts").mkdir(parents=True)
+        for script in ("build_regulatory_annotation.py", "manage_regulatory_annotation.py"):
+            shutil.copyfile(ROOT / "scripts" / script, source / "scripts" / script)
+        for arguments in (["init", "-q"], ["add", "scripts"],
+                          ["-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                           "commit", "-qm", "fixture"]):
+            subprocess.run(["git", "-C", str(source), *arguments], check=True, capture_output=True)
+        evidence = self.root / "evidence"
+        evidence.mkdir()
+        shutil.copyfile(self.root / "anchors.parquet", evidence / "anchors.parquet")
+        (evidence / "manifest.json").write_text(json.dumps({"state": "complete"}))
+        with (evidence / "chromosome_file_inventory.tsv").open("w") as stream:
+            writer = csv.DictWriter(stream, delimiter="\t",fieldnames=["chrom","relative_path","bytes","sha256"])
+            writer.writeheader()
+            writer.writerow({"chrom":"1","relative_path":"anchors.parquet",
+                             "bytes":(evidence / "anchors.parquet").stat().st_size,
+                             "sha256":module.sha256(evidence / "anchors.parquet")})
+        catalog = self.root / "catalog"
+        catalog.mkdir()
+        (catalog / "manifest.json").write_text(json.dumps({"state":"complete","context_schema_version":9}))
+        result = subprocess.run([DUCKDB, "-batch", "-bail", str(catalog / "context.duckdb")],
+                                input=f"CREATE TABLE context_file_inventory AS SELECT * FROM (VALUES "
+                                f"('transcription_start_site.parquet','1','{self.root}/tss.parquet'),"
+                                f"('transcript_tss.parquet','1','{self.root}/owners.parquet'),"
+                                f"('promoter.parquet','1','{self.root}/promoters.parquet')) r(dataset,chrom,absolute_path);",
+                                text=True, capture_output=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        audit = self.root / "production-audit.json"
+        audit.write_text(json.dumps({"kind":"regulatory_coordinate_audit","status":"passed",
+                                     "assembly":"GRCh38","features_compared":6,
+                                     "gff_sha256":module.sha256(self.gff),"source_uri":"synthetic",
+                                     "requested_regulatory_release":"r","regulatory_release":"r"}))
+        manager = source / "scripts/manage_regulatory_annotation.py"
+        run = self.root / "run"
+
+        def invoke(*arguments, success=True):
+            result = subprocess.run([sys.executable,str(manager),*map(str,arguments),"--run-root",str(run)],
+                                    text=True,capture_output=True)
+            self.assertEqual(result.returncode == 0,success,result.stderr)
+            return result
+
+        invoke("prepare","--source",source,"--evidence-package",evidence,"--annotation-catalog",catalog,
+               "--audit",audit,"--duckdb",Path(shutil.which(DUCKDB)),"--chromosomes","1",
+               "--genome-id","human","--annotation-release","gtf-test","--promoter-definition-id","legacy")
+        invoke("setup","--gff",self.gff)
+        self.assertIn("Reusing",invoke("setup","--gff",self.gff).stdout)
+        invoke("finalize",success=False)
+        invoke("run-task","--task-index","0","--scratch-root",self.root / "scratch")
+        self.assertIn("Reusing",invoke("run-task","--task-index","0","--scratch-root",self.root / "scratch").stdout)
+        invoke("finalize")
+        self.assertIn("Reusing",invoke("finalize").stdout)
+        rows = self.sql(f"SELECT count(*) n FROM '{run}/final/tp73_anchor_regulatory_membership.parquet'")
+        self.assertEqual(rows[0]["n"],11)
+        with (run / "tasks/chrom-1/tp73_anchor_regulatory_membership.parquet").open("ab") as stream:
+            stream.write(b"changed")
+        invoke("run-task","--task-index","0","--scratch-root",self.root / "scratch",success=False)
 
 
 if __name__ == "__main__":
