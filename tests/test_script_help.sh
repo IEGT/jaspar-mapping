@@ -38,6 +38,7 @@ scripts/evaluate_tp73_pair_stratified_model.R
 scripts/export_bigwig_chrom_bedgraph.R
 scripts/export_bigwig_chrom_bedgraph.py
 scripts/export_dense_bed.py
+scripts/export_promoter_collaboration.py
 scripts/fetch_region_to_embl.py
 scripts/finalize_motif_context_run.py
 scripts/fix_missing_bidirect.sh
@@ -97,6 +98,7 @@ scripts/submit_motif_context_slurm.sh
 scripts/submit_motif_density_calibration_slurm.sh
 scripts/submit_motif_threshold_calibration_slurm.sh
 scripts/submit_negative_threshold_sensitivity_slurm.sh
+scripts/submit_promoter_collaboration_slurm.sh
 scripts/submit_regulatory_annotation_slurm.sh
 scripts/submit_tp73_cofactor_enrichment_slurm.sh
 scripts/submit_tp73_distance_cofactor_enrichment_slurm.sh

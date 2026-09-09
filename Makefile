@@ -205,6 +205,7 @@ check-duckdb: cutandrun_score_calibration pssm_scan_parquet
 	bash tests/test_tp73_distance_cofactor_counts.sh
 	bash tests/test_tp73_exact_distance_response.sh
 	bash tests/test_tp73_distance_cofactor_enrichment_manager.sh
+	python3 tests/test_promoter_collaboration.py
 	bash tests/test_tp73_cofactor_score_surface.sh
 	bash tests/test_h3k4me3_cofactor_change.sh
 	bash tests/test_h3k4me3_chromosome_production.sh

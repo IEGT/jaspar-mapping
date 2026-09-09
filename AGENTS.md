@@ -2,6 +2,12 @@
 
 ## Promoter Architecture And ML Query Surface
 
+For the bounded promoter-cofactor collaborator package, Glen's data subset,
+or its existing GENtle region-import handoff, read
+[`docs/promoter_collaborator_package.md`](docs/promoter_collaborator_package.md).
+The strongest-per-band subset is not a complete genome scan; preserve its
+explicit motif/anchor coverage and do not attach it as a full-scan provider.
+
 For work on promoter architecture, expression-linked ML features, OpenClaw
 integration, or agent-facing query surfaces, read
 [`docs/promoter_architecture_ml_schema.md`](docs/promoter_architecture_ml_schema.md)
