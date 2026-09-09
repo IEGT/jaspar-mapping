@@ -161,3 +161,39 @@ and verify a canonical GRCh38 region export. Run:
 ```sh
 python3 tests/test_promoter_collaboration.py
 ```
+
+## First Production Submission: 2026-09-09
+
+The committed code was fetched from GitHub into the immutable checkout
+`/data/sm718/jaspar_mapping_runs/source_checkouts/jaspar-mapping-82a4273`.
+No source or analytical input was copied from the laptop. Slurm receives that
+checkout explicitly through `--source`, since its spooled batch script is not
+located inside the repository.
+
+The dedicated run root is
+`/data/sm718/jaspar_mapping_runs/glen_promoter_cofactors_score0_20260909_v1`.
+The portable result, once successfully finalized, will be its `package/`
+subdirectory, not the entire run root or its checkpoint directories.
+
+| Phase | Slurm job | Dependency |
+| --- | --- | --- |
+| Prepare and select panel | 5783826 | Successful promoter finalizer 5782824 |
+| Detailed motif export | 5783827, slots 0-99, at most 4 concurrent | 5783826 |
+| Validate and publish | 5783828 | Every task in 5783827 |
+
+All three were verified pending with reason `Dependency`, as expected at
+submission. **This is a queued export, not a completed or measured package.**
+The input is `jaspar2026_grch38_tp73_regulatory_promoter_extended_score0_v1`,
+with 1,018 planned vertebrate motif summaries and 34,035 eligible autosomal
+anchors. The detailed panel ceiling is 100; its final selection must wait for
+the promoter-specific rankings. The hard package ceiling is 2,000,000,000
+bytes. No data have been sent to Glen or published to an external service.
+
+The matching regulatory feature source is
+`/data/sm718/jaspar_mapping_runs/ensembl_grch38_tp73_regulatory_20260909_v1/features`.
+The jobs use the same DuckDB runtime as the promoter analysis:
+`/data/sm718/jaspar_mapping_runs/jaspar2026_chr1_tp73_context_thresholds_v1/runtime/duckdb/bin/duckdb`.
+Durable submission IDs and the code commit are in `submissions.tsv` at the run
+root. On successful publication, `package/manifest.json` pins the full upstream
+result/configuration, and `package/complete.json` inventories the delivered
+files. Check those markers and measured bytes before transferring anything.
