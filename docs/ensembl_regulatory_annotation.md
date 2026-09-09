@@ -5,6 +5,8 @@ H3K4me3 subset refitting implemented and tested locally. The full independent
 coordinate audit passes. Restart-safe annotation has completed on Haumea for
 all 22 autosomes. Both statistical Slurm managers now pin and validate the
 regulatory cohort, including subset-aware checkpoints and finalization.
+Promoter-restricted TP73 and H3K4me3 refits have been submitted; these are
+ongoing analyses, not completed enrichment results.
 
 ## Scientific contract
 
@@ -403,6 +405,57 @@ older runs made with the same function; their use as plot axes needs correction
 before further interpretation. It does not lie on the primary H3K4me3 change
 model path or in the separate TP73 distance-enrichment manager. Passing output
 shape/status checks alone did not detect this alignment error.
+
+### Submitted promoter refits (2026-09-09)
+
+All durable runs are below `/data/sm718/jaspar_mapping_runs/`. Source is pinned
+in detached Git worktrees there; updating the main checkout cannot alter an
+active job. Existing sequence, CUT&RUN evidence and H3K4me3 change packages are
+reused through their manifests. No new genome scan was submitted.
+
+TP73 runs use source `e729086`, 1,018 vertebrate motifs, 32 GB and two CPUs per
+task, with eight concurrent tasks per cohort. Run roots follow
+`jaspar2026_grch38_tp73_regulatory_{subset}_score0_v1`.
+
+| Subset | Physical anchors | Setup | Arrays | Finalizer |
+|---|---:|---|---|---|
+| `promoter_extended` | 34,035 | 5782821 | 5782822, 5782823 | 5782824 |
+| `promoter_core` | 23,698 | 5782863 | 5782864, 5782865 | 5782866 |
+| `tss_window_promoter` | 436,537 | 5782873 | 5782874, 5782875 | 5782876 |
+
+Corrected H3K4me3 runs use source `344182d`, all 2,632 non-TP73 motifs,
+64 GB and four CPUs per batch, four sequential motifs per batch (658 batches).
+The downstream ranking job applies the human-source catalog filter. Run roots
+follow `jaspar2026_grch38_h3_regulatory_{subset}_score0_{variant}_v2`.
+Each variant initially runs one batch at a time for validation; the planned
+post-validation ceiling is six. All arrays use `requeue`, two-hour allocations,
+per-motif completion checks and job-local scratch staging.
+
+The corrected first motif (`MA0001.3`) completed for all three subsets and
+both adjustment variants without recycling warnings. For extended-promoter
+primary analysis, all nine non-occupancy result TSVs are byte-identical to the
+pilot; the companion occupancy table changes as expected. Source and output
+checksums were verified. All six variants were raised to six concurrent
+batches each after their first-motif checks, giving a combined ceiling of 60
+tasks including the three TP73 runs. Both legacy-TSS variants additionally
+passed explicit checks of their 436,537-anchor cohort and output checksums.
+Initial H3K4me3 peak RSS was approximately 23 GB, below the 64 GB allocation.
+The runtime's separate package-built-under-R-4.5.3 message remains visible;
+it is distinct from the corrected vector-recycling warnings.
+
+| Subset | Variant | Preflight | Arrays | Finalizer | Rankings |
+|---|---|---|---|---|---|
+| `promoter_extended` | `primary` | 5783224 | 5783225, 5783226 | 5783227 | 5783228 |
+| `promoter_extended` | `gfp_adjusted` | 5783240 | 5783241, 5783242 | 5783243 | 5783244 |
+| `promoter_core` | `primary` | 5783245 | 5783246, 5783247 | 5783248 | 5783249 |
+| `promoter_core` | `gfp_adjusted` | 5783250 | 5783251, 5783252 | 5783253 | 5783254 |
+| `tss_window_promoter` | `primary` | 5783255 | 5783256, 5783257 | 5783258 | 5783259 |
+| `tss_window_promoter` | `gfp_adjusted` | 5783260 | 5783261, 5783262 | 5783263 | 5783264 |
+
+The two stopped H3K4me3 v1 pilots additionally carry a
+`NOT_FOR_INTERPRETATION.json` notice linking to their replacements. No pilot
+output was removed or promoted into v2. The submission TSV, preflight JSON and
+task completion records inside each run remain the operational source of truth.
 
 After completion, report TA and DN beside one another with frequency, support,
 uncertainty and matched reference definitions. Differences between subset
