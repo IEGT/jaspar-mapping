@@ -2,6 +2,11 @@
 
 ## Promoter Architecture And ML Query Surface
 
+For general TFBS filtering by regulatory elements or TSS windows, independent
+of TP73, read [`docs/regulatory_tfbs_subset.md`](docs/regulatory_tfbs_subset.md).
+Keep its independent overlap tags and explicit source-floor/selection coverage;
+do not confuse it with the strongest-per-band collaborator package below.
+
 For the bounded promoter-cofactor collaborator package, Glen's data subset,
 or its existing GENtle region-import handoff, read
 [`docs/promoter_collaborator_package.md`](docs/promoter_collaborator_package.md).

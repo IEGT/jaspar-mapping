@@ -184,6 +184,7 @@ check-r:
 	Rscript tests/test_analyze_bed_cutandrun.R
 
 check-duckdb: cutandrun_score_calibration pssm_scan_parquet
+	python3 tests/test_regulatory_tfbs.py
 	python3 tests/test_regulatory_annotation.py
 	bash tests/test_duckdb_contract.sh
 	bash tests/test_chr1_dense_duckdb.sh
