@@ -133,9 +133,9 @@ CREATE TABLE scan_file_inventory AS SELECT * FROM read_json_auto('{self.root}/in
     def write_json(self, path, obj):
         path.write_text(json.dumps(obj))
 
-    def sql(self, query, database=":memory:"):
+    def sql(self, query, database=":memory:", cwd=None):
         result = subprocess.run([DUCKDB, "-no-init", "-batch", "-bail", "-json", str(database)],
-                                input=query, text=True, capture_output=True)
+                                input=query, text=True, capture_output=True, cwd=cwd)
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout or "[]")
 
@@ -217,6 +217,15 @@ CREATE TABLE scan_file_inventory AS SELECT * FROM read_json_auto('{self.root}/in
         self.call("retry", "--max-rows", "1", success=False)
         self.call("retry", "--resume")
         self.assertEqual(self.rows("retry"), self.rows("direct"))
+
+    def test_legacy_relative_metadata_views(self):
+        for table in ("genome", "motif_metadata", "scan_file_inventory"):
+            self.sql(f"COPY {table} TO '{self.package}/{table}.parquet' (FORMAT PARQUET);"
+                     f"DROP TABLE {table};"
+                     f"CREATE VIEW {table} AS SELECT * FROM read_parquet('{table}.parquet');",
+                     self.database, cwd=self.package)
+        self.call("legacy", "--scratch-directory", self.root / "scratch")
+        self.assertEqual(len(self.rows("legacy")), 22)
 
     def test_corruption_and_unaudited_annotation_fail(self):
         with self.features.open("ab") as stream:

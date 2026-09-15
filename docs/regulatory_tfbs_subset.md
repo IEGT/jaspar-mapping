@@ -97,7 +97,9 @@ Make the tested source available through Git before running this command.
 Use a Slurm `requeue` allocation, for example 2 CPUs and 16 GB for a bounded
 panel. This Python/DuckDB CLI tool supports Linux and macOS (POSIX locks).
 The exporter defaults to two DuckDB threads, 1 GB memory and no disk
-spill. It reads only exact inventory paths. Whole-chromosome/all-motif counts
+spill. It reads only exact inventory paths and resolves legacy catalog metadata
+views from the source package directory, independently of the caller's directory.
+Whole-chromosome/all-motif counts
 are real payload work and must not run on the login node.
 
 From the allocation, with the installed DuckDB on `PATH`:
@@ -184,5 +186,6 @@ PSSM scan), two chromosomes, two artificial matrices and strand-aware TSS
 windows. It exercises real Parquet and the full exporter: abutment, overlap,
 shared promoters, both orientations, TSS-only and non-promoter hits, score
 floors, unknown coverage, caps, writer termination at the byte budget, empty
-selections, input immutability, verified scratch staging and restart-safe reuse.
+selections, input immutability, legacy relative catalog views, verified scratch
+staging and restart-safe reuse.
 No genome, JASPAR or experimental data download is required.

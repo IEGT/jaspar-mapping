@@ -57,7 +57,9 @@ def sql(args, query, output_watch=None):
                 "SET autoinstall_known_extensions=false; SET autoload_known_extensions=false;")
     process = subprocess.Popen([args.duckdb, "-no-init", "-batch", "-bail", "-json", ":memory:"],
                                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE, text=True)
+                               stderr=subprocess.PIPE, text=True,
+                               # Early scan catalogs contain relative metadata views.
+                               cwd=Path(args.package).resolve() if hasattr(args, "package") else None)
     deadline = time.monotonic() + args.timeout_seconds
     payload = settings + query
     try:
@@ -421,8 +423,10 @@ def main():
             raise QueryError("invalid score/resource/output limit")
         if args.motif and len(args.motif) != len(set(args.motif)):
             raise QueryError("duplicate requested motif")
-        if shutil.which(args.duckdb) is None:
+        executable = shutil.which(args.duckdb)
+        if executable is None:
             raise QueryError("DuckDB executable is unavailable")
+        args.duckdb = str(Path(executable).resolve())
         args.output = args.output.expanduser().resolve()
         execute(args)
         return 0
