@@ -48,6 +48,22 @@ def space(path, reserve):
         raise ValueError(f"free-space reserve reached: {path}")
 
 
+def source_provenance():
+    source = Path(__file__).resolve().parent
+    commit = subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
+    clean = subprocess.run(['git','-C',str(source),'diff','--quiet','HEAD']).returncode == 0
+    return {'source_commit':commit,'source_clean':clean,
+            'source_files':[export.record(source/name) for name in SOURCES]}
+
+
+def pin_source(args):
+    provenance = source_provenance()
+    if not provenance['source_clean']:
+        raise ValueError('source must be committed before production pinning')
+    save(args.output, provenance)
+    print(f'I: Source pinned to {provenance["source_commit"]}')
+
+
 def annotation_sql(args, gtf, features, genome, regions):
     q = export.sql_string
     definition = f"tss_upstream_{args.upstream}_downstream_{args.downstream}_v1"
@@ -108,6 +124,17 @@ def prepare(args):
             print("I: Reusing verified prepared run")
             return
         space(root, args.minimum_free_bytes)
+        # Compute nodes need no Git. The login node pins commit + file hashes;
+        # preparation verifies those hashes before any payload work.
+        if args.source_provenance:
+            source_info = export.read_json(args.source_provenance)
+            expected = {str(Path(__file__).resolve().with_name(n)) for n in SOURCES}
+            if {f['path'] for f in source_info['source_files']} != expected or not source_info['source_clean']:
+                raise ValueError('source provenance does not describe this clean checkout')
+            for entry in source_info['source_files']:
+                export.verify(entry)
+        else:
+            source_info = source_provenance()
         stage = Path(tempfile.mkdtemp(prefix=".prepare-", dir=root))
         annotation = stage / "annotation"
         annotation.mkdir()
@@ -128,6 +155,8 @@ def prepare(args):
             raise ValueError('full coordinate-audited regulatory annotation required')
         pinned = [export.record(package / 'manifest.json'), export.record(features_manifest),
                   export.record(args.gtf)]
+        if args.source_provenance:
+            pinned.append(export.record(args.source_provenance))
         for name in ('regulatory_feature.parquet', 'regulatory_feature_gene.parquet'):
             entries = [e for e in fm['files'] if e['path'] == name]
             if len(entries) != 1:
@@ -218,12 +247,8 @@ def prepare(args):
                 tasks.append({'index': len(tasks), 'chrom': region['chrom'], 'coverage': region['coverage'],
                               'motifs': [{'motif_id': m, 'source_rows': hit_counts[region['chrom'], m]}
                                          for m in motifs[offset:offset+args.batch_size]]})
-        source = Path(__file__).resolve().parent
-        commit = subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
-        clean = subprocess.run(['git','-C',str(source),'diff','--quiet','HEAD']).returncode == 0
         prepared = root / 'prepared'
-        plan = {'schema_version': 1, 'source_commit': commit, 'source_clean': clean,
-                'source_files': [export.record(source/name) for name in SOURCES], 'inputs': pinned,
+        plan = {'schema_version': 1, **source_info, 'inputs': pinned,
                 'package': str(package), 'features_source': str(args.features.resolve()), 'gtf_source': str(args.gtf.resolve()),
                 'database': str(prepared/'catalog.duckdb'), 'annotation_package': str(prepared/'annotation'),
                 'annotation_manifest_sha256': export.sha256(annotation/'manifest.json'),
@@ -413,6 +438,8 @@ def submit(args):
 def parser():
     p=argparse.ArgumentParser(description=__doc__)
     sub=p.add_subparsers(dest='command',required=True)
+    stamp=sub.add_parser('pin-source',help='Pin clean Git revision and source hashes on the login node')
+    stamp.add_argument('--output',type=Path,required=True,help='new source-provenance JSON used by compute preparation')
     for name, help_text in [('prepare','Build all physical TSS windows and immutable task plan (compute node)'),
                             ('run-task','Export one chromosome/motif batch with per-motif resume'),
                             ('finalize','Validate completeness and publish portable bundle'),
@@ -433,6 +460,7 @@ def parser():
             s.add_argument('--batch-size',type=int,default=128,help='motifs per chromosome job, with per-motif checkpoints (default 128)')
             s.add_argument('--minimum-free-bytes',type=int,default=50*1024**3,help='durable free-space reserve, not an export-size cap (default 50 GiB)')
             s.add_argument('--duckdb',default='duckdb',help='DuckDB CLI path recorded in the immutable plan')
+            s.add_argument('--source-provenance',type=Path,help='login-node pin-source output; avoids a Git dependency on compute nodes')
         if name=='run-task':
             s.add_argument('--task-index',type=int,help='exact plan task index; default SLURM_ARRAY_TASK_ID + offset')
             s.add_argument('--task-offset',type=int,default=0,help='offset for subsequent Slurm arrays')
@@ -446,6 +474,9 @@ def parser():
 def main():
     args=parser().parse_args()
     try:
+        if args.command=='pin-source':
+            pin_source(args)
+            return 0
         if args.threads<1 or (args.command=='prepare' and (args.upstream<0 or args.downstream<0 or args.batch_size<1 or args.minimum_free_bytes<0)):
             raise ValueError('invalid dimensions/resources')
         globals()[args.command.replace('-','_')](args)

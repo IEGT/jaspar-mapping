@@ -66,8 +66,18 @@ contigs outside the canonical source scan are not claimed as exported.
 ### Production Commands
 
 Use a fresh dedicated directory under `/data/sm718` and an immutable source
-checkout fetched through Git. Preparation parses the GTF and runs on a compute
-node. From a `requeue` allocation:
+checkout fetched through Git. On the login node, create the run directory and
+pin the clean source once:
+
+```bash
+RUNS=/data/sm718/jaspar_mapping_runs
+RUN="$RUNS/glen_genome_regulatory_tss700_300_v1"
+mkdir -p "$RUN"
+python3 "$SOURCE/scripts/manage_regulatory_tfbs.py" pin-source --output "$RUN/source_provenance.json"
+```
+
+Preparation parses the GTF and runs on a compute node. Compute nodes do not
+need Git; they verify the pinned source hashes instead. From a `requeue` allocation:
 
 ```bash
 RUNS=/data/sm718/jaspar_mapping_runs
@@ -77,7 +87,7 @@ python3 "$SOURCE/scripts/manage_regulatory_tfbs.py" prepare \
   --features "$RUNS/ensembl_grch38_tp73_regulatory_20260909_v1/features" \
   --gtf /data/sm718/resources/ensembl/113/gtf/homo_sapiens/Homo_sapiens.GRCh38.113.gtf.gz \
   --upstream 700 --downstream 300 --batch-size 128 --duckdb "$DUCKDB" \
-  --scratch-root /scratch/sm718
+  --scratch-root /scratch/sm718 --source-provenance "$RUN/source_provenance.json"
 ```
 
 After preparation and a real-data resource pilot, submit the frozen plan:

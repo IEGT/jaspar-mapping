@@ -308,14 +308,20 @@ CREATE TABLE sequence_region AS SELECT 'synthetic' AS genome_id,chrom,2000::BIGI
                        '1\ttest\ttranscript\t301\t650\t.\t+\t.\tgene_id "g2"; transcript_id "t2"; gene_name "TWO";\n'
                        '1\ttest\ttranscript\t201\t501\t.\t-\t.\tgene_id "g3"; transcript_id "t3"; gene_name "THREE";\n'
                        '2\ttest\ttranscript\t1501\t1800\t.\t+\t.\tgene_id "g4"; transcript_id "t4"; gene_name "FOUR";\n')
+        source_pin=self.root/'synthetic_source_pin.json'
+        self.write_json(source_pin,{'source_commit':'synthetic_fixture','source_clean':True,
+            'source_files':[record(ROOT/'scripts'/name) for name in
+             ('manage_regulatory_tfbs.py','export_regulatory_tfbs.py','build_regulatory_annotation.py','query_genome_scan.py')]})
         def command(action,*extra,success=True):
             p=subprocess.run([sys.executable,str(manager),action,'--run-root',str(run),
                               '--scratch-root',str(self.root/'scratch'),'--memory-limit','256MB',
-                              *map(str,extra)],text=True,capture_output=True)
+                              *map(str,extra)],text=True,capture_output=True,
+                             env=dict(os.environ,PATH='/no-git-or-other-tools'))
             self.assertEqual(p.returncode==0,success,p.stderr+p.stdout)
             return p
         options=['--package',self.package,'--features',self.reg/'features','--gtf',gtf,
-                 '--annotation-release','test_gtf','--minimum-free-bytes','0','--duckdb',DUCKDB,'--batch-size','2']
+                 '--annotation-release','test_gtf','--minimum-free-bytes','0','--duckdb',str(Path(shutil.which(DUCKDB)).resolve()),
+                 '--batch-size','2','--source-provenance',source_pin]
         command('prepare',*options)
         command('prepare',*options)
         command('prepare',*options,'--upstream','701',success=False)
