@@ -47,6 +47,8 @@ also contains the corresponding readable Boolean columns:
 is any bit. These are **annotation-based selection tags, not measured
 activity, protein binding, effect size or an ordered biological ranking**.
 Enhancers are not assigned a target gene by proximity.
+An absent optional promoter extension contributes no extension tag; its core
+is still considered. Missing extensions are never invented from core bounds.
 
 The default `--scope regulatory_or_tss` is a **union**, not an intersection.
 `--scope promoter_or_tss` retains the union of the promoter core, promoter

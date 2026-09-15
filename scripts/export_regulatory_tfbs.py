@@ -199,7 +199,8 @@ CREATE TEMP TABLE promoter AS SELECT * FROM read_parquet({sql_string(promoters)}
 SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM feature) OR NOT EXISTS(SELECT 1 FROM promoter)
  OR EXISTS(SELECT 1 FROM feature WHERE assembly IS DISTINCT FROM {sql_string(provenance['assembly'])}
    OR start IS NULL OR "end" IS NULL OR feature_type IS NULL OR start<0 OR "end"<=start OR (feature_type='promoter' AND
-     (core_start IS NULL OR core_end IS NULL OR extended_start IS NULL OR extended_end IS NULL
+     (core_start IS NULL OR core_end IS NULL
+      OR (extended_start IS NULL)<>(extended_end IS NULL)
       OR extended_start<0 OR extended_start>core_start OR core_start>=core_end OR core_end>extended_end)))
  OR EXISTS(SELECT 1 FROM promoter WHERE CAST(chrom AS VARCHAR) IS DISTINCT FROM {chrom}
    OR genome_id IS DISTINCT FROM {sql_string(provenance['genome_id'])}
@@ -212,7 +213,8 @@ SELECT start,"end",CASE feature_type WHEN 'enhancer' THEN 4
  WHEN 'open_chromatin_region' THEN 8 WHEN 'CTCF_binding_site' THEN 16
  WHEN 'EMAR' THEN 32 ELSE 64 END AS tag_mask FROM feature WHERE feature_type<>'promoter'
 UNION ALL SELECT core_start,core_end,1 FROM feature WHERE feature_type='promoter'
-UNION ALL SELECT extended_start,extended_end,2 FROM feature WHERE feature_type='promoter'
+UNION ALL SELECT extended_start,extended_end,2 FROM feature
+ WHERE feature_type='promoter' AND extended_start IS NOT NULL
 UNION ALL SELECT promoter_start,promoter_end,128 FROM promoter;
 CREATE TEMP TABLE regions AS
 WITH preceding AS (SELECT *,max("end") OVER(PARTITION BY tag_mask ORDER BY start,"end"

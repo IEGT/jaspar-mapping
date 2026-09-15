@@ -227,6 +227,22 @@ CREATE TABLE scan_file_inventory AS SELECT * FROM read_json_auto('{self.root}/in
         self.call("legacy", "--scratch-directory", self.root / "scratch")
         self.assertEqual(len(self.rows("legacy")), 22)
 
+    def test_missing_optional_promoter_extensions_keep_core_only(self):
+        replacement = self.root / "without_extensions.parquet"
+        self.sql(f"COPY (SELECT * REPLACE(NULL::BIGINT AS extended_start,"
+                 f" NULL::BIGINT AS extended_end) FROM read_parquet('{self.features}'))"
+                 f" TO '{replacement}' (FORMAT PARQUET);")
+        replacement.replace(self.features)
+        path = self.reg / "features/manifest.json"
+        manifest = json.loads(path.read_text())
+        manifest["files"] = [dict(record(self.features), path="regulatory_feature.parquet")]
+        self.write_json(path, manifest)
+        self.call("core_only")
+        rows = self.rows("core_only")
+        self.assertTrue(any(r["overlaps_promoter_core"] for r in rows))
+        self.assertFalse(any(r["overlaps_promoter_extended"] for r in rows))
+        self.assertNotIn(89, {r["start"] for r in rows})
+
     def test_corruption_and_unaudited_annotation_fail(self):
         with self.features.open("ab") as stream:
             stream.write(b"changed")
