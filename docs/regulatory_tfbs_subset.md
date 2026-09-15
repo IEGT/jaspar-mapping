@@ -15,11 +15,10 @@ positions. The new route carries individually retained hits with geometric
 tags, without inventing TP73 association statistics for them.
 
 Implementation is locally tested and the eight-motif chromosome-1 pilot below
-has completed on Haumea. No genome-wide export has been submitted by this
-change, and the full regulatory subset's disk size remains unmeasured.
-Broader production should use bounded exports and counting on Haumea, then a
-deliberately sized collaborator panel, not a laptop download of the whole
-permissive atlas.
+has completed on Haumea. The subsequent all-motif, genome-wide **intersection**
+export has been submitted, as recorded below; its final size is not yet known.
+The earlier union pilot is a separate package and must not be substituted for
+this new delivery.
 
 ## Genome-Wide Intersection For Glen
 
@@ -153,6 +152,47 @@ GENtle must respect this package's declared regulatory/TSS intersection and
 original motif floors, not interpret absence outside that subset as absence of
 a genomic sequence match. The original pilot and its checksum below remain
 unchanged.
+
+### Haumea Execution: 2026-09-15
+
+Production source is immutable commit
+`0cfb8f14ed29b9d8dcc4633f5771591fe415453f`, fetched from GitHub. The dedicated
+run directory is:
+
+```text
+/data/sm718/jaspar_mapping_runs/glen_genome_regulatory_tss700_300_20260915_v1
+```
+
+Setup/pilot job **5795221** completed `0:0` in **2:03**, with Slurm maximum RSS
+2,829,636 KiB under its 24 GB allocation. It produced **320,404 physical TSS
+windows** across all 25 scanned chromosomes. X has 9,420 windows and 16,138
+regulatory features; Y has 1,568 windows and 676 regulatory features. MT has
+37 TSS windows but zero regulatory features, so its intersection is explicitly
+empty. The earlier setup attempt 5795219 stopped at source-version capture
+because compute nodes lack Git; no motif exports were produced by that attempt.
+Its logs and staging remain available. Source pinning was moved to the login
+node and the full synthetic pipeline tested with Git absent from `PATH`.
+
+Four real-data pilots verified the final intersection geometry and source-floor
+configuration before production submission:
+
+| Chromosome | Matrix | Retained records | Parquet bytes | Source floor |
+|---|---|---:|---:|---:|
+| 1 | PATZ1 MA1961.2 | 154,173 | 1,073,515 | -1 |
+| 2 | MA0013.1 (dense stress test) | 1,084,334 | 4,760,685 | -1 |
+| Y | POU2F2 MA0507.3 | 26 | 5,791 | -1 |
+| 1 | TP73 MA0861.2 | 34,185 | 360,872 | -5 |
+
+The dense input contained 153,954,062 records. It was processed in 49 disjoint
+5 Mb start-owned chunks before combining the selected records. These pilots
+are not a statistical subsample from which to infer the final archive size.
+
+The full export was submitted as array **5795222**, tasks `0-524`, with a
+20-task concurrency limit, two CPUs and 24 GB per allocation, 16 GB DuckDB
+memory and a four-hour job limit. Finalizer **5795223** has an `afterok`
+dependency on the complete array. This record documents **submission**, not
+completed genome-wide output. Authoritative completion will be the published
+`final/manifest.json`, with every motif/chromosome accounted for.
 
 ## Tags And Coordinates
 
