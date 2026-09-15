@@ -6,6 +6,10 @@ For general TFBS filtering by regulatory elements or TSS windows, independent
 of TP73, read [`docs/regulatory_tfbs_subset.md`](docs/regulatory_tfbs_subset.md).
 Keep its independent overlap tags and explicit source-floor/selection coverage;
 do not confuse it with the strongest-per-band collaborator package below.
+Glen's genome-wide export uses `regulatory_and_tss`, strand-aware 700/300 bp
+TSS offsets, and original per-motif source floors, not the pilot's union or
+an empirical operating threshold. `manage_regulatory_tfbs.py` owns its shared
+GTF dimensions, requeue checkpoints and exact-file delivery index.
 
 For the bounded promoter-cofactor collaborator package, Glen's data subset,
 or its existing GENtle region-import handoff, read

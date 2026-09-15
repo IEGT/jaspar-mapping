@@ -21,6 +21,129 @@ Broader production should use bounded exports and counting on Haumea, then a
 deliberately sized collaborator panel, not a laptop download of the whole
 permissive atlas.
 
+## Genome-Wide Intersection For Glen
+
+The subsequent requested export changes **both** the geometry and the scope
+of the eight-motif pilot. It is not an enlargement of that pilot's union:
+
+- All 2,633 scanned JASPAR matrices, regardless of source species; no TP73
+  anchor requirement, cofactor ranking, strongest-hit selection or CUT&RUN
+  selection.
+- Every canonical chromosome in the source scan: 1-22, X, Y and MT.
+- All physical TSSs from the pinned Ensembl 113 GTF, including alternative
+  transcripts and shared gene starts. No representative-transcript filter.
+- Strand-aware **700 bp upstream / 300 bp downstream** TSS windows.
+- A retained motif interval must positively overlap the **intersection** of
+  one such window and an audited Ensembl regulatory extent. A motif bridging
+  two merely abutting/disjoint annotation intervals does not qualify.
+- Retain every stored score: TP73 MA0861.2 down to -5, other matrices down to
+  -1 in the permissive v3 atlas. No informative/density cutoff is imposed.
+
+As in the existing promoter definition, offsets include the TSS base itself.
+For zero-based TSS base `t`, the half-open windows are `[t-700,t+301)` on `+`
+and `[t-300,t+701)` on `-`: 1,001 bases before clipping to chromosome bounds.
+The minus-strand TSS is GTF transcript end minus one, not the exclusive BED
+end. Motif intervals are retained whole, not clipped; membership uses positive
+overlap rather than full containment. Regulatory extents use annotated
+extended promoters where available and the native intervals of other feature
+types, retaining separate core/extension tags. This remains a reference
+annotation-based selection, not proof of regulatory activity in a cell line.
+
+`manage_regulatory_tfbs.py prepare` builds a separate, whole-genome annotation
+package from the original GTF and the **complete** audited regulatory feature
+package. It does not depend on the autosome-only TP73 membership run. The
+annotation contains physical TSS/window dimensions and a separate
+`transcript_tss` bridge with gene IDs/names. Shared promoters therefore never
+multiply motif-hit records. All source SHA-256 digests, chromosome lengths,
+annotation releases and the resolved window definition are pinned.
+
+The regulatory source has features on X and Y, but none on MT. The plan
+records MT as `known_empty_intersection` for every matrix, rather than silently
+omitting that chromosome or pretending mitochondrial sequence was not scanned.
+An annotated chromosome without GTF TSS coverage fails preparation. GTF
+contigs outside the canonical source scan are not claimed as exported.
+
+### Production Commands
+
+Use a fresh dedicated directory under `/data/sm718` and an immutable source
+checkout fetched through Git. Preparation parses the GTF and runs on a compute
+node. From a `requeue` allocation:
+
+```bash
+RUNS=/data/sm718/jaspar_mapping_runs
+RUN="$RUNS/glen_genome_regulatory_tss700_300_v1"
+python3 "$SOURCE/scripts/manage_regulatory_tfbs.py" prepare \
+  --run-root "$RUN" --package "$RUNS/jaspar2026_grch38_sparse_v3/package" \
+  --features "$RUNS/ensembl_grch38_tp73_regulatory_20260909_v1/features" \
+  --gtf /data/sm718/resources/ensembl/113/gtf/homo_sapiens/Homo_sapiens.GRCh38.113.gtf.gz \
+  --upstream 700 --downstream 300 --batch-size 128 --duckdb "$DUCKDB" \
+  --scratch-root /scratch/sm718
+```
+
+After preparation and a real-data resource pilot, submit the frozen plan:
+
+```bash
+python3 "$SOURCE/scripts/manage_regulatory_tfbs.py" submit \
+  --run-root "$RUN" --concurrent 20 --slurm-memory 24G \
+  --memory-limit 16GB --slurm-time 04:00:00
+```
+
+With 25 chromosomes and 2,633 motifs this creates 525 chromosome/motif-batch
+tasks, each with at most 128 matrices, plus an `afterok` finalizer. The source
+checkout must be clean. Job IDs are recorded immediately in
+`submissions.jsonl`; a repeated `submit` refuses to duplicate jobs. Preparation
+and workers reuse verified completed state after preemption, with new private
+attempt/scratch directories for incomplete work. No source or failed attempt
+is deleted.
+
+Each motif's two exact input files are copied to node-local scratch and
+checksum-verified. The original atlas is unchanged. Inputs over ten million
+orientation records are queried in **5 Mb start-owned tiles**, so a hit
+crossing a tile boundary occurs exactly once. Only the filtered tile results
+are combined into one sorted Parquet per chromosome/motif. No intermediate
+BED/TSV is created. Completed motifs are independently reusable on requeue.
+Haumea owns post-job scratch cleanup.
+
+There is **no row or delivery-byte cap** in this production run:
+`--max-rows 0 --max-output-bytes 0 --source-floor`. The 50 GiB free-space
+reserve, DuckDB memory ceiling and bounded input working sets remain safety
+constraints. Workers stop rather than publish truncated data when a safety
+constraint fails. Full transfer to a laptop waits for measured output sizes
+and sufficient destination capacity.
+
+### Delivery Layout
+
+The finalizer verifies every expected task and motif, then publishes `final/`:
+
+- `hits/chrom=<chrom>/<motif>.parquet`: every qualifying orientation record.
+- `file_inventory.json` and `regulatory_tfbs.duckdb`: exact relative file
+  paths, counts, bytes, SHA-256 digests, original scan inventory, genome and
+  motif metadata. Known-empty chromosomes have explicit zero rows, no payload.
+- `annotation/`: shared physical TSS/windows, transcript/gene ownership and
+  original regulatory dimensions/provenance.
+- `schema.sql` and `manifest.json`: coordinate, selection and coverage
+  contracts. Package kind is `genome_regulatory_tfbs_subset`.
+
+Final hit files are hardlinks to completed exports within the same `/data`
+filesystem, avoiding a second payload-sized copy. They become ordinary files
+when transferred. The package index does not bind a genome-wide wildcard:
+select exact paths from `file_inventory`, then pass them to its `motif_hits`
+table macro. For example, from the final package directory:
+
+```sql
+-- Open regulatory_tfbs.duckdb read-only for metadata or file-based queries.
+SELECT path, rows, bytes FROM file_inventory
+WHERE chrom='1' AND motif_id='MA1961.2';
+SELECT * FROM motif_hits(['hits/chrom=1/MA1961.2.parquet'])
+WHERE start < 1790000 AND "end" > 1770000 AND score >= 0;
+```
+
+The full atlas of unrestricted genomic matches is still a different provider.
+GENtle must respect this package's declared regulatory/TSS intersection and
+original motif floors, not interpret absence outside that subset as absence of
+a genomic sequence match. The original pilot and its checksum below remain
+unchanged.
+
 ## Tags And Coordinates
 
 Each hit keeps its full BED 0-based half-open interval, original fractional
@@ -51,11 +174,14 @@ Enhancers are not assigned a target gene by proximity.
 An absent optional promoter extension contributes no extension tag; its core
 is still considered. Missing extensions are never invented from core bounds.
 
-The default `--scope regulatory_or_tss` is a **union**, not an intersection.
+The standalone default `--scope regulatory_or_tss` is a **union**, not an intersection.
 `--scope promoter_or_tss` retains the union of the promoter core, promoter
 extension and TSS window. Any individual tag is also a selectable scope,
 as is `--scope regulatory` without the TSS-only sites. All tags remain in
 the output, even when selection uses only one of them.
+`--scope regulatory_and_tss` additionally requires a positive shared interval
+and exports `overlaps_regulatory_tss_intersection`. New individual exports use
+schema version 2; the older pilot's schema-1 packages remain unchanged.
 
 The current completed regulatory run supplies whole-chromosome TSS windows
 under `tss_upstream_2000_downstream_500_v1` (Ensembl GTF 113). Their already
@@ -87,11 +213,13 @@ Thus the density-limited atlas cannot silently replace the permissive source
 and lose abundant factors. TP73 alone can be requested at `-5`; other matrices
 retained only down to `-1` cannot support that request.
 
-One invocation selects one exact chromosome and an explicit motif panel
+One standalone invocation selects one exact chromosome and an explicit motif panel
 (repeat `--motif`) or `--all-motifs`. Supply BED `--start`/`--end`, or explicitly
-request `--whole-chromosome`. The present annotation plan covers autosomes
+request `--whole-chromosome`. The **legacy TP73** annotation plan covers autosomes
 1-22. X/Y/MT and chromosome aliases are rejected rather than becoming false
-negative annotations. Empty valid subsets publish a zero-row Parquet plus
+negative annotations when using `--regulatory-run`. The independent
+`--annotation-package` production path above covers all source chromosomes.
+Empty valid subsets publish a zero-row Parquet plus
 their scope manifest; absent motif/chromosome coverage is an error.
 
 ## Small Haumea Export

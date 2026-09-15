@@ -31,7 +31,7 @@ TAGS = {
     "open_chromatin": 8, "ctcf": 16, "emar": 32,
     "other_regulatory": 64, "tss_window": 128,
 }
-SCOPES = {"regulatory_or_tss": 255, "regulatory": 127,
+SCOPES = {"regulatory_or_tss": 255, "regulatory_and_tss": 255, "regulatory": 127,
           "promoter_or_tss": 131, **TAGS}
 
 
@@ -72,7 +72,7 @@ def sql(args, query, output_watch=None):
                 if time.monotonic() >= deadline:
                     raise QueryError("DuckDB wall-time limit exceeded")
                 if output_watch is not None:
-                    if output_watch.exists() and output_watch.stat().st_size > args.max_output_bytes:
+                    if args.max_output_bytes and output_watch.exists() and output_watch.stat().st_size > args.max_output_bytes:
                         raise QueryError(f"output byte budget exceeded; stopped writer at {output_watch}")
                     if shutil.disk_usage(output_watch.parent).free < args.minimum_free_bytes:
                         raise QueryError("free-space reserve reached; stopped writer before publication")
@@ -85,17 +85,43 @@ def sql(args, query, output_watch=None):
             process.communicate()
 
 
-def inputs(args):
-    package, database = package_paths(args)
-    manifest_path = package / "manifest.json"
-    scan = read_json(manifest_path)
-    if scan.get("state") != "complete" or scan.get("schema_version") not in (1, 2):
-        raise QueryError("a completed genome-scan package is required")
-    attach = f"ATTACH {sql_string(database)} AS scan (READ_ONLY);"
-    genomes = sql(args, attach + "SELECT genome_id,assembly_name FROM scan.genome;")
-    if len(genomes) != 1 or genomes[0]["genome_id"] != scan.get("genome_id"):
-        raise QueryError("scan genome identity is not unique/consistent")
+def annotation_inputs(args, scan, assembly):
+    if args.annotation_package:
+        root = args.annotation_package.resolve()
+        manifest_path = root / "manifest.json"
+        manifest = read_json(manifest_path)
+        audit = manifest.get("coordinate_audit") or {}
+        if (manifest.get("kind") != "regulatory_tfbs_annotation" or manifest.get("state") != "complete"
+                or manifest.get("genome_id") != scan["genome_id"] or manifest.get("assembly") != assembly
+                or audit.get("status") != "passed" or audit.get("assembly") != assembly
+                or audit.get("gff_sha256") != manifest.get("regulatory_gff_sha256")):
+            raise QueryError("incompatible complete regulatory/TSS annotation package")
+        tasks = [t for t in manifest["chromosomes"] if t["chrom"] == args.chrom]
+        if len(tasks) != 1:
+            raise QueryError("chromosome lacks explicit regulatory/TSS annotation coverage")
+        task = tasks[0]
+        def dimension(key):
+            entry = task[key]
+            path = (root / entry["path"]).resolve()
+            if not path.is_relative_to(root):
+                raise QueryError("unsafe annotation path")
+            item = dict(entry, path=str(path))
+            return verify(item), item
+        features, feature_record = dimension("features")
+        promoters, promoter_record = dimension("promoters")
+        return features, promoters, {
+            "annotation_manifest": record(manifest_path), "regulatory_features": feature_record,
+            "tss_promoters": promoter_record, "coordinate_audit": audit,
+            "regulatory_release": manifest["regulatory_release"],
+            "annotation_release": manifest["annotation_release"],
+            "promoter_definition_id": manifest["promoter_definition_id"],
+            "chromosome_length": task["length"], "annotation_coverage": task["coverage"],
+            "annotation_counts": {"features": task["feature_count"], "promoters": task["promoter_count"]},
+        }
+    return legacy_annotation_inputs(args, scan, assembly)
 
+
+def legacy_annotation_inputs(args, scan, assembly):
     root = args.regulatory_run.resolve()
     plan_path, final_path = root / "plan.json", root / "final/manifest.json"
     plan, final = read_json(plan_path), read_json(final_path)
@@ -103,7 +129,7 @@ def inputs(args):
             or final.get("state") != "complete"
             or final.get("production_plan_sha256") != sha256(plan_path)
             or plan.get("genome_id") != scan["genome_id"]
-            or final.get("assembly") != genomes[0]["assembly_name"]
+            or final.get("assembly") != assembly
             or final.get("annotation_release") != plan.get("annotation_release")
             or final.get("promoter_definition_id") != plan.get("promoter_definition_id")):
         raise QueryError("regulatory plan/completion/genome identity mismatch")
@@ -129,6 +155,27 @@ def inputs(args):
         raise QueryError("regulatory feature inventory is not unique")
     feature_record = dict(feature_entries[0], path=str(root / "features/regulatory_feature.parquet"))
     feature_path = verify(feature_record)
+    return feature_path, promoters, {
+        "regulatory_plan": record(plan_path), "regulatory_completion": record(final_path),
+        "regulatory_features_manifest": record(features_manifest_path),
+        "regulatory_features": feature_record, "tss_promoters": tasks[0]["promoters"],
+        "regulatory_release": features["regulatory_release"],
+        "annotation_release": plan["annotation_release"],
+        "promoter_definition_id": plan["promoter_definition_id"], "coordinate_audit": audit,
+    }
+
+
+def inputs(args):
+    package, database = package_paths(args)
+    manifest_path = package / "manifest.json"
+    scan = read_json(manifest_path)
+    if scan.get("state") != "complete" or scan.get("schema_version") not in (1, 2):
+        raise QueryError("a completed genome-scan package is required")
+    attach = f"ATTACH {sql_string(database)} AS scan (READ_ONLY);"
+    genomes = sql(args, attach + "SELECT genome_id,assembly_name FROM scan.genome;")
+    if len(genomes) != 1 or genomes[0]["genome_id"] != scan.get("genome_id"):
+        raise QueryError("scan genome identity is not unique/consistent")
+    feature_path, promoters, annotation = annotation_inputs(args, scan, genomes[0]["assembly_name"])
 
     motif_filter = "" if args.all_motifs else f"AND i.motif_id IN ({','.join(sql_string(m) for m in args.motif)})"
     inventory = sql(args, attach + f"""
@@ -159,7 +206,7 @@ ORDER BY i.motif_id,i.strand;
                 or row["minimum_pwm_relative_score"] is not None
                 or row["maximum_pwm_relative_score"] is not None
                 or not math.isfinite(float(row["minimum_score"]))
-                or float(row["minimum_score"]) > args.minimum_score):
+                or (not args.source_floor and float(row["minimum_score"]) > args.minimum_score)):
             raise QueryError("scan identity/filter floor cannot cover the requested score threshold")
         path = (package / "task_data" / f"task_id={row['task_id']}"
                 / row["output_relative_path"]).resolve()
@@ -170,25 +217,33 @@ ORDER BY i.motif_id,i.strand;
         raise QueryError("both orientations are required for every requested motif")
     provenance = {
         "scan_manifest": record(manifest_path), "scan_run_id": scan["run_id"],
-        "genome_id": scan["genome_id"], "assembly": final["assembly"],
+        "genome_id": scan["genome_id"], "assembly": genomes[0]["assembly_name"],
         "motif_set_id": scan["motif_set_id"],
-        "regulatory_plan": record(plan_path), "regulatory_completion": record(final_path),
-        "regulatory_features_manifest": record(features_manifest_path),
-        "regulatory_features": feature_record, "tss_promoters": tasks[0]["promoters"],
-        "regulatory_release": features["regulatory_release"],
-        "annotation_release": plan["annotation_release"],
-        "promoter_definition_id": plan["promoter_definition_id"],
         "scan_payload_validation": "exact_inventory_sizes; recorded SHA256, not payload rehash",
-        "coordinate_audit": audit,
+        **annotation,
     }
     return database, feature_path, promoters, paths, inventory, provenance
 
 
-def query_sql(args, database, features, promoters, paths, provenance):
+def query_sql(args, database, features, promoters, paths, provenance, owned_start=None):
     chrom = sql_string(args.chrom)
     region = (f'AND h.start < {args.end} AND h."end" > {args.start}'
               if args.start is not None else "")
     scope = SCOPES[args.scope]
+    empty_guard = ("FALSE" if args.annotation_package else
+                   "NOT EXISTS(SELECT 1 FROM feature) OR NOT EXISTS(SELECT 1 FROM promoter)")
+    score = "TRUE" if args.source_floor else f"h.score>={args.minimum_score:.17g}"
+    owned = (f"AND h.start>={owned_start[0]} AND h.start<{owned_start[1]}"
+             if owned_start else "")
+    selection = ("overlaps_regulatory_tss_intersection" if args.scope == "regulatory_and_tss"
+                 else f"(regulation_tags & {scope})<>0")
+    prefilter = ("AND EXISTS(SELECT 1 FROM regulatory_tss_intersection g "
+                 'WHERE h.start<g."end" AND h."end">g.start)'
+                 if args.scope == "regulatory_and_tss" else "")
+    counts = provenance.get("annotation_counts")
+    if counts:
+        empty_guard = (f"(SELECT count(*) FROM feature)<>{counts['features']} OR "
+                       f"(SELECT count(*) FROM promoter)<>{counts['promoters']}")
     # Union each class before joining, so redundant transcript/promoter owners
     # do not inflate work. A hit spanning several classes receives their bit-OR.
     return f"""
@@ -196,7 +251,7 @@ ATTACH {sql_string(database)} AS scan (READ_ONLY);
 CREATE TEMP TABLE feature AS SELECT * FROM read_parquet({sql_string(features)}, hive_partitioning=false)
 WHERE CAST(chrom AS VARCHAR)={chrom};
 CREATE TEMP TABLE promoter AS SELECT * FROM read_parquet({sql_string(promoters)}, hive_partitioning=false);
-SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM feature) OR NOT EXISTS(SELECT 1 FROM promoter)
+SELECT CASE WHEN {empty_guard}
  OR EXISTS(SELECT 1 FROM feature WHERE assembly IS DISTINCT FROM {sql_string(provenance['assembly'])}
    OR start IS NULL OR "end" IS NULL OR feature_type IS NULL OR start<0 OR "end"<=start OR (feature_type='promoter' AND
      (core_start IS NULL OR core_end IS NULL
@@ -223,6 +278,11 @@ numbered AS (SELECT *,sum(CASE WHEN previous_end IS NULL OR start>previous_end T
  OVER(PARTITION BY tag_mask ORDER BY start,"end" ROWS UNBOUNDED PRECEDING) AS island FROM preceding)
 SELECT min(start)::BIGINT AS start,max("end")::BIGINT AS "end",tag_mask
 FROM numbered GROUP BY tag_mask,island;
+CREATE TEMP TABLE regulatory_tss_intersection AS
+SELECT DISTINCT greatest(r.start,t.start)::BIGINT AS start,
+ least(r."end",t."end")::BIGINT AS "end"
+FROM regions r JOIN regions t ON r.start<t."end" AND r."end">t.start
+WHERE r.tag_mask<128 AND t.tag_mask=128;
 CREATE TEMP VIEW tagged_hits AS
 WITH hits AS (
  SELECT h.genome_id,h.motif_set_id,CAST(h.chrom AS VARCHAR) AS chrom,h.start,h."end",h.motif_id,
@@ -231,16 +291,18 @@ WITH hits AS (
  h.background_model_id,h.pseudocount_scheme,CAST(h.minimum_score AS DOUBLE) AS source_minimum_score,
  h.n_policy FROM read_parquet({sql_list(paths)}, hive_partitioning=true) h
  JOIN scan.motif_metadata m USING(motif_set_id,motif_id)
- WHERE CAST(h.chrom AS VARCHAR)={chrom} AND h.score>={args.minimum_score:.17g} {region}
+ WHERE CAST(h.chrom AS VARCHAR)={chrom} AND {score} {region} {owned} {prefilter}
 ), tagged AS (
  SELECT h.*,coalesce((SELECT bit_or(r.tag_mask) FROM regions r
-   WHERE h.start<r."end" AND h."end">r.start),0)::USMALLINT AS regulation_tags
+   WHERE h.start<r."end" AND h."end">r.start),0)::USMALLINT AS regulation_tags,
+ EXISTS(SELECT 1 FROM regulatory_tss_intersection r
+   WHERE h.start<r."end" AND h."end">r.start) AS overlaps_regulatory_tss_intersection
  FROM hits h
 )
 SELECT *,{','.join(f'(regulation_tags & {bit})<>0 AS overlaps_{name}' for name, bit in TAGS.items())},
  (regulation_tags & 127)<>0 AS overlaps_regulatory,
  regulation_tags<>0 AS regulation_candidate
-FROM tagged WHERE (regulation_tags & {scope})<>0;
+FROM tagged WHERE {selection};
 """
 
 
@@ -289,15 +351,17 @@ def reuse(args, data):
     manifest = read_json(args.output / "manifest.json")
     expected = {
         "kind": "regulatory_tfbs_counts" if args.count_only else "regulatory_tfbs_subset",
-        "state": "complete", "scope": args.scope, "minimum_score": args.minimum_score,
+        "state": "complete", "scope": args.scope,
+        "minimum_score": None if args.source_floor else args.minimum_score,
+        "score_selection": "source_retention" if args.source_floor else "explicit_threshold",
         "chromosomes": [args.chrom], "region": {"start": args.start, "end": args.end},
         "motif_ids": sorted({r["motif_id"] for r in data[4]}),
         "inputs": data[5], "source_inventory": data[4],
     }
     if (any(manifest.get(k) != v for k, v in expected.items())
             or manifest.get("builder", {}).get("sha256") != sha256(Path(__file__))
-            or manifest.get("rows", args.max_rows + 1) > args.max_rows
-            or manifest.get("parquet_bytes", args.max_output_bytes + 1) > args.max_output_bytes):
+            or (args.max_rows and manifest.get("rows", args.max_rows + 1) > args.max_rows)
+            or (args.max_output_bytes and manifest.get("parquet_bytes", args.max_output_bytes + 1) > args.max_output_bytes)):
         raise QueryError("existing export does not match requested scope, inputs, builder or caps")
     for entry in manifest["files"]:
         path = (args.output / entry["path"]).resolve()
@@ -328,41 +392,73 @@ def export_new(args, data):
         raise QueryError("insufficient free space for the output budget plus reserve")
     staging = Path(tempfile.mkdtemp(prefix=f".{args.output.name}.attempt-", dir=args.output.parent))
     print(f"I: {len(inventory)} exact input files; output attempt {staging}", file=sys.stderr)
-    base = query_sql(args, database, features, promoters, paths, provenance)
     destination = staging / ("counts.parquet" if args.count_only else "motif_hits.parquet")
     selection = ("SELECT motif_id,motif_name,regulation_tags,count(*) AS orientation_records,"
                  'count(DISTINCT (start,"end")) AS physical_loci '
                  "FROM tagged_hits GROUP BY motif_id,motif_name,regulation_tags"
                  if args.count_only else
                  'SELECT * FROM tagged_hits ORDER BY start,"end",motif_id,strand')
-    query = base + f"\nCOPY ({selection} LIMIT {args.max_rows + 1}) TO {sql_string(destination)} " \
-                   "(FORMAT PARQUET, COMPRESSION ZSTD);"
+    limit = f" LIMIT {args.max_rows + 1}" if args.max_rows else ""
+    owned_ranges = [None]
+    if args.scan_chunk_bp:
+        if not args.scratch_directory or args.count_only:
+            raise QueryError("chunked export requires scratch and hit output (not --count-only)")
+        length = provenance.get("chromosome_length")
+        if length is None:
+            result = sql(args, f"ATTACH {sql_string(database)} AS scan (READ_ONLY);"
+                         f"SELECT length FROM scan.sequence_region WHERE chrom={sql_string(args.chrom)};")
+            if len(result) != 1:
+                raise QueryError("unique chromosome length required for chunked export")
+            length = result[0]["length"]
+        owned_ranges = [(start, min(start + args.scan_chunk_bp, length))
+                        for start in range(0, length, args.scan_chunk_bp)]
+    chunks = Path(tempfile.mkdtemp(prefix="regulatory-chunks-", dir=args.scratch_directory)) if args.scan_chunk_bp else staging
+    statements, parts = [], []
+    for i, owned in enumerate(owned_ranges):
+        target = chunks / f"part-{i:05}.parquet" if owned else destination
+        base = query_sql(args, database, features, promoters, paths, provenance, owned)
+        query = base + f"\nCOPY ({selection}{limit}) TO {sql_string(target)} (FORMAT PARQUET, COMPRESSION ZSTD);"
+        statements.append(query)
+        (staging / "query.sql").write_text("\n-- Separate DuckDB invocation follows.\n".join(statements), encoding="utf-8")
+        print(f"I: interval_chunk={i+1}/{len(owned_ranges)}", file=sys.stderr, flush=True)
+        sql(args, query, output_watch=target)
+        parts.append(str(target))
+    if args.scan_chunk_bp:
+        # Start-owned tiles are disjoint even when a motif spans a tile boundary.
+        # Only selected hits, not the genome-wide inputs, enter this final sort.
+        query = (f"COPY (SELECT * FROM read_parquet({sql_list(parts)},hive_partitioning=false) "
+                 f'ORDER BY start,"end",motif_id,strand{limit}) TO {sql_string(destination)} '
+                 "(FORMAT PARQUET, COMPRESSION ZSTD);")
+        statements.append(query)
+        sql(args, query, output_watch=destination)
     # Save the exact query for audit/replay; consumers need not execute it.
-    (staging / "query.sql").write_text(query, encoding="utf-8")
-    sql(args, query, output_watch=destination)
+    (staging / "query.sql").write_text("\n-- Separate DuckDB invocation follows.\n".join(statements), encoding="utf-8")
     stats = sql(args, f"SELECT count(*) AS rows FROM read_parquet({sql_string(destination)});")[0]
-    if stats["rows"] > args.max_rows:
+    if args.max_rows and stats["rows"] > args.max_rows:
         raise QueryError(f"row limit exceeded ({args.max_rows}); narrow selection or explicitly raise limit; {staging}")
     file_info = record(destination)
-    if file_info["bytes"] > args.max_output_bytes:
+    if args.max_output_bytes and file_info["bytes"] > args.max_output_bytes:
         raise QueryError(f"byte limit exceeded; unpublished attempt preserved at {staging}")
     # Small annotations can be rehashed cheaply; never reread TB-scale payloads.
-    for key in ("scan_manifest", "regulatory_plan", "regulatory_completion",
-                "regulatory_features_manifest", "regulatory_features", "tss_promoters"):
-        verify(provenance[key])
+    for value in provenance.values():
+        if isinstance(value, dict) and {"path", "bytes", "sha256"} <= value.keys():
+            verify(value)
     (staging / "schema.sql").write_text(
         f"-- Open from this package directory; coordinates are BED half-open.\n"
         f"CREATE OR REPLACE VIEW {'regulatory_tfbs_counts' if args.count_only else 'regulatory_tfbs'} AS "
         f"SELECT * FROM read_parquet('{destination.name}', hive_partitioning=false);\n",
         encoding="utf-8")
     manifest = {
-        "schema_version": 1, "kind": "regulatory_tfbs_counts" if args.count_only else "regulatory_tfbs_subset",
+        "schema_version": 2, "kind": "regulatory_tfbs_counts" if args.count_only else "regulatory_tfbs_subset",
         "state": "complete", "complete_genome_scan": False,
         "complete_for_requested_scope_at_threshold": True,
         "requires_tp73": False, "coordinate_mode": "bed_0based_half_open",
         "scope": args.scope, "scope_mask": SCOPES[args.scope], "tag_bits": TAGS,
         "chromosomes": [args.chrom], "motif_ids": sorted({r["motif_id"] for r in inventory}),
-        "region": {"start": args.start, "end": args.end}, "minimum_score": args.minimum_score,
+        "region": {"start": args.start, "end": args.end},
+        "minimum_score": None if args.source_floor else args.minimum_score,
+        "score_selection": "source_retention" if args.source_floor else "explicit_threshold",
+        "scan_chunk_bp": args.scan_chunk_bp,
         "rows": stats["rows"], "parquet_bytes": file_info["bytes"],
         "max_rows": args.max_rows, "max_output_bytes": args.max_output_bytes,
         "scratch_staged_and_verified": args.scratch_directory is not None,
@@ -386,7 +482,9 @@ def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--package", type=Path, required=True, help="completed permissive genome-scan package")
     p.add_argument("--database", type=Path, help="optional rebuilt scan catalog")
-    p.add_argument("--regulatory-run", type=Path, required=True, help="completed regulatory run with plan, features and TSS dimensions")
+    annotation = p.add_mutually_exclusive_group(required=True)
+    annotation.add_argument("--regulatory-run", type=Path, help="legacy completed regulatory run with plan, features and TSS dimensions")
+    annotation.add_argument("--annotation-package", type=Path, help="whole-genome regulatory/TSS annotation from manage_regulatory_tfbs.py")
     selection = p.add_mutually_exclusive_group(required=True)
     selection.add_argument("--motif", action="append", help="exact JASPAR accession; repeat for a panel")
     selection.add_argument("--all-motifs", action="store_true", help="explicitly process every catalog motif")
@@ -395,13 +493,16 @@ def parser():
     p.add_argument("--end", type=int, help="BED exclusive end of query interval")
     p.add_argument("--whole-chromosome", action="store_true", help="explicitly allow an unbounded chromosome interval")
     p.add_argument("--scope", choices=SCOPES, default="regulatory_or_tss")
-    p.add_argument("--minimum-score", type=float, default=-1, help="inclusive score; source retention must cover it (default -1)")
+    scores = p.add_mutually_exclusive_group()
+    scores.add_argument("--minimum-score", type=float, default=-1, help="inclusive score; source retention must cover it (default -1)")
+    scores.add_argument("--source-floor", action="store_true", help="retain all stored scores, respecting each motif's own source floor")
     p.add_argument("--count-only", action="store_true", help="write compact per-motif/tag counts for sizing; still reads selected hit files")
     p.add_argument("--output", type=Path, required=True, help="new immutable output directory")
     p.add_argument("--resume", action="store_true", help="verify and reuse an identical completed export; failed attempts remain untouched")
     p.add_argument("--scratch-directory", type=Path, help="stage and checksum exact input files in a unique job-local directory")
-    p.add_argument("--max-rows", type=int, default=1000000, help="publication ceiling, never silent truncation")
-    p.add_argument("--max-output-bytes", type=int, default=1000000000, help="Parquet publication ceiling (default 1 GB)")
+    p.add_argument("--scan-chunk-bp", type=int, default=0, help="bound raw hit working sets with start-owned tiles on scratch; 0 disables")
+    p.add_argument("--max-rows", type=int, default=1000000, help="publication ceiling, never silent truncation; 0 removes ceiling")
+    p.add_argument("--max-output-bytes", type=int, default=1000000000, help="Parquet publication ceiling (default 1 GB); 0 removes ceiling")
     p.add_argument("--minimum-free-bytes", type=int, default=1073741824, help="free-space reserve in addition to output ceiling")
     p.add_argument("--duckdb", default="duckdb")
     p.add_argument("--threads", type=int, default=2)
@@ -419,7 +520,7 @@ def main():
                 raise QueryError("whole-chromosome and interval selection are exclusive")
         elif not region:
             raise QueryError("supply --start/--end or explicitly --whole-chromosome")
-        if (not math.isfinite(args.minimum_score) or args.max_rows < 1 or args.max_output_bytes < 1
+        if (not math.isfinite(args.minimum_score) or args.max_rows < 0 or args.max_output_bytes < 0 or args.scan_chunk_bp < 0
                 or args.minimum_free_bytes < 0 or not 1 <= args.threads <= 32
                 or args.timeout_seconds < 1 or not re.fullmatch(r"[0-9]+(?:MB|GB)", args.memory_limit)):
             raise QueryError("invalid score/resource/output limit")

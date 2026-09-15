@@ -52,6 +52,7 @@ scripts/manage_h3k4me3_genome_signal.py
 scripts/manage_motif_density_calibration.py
 scripts/manage_motif_threshold_calibration.py
 scripts/manage_regulatory_annotation.py
+scripts/manage_regulatory_tfbs.py
 scripts/manage_tp73_cofactor_enrichment.py
 scripts/manage_tp73_distance_cofactor_enrichment.py
 scripts/manage_tp73_genome_context_maxima.py

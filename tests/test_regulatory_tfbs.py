@@ -77,6 +77,7 @@ class RegulatoryTFBS(unittest.TestCase):
                                       "motif_id": motif, "motif_set_id": "test", "genome_id": "synthetic",
                                       "chrom": chrom, "strand": strand, "state": "complete",
                                       "coordinate_mode": "bed", "minimum_score": -1.0,
+                                      "emitted_hits": 14,
                                       "minimum_pwm_relative_score": None, "maximum_pwm_relative_score": None})
         self.sql("".join(statements))
         for row, path in zip(inventory, self.payloads):
@@ -87,6 +88,8 @@ CREATE TABLE genome AS SELECT 'synthetic' AS genome_id,'SYN1' AS assembly_name;
 CREATE TABLE motif_metadata AS SELECT 'test' AS motif_set_id,* FROM
  (VALUES ('MA9000.1','TEST_A'),('MA9001.1','TEST_B')) t(motif_id,motif_name);
 CREATE TABLE scan_file_inventory AS SELECT * FROM read_json_auto('{self.root}/inventory.json');
+CREATE TABLE sequence_region AS SELECT 'synthetic' AS genome_id,chrom,2000::BIGINT AS length,
+ true AS included_in_scan,ord AS sequence_order FROM (VALUES ('1',0),('2',1)) t(chrom,ord);
 """, self.database)
         self.features = self.reg / "features/regulatory_feature.parquet"
         self.sql(f"""COPY (SELECT 'SYN1' AS assembly,'1' AS chrom,*,
@@ -108,7 +111,7 @@ CREATE TABLE scan_file_inventory AS SELECT * FROM read_json_auto('{self.root}/in
             TO '{self.promoters}' (FORMAT PARQUET);""")
         self.audit = {"kind": "regulatory_coordinate_audit", "status": "passed",
                       "gff_sha256": "a" * 64, "assembly": "SYN1",
-                      "note": "Synthetic expected endpoints, not a biological audit"}
+                      "note": "Synthetic expected endpoints, not a biological audit", "features_compared": 7}
         self.plan = {"genome_id": "synthetic", "annotation_release": "test_gtf",
                      "promoter_definition_id": "tss_u20_d5_v1", "audit": self.audit,
                      "tasks": [{"chrom": "1", "promoters": record(self.promoters)}]}
@@ -116,7 +119,7 @@ CREATE TABLE scan_file_inventory AS SELECT * FROM read_json_auto('{self.root}/in
         self.write_json(self.reg / "features/manifest.json", {
             "kind": "ensembl_regulatory_annotation", "assembly": "SYN1",
             "coordinate_mode": "bed_0based_half_open", "chromosomes": ["1"],
-            "source_sha256": "a" * 64, "regulatory_release": "synthetic",
+            "source_sha256": "a" * 64, "regulatory_release": "synthetic", "feature_count": 7,
             "coordinate_audit": self.audit,
             "files": [dict(record(self.features), path="regulatory_feature.parquet")],
         })
@@ -242,6 +245,104 @@ CREATE TABLE scan_file_inventory AS SELECT * FROM read_json_auto('{self.root}/in
         self.assertTrue(any(r["overlaps_promoter_core"] for r in rows))
         self.assertFalse(any(r["overlaps_promoter_extended"] for r in rows))
         self.assertNotIn(89, {r["start"] for r in rows})
+
+    def test_intersection_rejects_bridging_nonoverlapping_annotations(self):
+        replacement = self.root / 'promoter_intersection.parquet'
+        self.sql(f"""COPY (SELECT 'synthetic' AS genome_id,'test_gtf' AS annotation_release,
+          'tss_u20_d5_v1' AS promoter_definition_id,'1' AS chrom,'+' AS strand,* FROM
+          (VALUES (90::BIGINT,95::BIGINT,'crossing'),(125,130,'touching'),(351,365,'overlap'))
+          t(promoter_start,promoter_end,promoter_id)) TO '{replacement}' (FORMAT PARQUET);""")
+        replacement.replace(self.promoters)
+        self.plan['tasks'][0]['promoters']=record(self.promoters)
+        self.write_json(self.reg/'plan.json',self.plan)
+        final=json.loads((self.reg/'final/manifest.json').read_text())
+        final['production_plan_sha256']=digest(self.reg/'plan.json')
+        self.write_json(self.reg/'final/manifest.json',final)
+        # 89..91 overlaps both; 120..126 intersects the extension and TSS, too.
+        self.call('intersection','--scope','regulatory_and_tss')
+        self.assertEqual({r['start'] for r in self.rows('intersection')},{89,120,355})
+        # Without extensions, 120..126 bridges core ending 125 and TSS starting
+        # 125, but there is no positive shared interval. It must be excluded.
+        f=self.root/'core_features.parquet'
+        self.sql(f"COPY (SELECT * REPLACE(NULL::BIGINT AS extended_start,NULL::BIGINT AS extended_end)"
+                 f" FROM read_parquet('{self.features}')) TO '{f}' (FORMAT PARQUET);")
+        f.replace(self.features)
+        fm=json.loads((self.reg/'features/manifest.json').read_text())
+        fm['files']=[dict(record(self.features),path='regulatory_feature.parquet')]
+        self.write_json(self.reg/'features/manifest.json',fm)
+        self.call('no_bridge','--scope','regulatory_and_tss')
+        self.assertEqual({r['start'] for r in self.rows('no_bridge')},{355})
+
+    def test_chunk_ownership_and_unlimited_exports(self):
+        self.call('direct_all','--source-floor','--max-rows','0','--max-output-bytes','0')
+        self.call('chunked','--source-floor','--max-rows','0','--max-output-bytes','0',
+                  '--scratch-directory',self.root/'scratch','--scan-chunk-bp','100')
+        self.assertEqual(self.rows('direct_all'),self.rows('chunked'))
+        self.assertEqual(len(self.rows('chunked')),22)
+        # Hits 495..501 cross an ownership boundary but occur exactly once per strand.
+        self.assertEqual(sum(r['start']==495 for r in self.rows('chunked')),2)
+
+    def test_source_floor_preserves_deeper_stored_scores(self):
+        payload=self.payloads[0]
+        replacement=self.root/'deeper.parquet'
+        self.sql(f"COPY (SELECT * REPLACE(CASE WHEN start=100 THEN -4::FLOAT ELSE score END AS score)"
+                 f" FROM read_parquet('{payload}',hive_partitioning=false)) TO '{replacement}' (FORMAT PARQUET);")
+        replacement.replace(payload)
+        self.sql(f"UPDATE scan_file_inventory SET minimum_score=-5,bytes={payload.stat().st_size},"
+                 f" sha256='{digest(payload)}' WHERE task_id=0;",self.database)
+        self.call('floor','--source-floor')
+        self.call('explicit')
+        self.assertTrue(any(r['score']==-4 for r in self.rows('floor')))
+        self.assertTrue(all(r['score']>=-1 for r in self.rows('explicit')))
+
+    def test_genome_prepare_restart_finalize_and_missing_coverage(self):
+        manager=ROOT/'scripts/manage_regulatory_tfbs.py'
+        run=self.root/'genome_run'
+        gene=self.reg/'features/regulatory_feature_gene.parquet'
+        self.sql(f"COPY (SELECT 'synthetic' AS regulatory_feature_id,'g1' AS gene_id) TO '{gene}' (FORMAT PARQUET);")
+        fm=json.loads((self.reg/'features/manifest.json').read_text())
+        fm['files'].append(dict(record(gene),path=gene.name))
+        self.write_json(self.reg/'features/manifest.json',fm)
+        gtf=self.root/'synthetic.gtf'
+        gtf.write_text('1\ttest\ttranscript\t301\t600\t.\t+\t.\tgene_id "g1"; transcript_id "t1"; gene_name "ONE";\n'
+                       '1\ttest\ttranscript\t301\t650\t.\t+\t.\tgene_id "g2"; transcript_id "t2"; gene_name "TWO";\n'
+                       '1\ttest\ttranscript\t201\t501\t.\t-\t.\tgene_id "g3"; transcript_id "t3"; gene_name "THREE";\n'
+                       '2\ttest\ttranscript\t1501\t1800\t.\t+\t.\tgene_id "g4"; transcript_id "t4"; gene_name "FOUR";\n')
+        def command(action,*extra,success=True):
+            p=subprocess.run([sys.executable,str(manager),action,'--run-root',str(run),
+                              '--scratch-root',str(self.root/'scratch'),'--memory-limit','256MB',
+                              *map(str,extra)],text=True,capture_output=True)
+            self.assertEqual(p.returncode==0,success,p.stderr+p.stdout)
+            return p
+        options=['--package',self.package,'--features',self.reg/'features','--gtf',gtf,
+                 '--annotation-release','test_gtf','--minimum-free-bytes','0','--duckdb',DUCKDB,'--batch-size','2']
+        command('prepare',*options)
+        command('prepare',*options)
+        command('prepare',*options,'--upstream','701',success=False)
+        annotation=run/'prepared/annotation'
+        promoters=self.sql(f"SELECT * FROM read_parquet('{annotation}/promoter.parquet') ORDER BY chrom,strand;")
+        self.assertEqual(len(promoters),3)  # two genes share one physical TSS
+        forward=next(r for r in promoters if r['chrom']=='1' and r['strand']=='+')
+        reverse=next(r for r in promoters if r['strand']=='-')
+        self.assertEqual((forward['promoter_start'],forward['promoter_end']),(0,601))
+        self.assertEqual((reverse['tss_start'],reverse['promoter_start'],reverse['promoter_end']),(500,200,1201))
+        command('finalize',success=False)
+        command('run-task','--task-index','0')
+        before=digest(run/'exports/1/MA9000.1/motif_hits.parquet')
+        command('run-task','--task-index','0')
+        self.assertEqual(digest(run/'exports/1/MA9000.1/motif_hits.parquet'),before)
+        command('run-task','--task-index','1')  # known absence of regulatory annotation, not unavailable scan
+        command('finalize')
+        command('finalize')
+        final=json.loads((run/'final/manifest.json').read_text())
+        self.assertEqual(final['chromosomes'],['1','2'])
+        inventory=json.loads((run/'final/file_inventory.json').read_text())
+        self.assertEqual(len(inventory),4)
+        self.assertTrue(all(r['state']=='known_empty_intersection' and r['rows']==0 for r in inventory if r['chrom']=='2'))
+        for row in inventory:
+            if row['path']:
+                data=self.sql(f"SELECT * FROM read_parquet('{run}/final/{row['path']}',hive_partitioning=false);")
+                self.assertTrue(all(r['overlaps_regulatory_tss_intersection'] for r in data))
 
     def test_corruption_and_unaudited_annotation_fail(self):
         with self.features.open("ab") as stream:
